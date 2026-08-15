@@ -95,6 +95,67 @@ per `shasum`, but check before concluding which binary is under test.
 - Every dock shows all apps. Per-screen filtering (show only windows on this
   screen) is a separate feature that depends on the same instance-scoping work.
 
+## 2026-08-15 — Windows keyboard mode
+
+Requested because a PC keyboard is connected: macOS maps its Win key to Command,
+so Win+C copies and Ctrl+C does nothing, which is backwards from every Windows
+reflex.
+
+`WindowsKeyboardService` installs a `.cgSessionEventTap` at `.headInsertEventTap`
+and rewrites Control into Command for the standard editing set (20 keys), plus
+turns Win+Shift+S into an interactive region capture on the clipboard by shelling
+out to `screencapture -i -c -x`.
+
+Verified end to end:
+
+| Behavior | Result |
+| --- | --- |
+| Ctrl+C in TextEdit | copied |
+| Ctrl+V in TextEdit | pasted |
+| Win+Shift+S | interactive region capture launched, Escape cancels |
+| Ctrl+C in Terminal | **not** translated, clipboard untouched, SIGINT preserved |
+
+Q is deliberately excluded from translation: Ctrl+Q is not a Windows shortcut, and
+translating it would turn a harmless keystroke into "quit the app".
+
+### Known limitation: apps with embedded terminals
+
+The exclusion list works on the frontmost app's bundle ID, which is the finest
+granularity an event tap gets. VS Code is one bundle ID whether focus is in the
+editor or the integrated terminal, so Ctrl+C there is translated to copy and will
+not send SIGINT. Add `com.microsoft.VSCode` to
+`wharf.windowsKeyboardExcludedBundleIDs` to flip that trade the other way.
+Distinguishing focus within an app needs a driver (what Karabiner uses), not a
+userspace tap.
+
+### Two verification traps that cost real time here
+
+**1. AppleScript keystrokes are not a valid test of an event tap.**
+`tell application "System Events" to key code 8 using control down` enters the
+event stream downstream of a session tap, so a working tap appears to do nothing.
+Post at the HID tap point instead (`CGEvent.post(tap: .cghidEventTap)`), which is
+where a physical keypress enters. `postkey.swift` in the session scratchpad does
+this.
+
+**2. Debug builds hide their code in a dylib, so `shasum` on the executable lies.**
+The app moves itself to `/Applications` on first launch
+(`ApplicationInstallService.promptToMoveToApplicationsIfNeeded`), after which
+`xcodebuild` only ever updates DerivedData. Comparing
+`Contents/MacOS/Docky` between the two reported identical hashes and looked like
+proof they were the same build. They were not: that file is a 40 KB stub, and the
+real 28 MB of code sits beside it in `Docky.debug.dylib`, which was 15 minutes
+stale. Every test in between was run against a binary that predated the feature.
+After each build, install with
+`ditto <DerivedData>/Debug/Docky.app /Applications/Docky.app`, and compare the
+dylib's timestamp, not the stub's hash.
+
+Because these failures are silent, the service now writes its decision to
+`~/Library/Application Support/Docky/wharf-keyboard-status.txt` (ACTIVE / BLOCKED /
+OFF), and the settings pane shows a warning with a permission button when the
+mode is on but Accessibility is missing.
+
 ## Deviations
 
-_(none yet)_
+**Settings copy for the display picker was rewritten.** Upstream's text asserts
+"Docky uses a single main window", which stopped being true. Conservative option
+taken: reword rather than restructure the settings layout.

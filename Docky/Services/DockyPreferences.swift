@@ -1715,6 +1715,38 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// Wharf: translate Windows keyboard shortcuts to their macOS equivalents.
+    ///
+    /// macOS already maps a PC keyboard's Win key to Command, which is why
+    /// Win+C copies today and Ctrl+C does nothing. This flips the muscle
+    /// memory back: Ctrl+C/V/X/Z behave as copy/paste/cut/undo.
+    var windowsKeyboardMode: Bool {
+        didSet {
+            guard windowsKeyboardMode != oldValue else { return }
+            defaults.set(windowsKeyboardMode, forKey: Keys.windowsKeyboardMode)
+        }
+    }
+
+    /// Whether Win+Shift+S opens a region capture straight to the clipboard,
+    /// matching the Windows snip. Separated from the modifier translation
+    /// because it costs the frontmost app its Cmd+Shift+S (usually Save As).
+    var windowsKeyboardSnipShortcut: Bool {
+        didSet {
+            guard windowsKeyboardSnipShortcut != oldValue else { return }
+            defaults.set(windowsKeyboardSnipShortcut, forKey: Keys.windowsKeyboardSnipShortcut)
+        }
+    }
+
+    /// Apps where Control must keep its Unix meaning. Ctrl+C in a terminal is
+    /// SIGINT, not copy; rewriting it there would take away the ability to
+    /// interrupt a running process.
+    var windowsKeyboardExcludedBundleIDs: [String] {
+        didSet {
+            guard windowsKeyboardExcludedBundleIDs != oldValue else { return }
+            defaults.set(windowsKeyboardExcludedBundleIDs, forKey: Keys.windowsKeyboardExcludedBundleIDs)
+        }
+    }
+
     /// Whether running apps show their notification badge (the red count,
     /// like Mail's unread total) on their dock tile. Read from the system
     /// Dock via accessibility, see `DockBadgeService`.
@@ -3556,6 +3588,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let windowDisplayTarget = "docky.windowDisplayTarget"
         static let windowSpaceBehavior = "docky.windowSpaceBehavior"
         static let autohidesWindow = "docky.autohidesWindow"
+        static let windowsKeyboardMode = "wharf.windowsKeyboardMode"
+        static let windowsKeyboardSnipShortcut = "wharf.windowsKeyboardSnipShortcut"
+        static let windowsKeyboardExcludedBundleIDs = "wharf.windowsKeyboardExcludedBundleIDs"
         static let showsAppBadges = "docky.showsAppBadges"
         static let folderBadgeMode = "docky.folderBadgeMode"
         static let folderBadgePreviewStyle = "docky.folderBadgePreviewStyle"
@@ -3665,6 +3700,19 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let windowDisplayTarget: DockWindowDisplayTarget = .primaryDisplay
         static let windowSpaceBehavior: DockWindowSpaceBehavior = .allSpaces
         static let autohidesWindow = false
+        static let windowsKeyboardMode = false
+        static let windowsKeyboardSnipShortcut = true
+        /// Terminals, where Control keeps its Unix meaning.
+        static let windowsKeyboardExcludedBundleIDs: [String] = [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "dev.warp.Warp-Stable",
+            "co.zeit.hyper",
+            "net.kovidgoyal.kitty",
+            "com.github.wez.wezterm",
+            "org.alacritty",
+            "com.mitchellh.ghostty"
+        ]
         static let showsAppBadges = true
         static let folderBadgeMode: FolderBadgeMode = .combined
         static let folderBadgePreviewStyle: FolderBadgePreviewStyle = .dot
@@ -3797,6 +3845,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         let storedWindowDisplayTarget = defaults.string(forKey: Keys.windowDisplayTarget)
         let storedWindowSpaceBehavior = defaults.string(forKey: Keys.windowSpaceBehavior)
         let storedAutohidesWindow = defaults.object(forKey: Keys.autohidesWindow) as? Bool
+        let storedWindowsKeyboardMode = defaults.object(forKey: Keys.windowsKeyboardMode) as? Bool
+        let storedWindowsKeyboardSnipShortcut = defaults.object(forKey: Keys.windowsKeyboardSnipShortcut) as? Bool
+        let storedWindowsKeyboardExcludedBundleIDs = defaults.object(forKey: Keys.windowsKeyboardExcludedBundleIDs) as? [String]
         let storedShowsAppBadges = defaults.object(forKey: Keys.showsAppBadges) as? Bool
         let storedFolderBadgeMode = defaults.string(forKey: Keys.folderBadgeMode)
         let storedFolderBadgePreviewStyle = defaults.string(forKey: Keys.folderBadgePreviewStyle)
@@ -3923,6 +3974,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.windowDisplayTarget = (storedWindowDisplayTarget.flatMap(DockWindowDisplayTarget.init(rawValue:)) ?? DefaultValues.windowDisplayTarget)
         self.windowSpaceBehavior = (storedWindowSpaceBehavior.flatMap(DockWindowSpaceBehavior.init(rawValue:)) ?? DefaultValues.windowSpaceBehavior)
         self.autohidesWindow = storedAutohidesWindow ?? DefaultValues.autohidesWindow
+        self.windowsKeyboardMode = storedWindowsKeyboardMode ?? DefaultValues.windowsKeyboardMode
+        self.windowsKeyboardSnipShortcut = storedWindowsKeyboardSnipShortcut ?? DefaultValues.windowsKeyboardSnipShortcut
+        self.windowsKeyboardExcludedBundleIDs = storedWindowsKeyboardExcludedBundleIDs ?? DefaultValues.windowsKeyboardExcludedBundleIDs
         self.showsAppBadges = storedShowsAppBadges ?? DefaultValues.showsAppBadges
         self.folderBadgeMode = storedFolderBadgeMode
             .flatMap(FolderBadgeMode.init(rawValue:))
@@ -4196,6 +4250,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
 
         // Visibility
         autohidesWindow = DefaultValues.autohidesWindow
+        windowsKeyboardMode = DefaultValues.windowsKeyboardMode
+        windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
+        windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs
         showsAppBadges = DefaultValues.showsAppBadges
         folderBadgeMode = DefaultValues.folderBadgeMode
         folderBadgePreviewStyle = DefaultValues.folderBadgePreviewStyle
@@ -4255,6 +4312,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         windowDisplayTarget = DefaultValues.windowDisplayTarget
         windowSpaceBehavior = DefaultValues.windowSpaceBehavior
         autohidesWindow = DefaultValues.autohidesWindow
+        windowsKeyboardMode = DefaultValues.windowsKeyboardMode
+        windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
+        windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs
         showsAppBadges = DefaultValues.showsAppBadges
         folderBadgeMode = DefaultValues.folderBadgeMode
         folderBadgePreviewStyle = DefaultValues.folderBadgePreviewStyle

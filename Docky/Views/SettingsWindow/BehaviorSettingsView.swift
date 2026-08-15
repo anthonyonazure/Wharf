@@ -10,6 +10,7 @@ struct BehaviorSettingsView: View {
         case general
         case placement
         case visibility
+        case windowsKeyboard
         case appTileClick
         case widgets
         case launch
@@ -22,6 +23,20 @@ struct BehaviorSettingsView: View {
     @Bindable private var preferences = DockyPreferences.shared
     @State private var isShowingResetConfirmation = false
 
+    /// Asked live rather than cached: the user can grant or revoke this in
+    /// System Settings while this pane is open.
+    private var isAccessibilityGranted: Bool { AXIsProcessTrusted() }
+
+    /// Fires the system prompt, and opens the pane directly for the case where
+    /// the prompt has already been answered once and won't show again.
+    private func requestAccessibilityPermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     var body: some View {
         Form {
             switch subsection {
@@ -31,6 +46,8 @@ struct BehaviorSettingsView: View {
                 placementSection
             case .visibility:
                 visibilitySection
+            case .windowsKeyboard:
+                windowsKeyboardSection
             case .appTileClick:
                 appTileClickSection
             case .widgets:
@@ -147,6 +164,53 @@ struct BehaviorSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private var windowsKeyboardSection: some View {
+        Section {
+            // Keystroke translation needs an event tap, and an event tap
+            // without Accessibility silently does nothing. Say so plainly
+            // rather than leaving the toggle looking on while nothing happens.
+            if preferences.windowsKeyboardMode, !isAccessibilityGranted {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Accessibility permission required", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.orange)
+
+                    Text("Windows Keyboard Mode is on, but macOS is not letting Wharf read keystrokes, so nothing is being translated. Grant Accessibility, then toggle this off and on.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button("Open Accessibility Settings") {
+                        requestAccessibilityPermission()
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Windows Keyboard Mode", isOn: $preferences.windowsKeyboardMode)
+                    .font(.headline)
+
+                Text("macOS maps a PC keyboard's Win key to Command, so Win+C copies and Ctrl+C does nothing. This puts the Windows reflexes back: Ctrl+C, Ctrl+V, Ctrl+X and Ctrl+Z become copy, paste, cut and undo, along with the rest of the standard editing set. Terminals are excluded, so Ctrl+C there still interrupts a running process. Requires Accessibility permission.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Win+Shift+S Screen Snip", isOn: $preferences.windowsKeyboardSnipShortcut)
+                    .font(.headline)
+
+                Text("Draw a region and it lands on the clipboard, the same as the Windows snip. Because the Win key arrives as Command, this takes over Cmd+Shift+S, which some apps use for Save As.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Windows Keyboard")
         }
     }
 

@@ -45,11 +45,23 @@ These already work, courtesy of upstream:
 
 ### 1. Multi-display (the reason this fork exists)
 
-- [ ] One dock instance per screen instead of a single shared window
-- [ ] Mirror mode: identical dock on every display
+- [x] One dock instance per screen instead of a single shared window
+- [x] Mirror mode: identical dock on every display
+- [x] Docks pinned to a specific display, surviving unplug and reconnect
 - [ ] Per-screen mode: each dock shows only the windows on its own screen
-- [ ] Docks pinned to a specific display, surviving unplug and reconnect
 - [ ] Per-screen configuration (position, theme, size, contents)
+
+Turn it on in **Settings → Behavior → Placement → Display → All Displays**.
+
+### 1b. Windows keyboard mode
+
+- [x] Ctrl+C/V/X/Z and the rest of the editing set behave as they do on Windows
+- [x] Terminals excluded, so Ctrl+C there still sends SIGINT
+- [x] Win+Shift+S draws a region straight to the clipboard, like the Windows snip
+- [ ] Per-app override UI (the exclusion list is editable via defaults today)
+- [ ] Win key opens the Launchpad / start menu
+
+In **Settings → Behavior → Windows Keyboard**. Needs Accessibility permission.
 
 ### 2. Taskbar mode
 

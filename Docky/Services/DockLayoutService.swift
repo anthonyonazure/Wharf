@@ -21,7 +21,7 @@ final class DockLayoutService: ObservableObject {
     @Published private(set) var chromeSize: CGSize = .zero
     @Published private(set) var tileCanvasFrame: CGRect = .zero
 
-    private init() {}
+    init() {}
 
     func setContentScale(_ scale: CGFloat) {
         let clampedScale = min(max(scale, 0), 1)

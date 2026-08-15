@@ -37,7 +37,7 @@ final class DockMagnificationService {
     @ObservationIgnored private var rampStart: CFTimeInterval = 0
     @ObservationIgnored private var rampTimer: Timer?
 
-    private init() {}
+    init() {}
 
     /// Pointer has entered the dock hit region and we now have a live axis
     /// coordinate to track. Called from `.onContinuousHover` with

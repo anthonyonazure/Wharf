@@ -10,16 +10,28 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MainWindowView: View {
+    /// This dock's own state. Passed in rather than read from a singleton so
+    /// each display's dock measures and magnifies independently.
+    @ObservedObject var dock: DockContext
+
     private let borderWidth: CGFloat = 1
     private let chromeResizeAnimation: Animation = .easeInOut(duration: 0.18)
 
     private let dockSettings = DockSettingsService.shared
     @Bindable private var preferences = DockyPreferences.shared
-    @ObservedObject private var layoutService = DockLayoutService.shared
-    private let magnification = DockMagnificationService.shared
+    private var layoutService: DockLayoutService { dock.layout }
+    private var magnification: DockMagnificationService { dock.magnification }
     @ObservedObject private var chromeMetrics = DockChromeMetricsService.shared
 
     var body: some View {
+        // Every tile, divider and folder below reads this dock's context from
+        // the environment. Without this injection they would find no
+        // DockContext and trap at runtime.
+        dockBody.environmentObject(dock)
+    }
+
+    @ViewBuilder
+    private var dockBody: some View {
         #if DEBUG
         let _ = Self._printChanges()
         #endif

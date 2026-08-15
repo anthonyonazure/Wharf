@@ -25,7 +25,8 @@ struct ProfileSwitcherButtonView: View {
     @Bindable private var preferences = DockyPreferences.shared
     @Bindable private var profileService = ProfileService.shared
     private let dockSettings = DockSettingsService.shared
-    @ObservedObject private var layoutService = DockLayoutService.shared
+    @EnvironmentObject private var dock: DockContext
+    private var layoutService: DockLayoutService { dock.layout }
     @State private var isHoveringZone = false
     @State private var isHoveringButton = false
     /// Held true for 1s after the user picks a profile so the ball stays

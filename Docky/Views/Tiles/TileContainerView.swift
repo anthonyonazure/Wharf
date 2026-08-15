@@ -14,11 +14,12 @@ struct TileContainerView: View {
 
     @ObservedObject private var store = TileStore.shared
     private let dockSettings = DockSettingsService.shared
-    @ObservedObject private var layout = DockLayoutService.shared
+    @EnvironmentObject private var dock: DockContext
+    private var layout: DockLayoutService { dock.layout }
     @Bindable private var preferences = DockyPreferences.shared
     @ObservedObject private var editMode = DockEditModeService.shared
     @ObservedObject private var dockDrag = DockDragService.shared
-    private let magnification = DockMagnificationService.shared
+    private var magnification: DockMagnificationService { dock.magnification }
 
     @State private var draggedTileID: String?
     @State private var draggedTileOffset: CGFloat = 0

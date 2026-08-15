@@ -26,7 +26,8 @@ struct TileView: View {
     /// `nil` falls back to the shared `DockLayoutService` size.
     let renderedTileSize: CGFloat?
     private let dockSettings = DockSettingsService.shared
-    @ObservedObject private var layout = DockLayoutService.shared
+    @EnvironmentObject private var dock: DockContext
+    private var layout: DockLayoutService { dock.layout }
     @Bindable private var preferences = DockyPreferences.shared
     @ObservedObject private var workspace = WorkspaceService.shared
     @ObservedObject private var mediaPlayback = MediaPlaybackService.shared
@@ -67,7 +68,6 @@ struct TileView: View {
         self.isAppFolderDropTarget = isAppFolderDropTarget
         self.isTrashDropTarget = isTrashDropTarget
         self.renderedTileSize = renderedTileSize
-        self._layout = ObservedObject(wrappedValue: DockLayoutService.shared)
         self._preferences = Bindable(wrappedValue: DockyPreferences.shared)
         self._workspace = ObservedObject(wrappedValue: WorkspaceService.shared)
         self._mediaPlayback = ObservedObject(wrappedValue: MediaPlaybackService.shared)

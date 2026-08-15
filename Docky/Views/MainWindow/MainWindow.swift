@@ -10,7 +10,10 @@ import Combine
 import SwiftUI
 
 final class MainWindowContainerView: NSView {
-    private let contentView = ClickThroughHostingView(rootView: MainWindowView())
+    /// Built in `viewDidMoveToWindow`, not at init: the SwiftUI tree needs
+    /// this dock's `DockContext`, which only exists once the view is attached
+    /// to its window.
+    private var contentView: ClickThroughHostingView?
     private var trackingArea: NSTrackingArea?
     private var topConstraint: NSLayoutConstraint!
     private var bottomConstraint: NSLayoutConstraint!
@@ -28,20 +31,34 @@ final class MainWindowContainerView: NSView {
     }
 
     private func setup() {
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(contentView)
+        observePreferencesForInsets()
+    }
 
-        topConstraint = contentView.topAnchor.constraint(equalTo: topAnchor)
-        bottomConstraint = bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
-        leadingConstraint = contentView.leadingAnchor.constraint(equalTo: leadingAnchor)
-        trailingConstraint = trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installContentViewIfNeeded()
+    }
+
+    /// Attaches the SwiftUI tree for this dock, wired to its own context so
+    /// layout and magnification stay per-display.
+    private func installContentViewIfNeeded() {
+        guard contentView == nil, let dock = (window as? MainWindow)?.dockContext else { return }
+
+        let hosting = ClickThroughHostingView(rootView: MainWindowView(dock: dock))
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hosting)
+
+        topConstraint = hosting.topAnchor.constraint(equalTo: topAnchor)
+        bottomConstraint = bottomAnchor.constraint(equalTo: hosting.bottomAnchor)
+        leadingConstraint = hosting.leadingAnchor.constraint(equalTo: leadingAnchor)
+        trailingConstraint = trailingAnchor.constraint(equalTo: hosting.trailingAnchor)
 
         NSLayoutConstraint.activate([
             topConstraint, bottomConstraint, leadingConstraint, trailingConstraint
         ])
 
+        contentView = hosting
         applyContentInsets()
-        observePreferencesForInsets()
     }
 
     /// Re-applies the per-edge content padding. Full-axis mode forces
@@ -49,6 +66,7 @@ final class MainWindowContainerView: NSView {
     /// fit-content mode each edge picks up its own theme/user override
     /// from `DockyPreferences`.
     private func applyContentInsets() {
+        guard topConstraint != nil else { return }
         let prefs = DockyPreferences.shared
         let fullAxis = prefs.effectiveWindowAxisSizing == .fullAxis
         let top = fullAxis ? 0 : prefs.effectiveWindowContentInsetTop
@@ -112,7 +130,7 @@ final class MainWindowContainerView: NSView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         (window as? MainWindow)?.pointerDidExitWindow()
-        DockMagnificationService.shared.clearPointer()
+        (window as? MainWindow)?.dockContext.magnification.clearPointer()
     }
 
     /// Pushes the live pointer position into the magnification service in
@@ -126,22 +144,23 @@ final class MainWindowContainerView: NSView {
     /// area would magnify tiles as soon as the pointer entered the empty
     /// headroom above the chrome, well before it ever touched a tile.
     private func forwardMagnificationPointer(from event: NSEvent) {
+        guard let contentView, let dock = (window as? MainWindow)?.dockContext else { return }
         let inHosting = contentView.convert(event.locationInWindow, from: nil)
         let topLeft: CGPoint = contentView.isFlipped
             ? inHosting
             : CGPoint(x: inHosting.x, y: contentView.bounds.height - inHosting.y)
         guard cursorIsAtChromeFringe(topLeft, hostingSize: contentView.bounds.size) else {
-            DockMagnificationService.shared.clearPointer()
+            dock.magnification.clearPointer()
             return
         }
-        DockMagnificationService.shared.updatePointer(at: topLeft)
+        dock.magnification.updatePointer(at: topLeft)
     }
 
     /// Cross-axis bounds check against the resting chrome. We don't gate
     /// on the along-axis (proximity to dock edge in that direction is the
     /// whole point of the cosine falloff), only the cross-axis fringe.
     private func cursorIsAtChromeFringe(_ point: CGPoint, hostingSize: CGSize) -> Bool {
-        let chromeSize = DockLayoutService.shared.chromeSize
+        let chromeSize = (window as? MainWindow)?.dockContext.layout.chromeSize ?? .zero
         guard chromeSize.width > 0, chromeSize.height > 0 else { return true }
         let position = DockyPreferences.shared.windowPosition
             .resolved(systemOrientation: DockSettingsService.shared.orientation)
@@ -186,7 +205,7 @@ final class MainWindow: NSPanel {
     private let tileMutationAnimationDuration: TimeInterval = 0.18
     private let dockSettings = DockSettingsService.shared
     private let preferences = DockyPreferences.shared
-    private let layout = DockLayoutService.shared
+    private var layout: DockLayoutService { dockContext.layout }
     private let tileStore = TileStore.shared
     private let editMode = DockEditModeService.shared
     private let minimumWidth: CGFloat = 120
@@ -218,7 +237,13 @@ final class MainWindow: NSPanel {
     ///
     /// `nil` means "unbound" — the legacy single-window behavior where the
     /// dock follows the primary display or the pointer.
-    var assignedDisplayID: CGDirectDisplayID?
+    var assignedDisplayID: CGDirectDisplayID? {
+        didSet { dockContext.displayID = assignedDisplayID }
+    }
+
+    /// Per-dock state (layout metrics, magnification). Wharf runs one dock per
+    /// display, so these cannot be process-wide.
+    let dockContext = DockContext()
 
     /// The live `NSScreen` for `assignedDisplayID`, or nil when that display
     /// is no longer attached.
@@ -257,7 +282,7 @@ final class MainWindow: NSPanel {
     /// to the inward cross-axis edge with magnification headroom on the
     /// other side. Overlays that need to align to chrome edges read this.
     func chromeScreenFrame() -> CGRect? {
-        let chromeSize = DockLayoutService.shared.chromeSize
+        let chromeSize = dockContext.layout.chromeSize
         guard chromeSize.width > 0, chromeSize.height > 0 else { return nil }
         let position = DockyPreferences.shared.windowPosition
             .resolved(systemOrientation: DockSettingsService.shared.orientation)

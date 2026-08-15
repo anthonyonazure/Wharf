@@ -13,7 +13,8 @@ struct AppFolderTileView: View {
     let cornerRadius: CGFloat
     let suppressesGroupedOpenedBackdrop: Bool
     private let dockSettings = DockSettingsService.shared
-    @ObservedObject private var layout = DockLayoutService.shared
+    @EnvironmentObject private var dock: DockContext
+    private var layout: DockLayoutService { dock.layout }
     @Bindable private var preferences = DockyPreferences.shared
     @ObservedObject private var store = TileStore.shared
     @ObservedObject private var workspace = WorkspaceService.shared
@@ -27,7 +28,6 @@ struct AppFolderTileView: View {
         self.tile = tile
         self.cornerRadius = cornerRadius
         self.suppressesGroupedOpenedBackdrop = suppressesGroupedOpenedBackdrop
-        self._layout = ObservedObject(wrappedValue: DockLayoutService.shared)
         self._preferences = Bindable(wrappedValue: DockyPreferences.shared)
         self._store = ObservedObject(wrappedValue: TileStore.shared)
         self._workspace = ObservedObject(wrappedValue: WorkspaceService.shared)

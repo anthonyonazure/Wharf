@@ -9,7 +9,8 @@ import SwiftUI
 struct DividerTileView: View {
     let tileID: String
     private let dockSettings = DockSettingsService.shared
-    @ObservedObject private var layout = DockLayoutService.shared
+    @EnvironmentObject private var dock: DockContext
+    private var layout: DockLayoutService { dock.layout }
     @Bindable private var preferences = DockyPreferences.shared
 
     var body: some View {

@@ -207,6 +207,26 @@ final class MainWindow: NSPanel {
     private var isFullscreenActiveOnTargetScreen = false
     private var isMaximizedActiveOnTargetScreen = false
 
+    /// Wharf: the display this window is bound to in `.allDisplays` mode.
+    ///
+    /// Stored as a `CGDirectDisplayID` rather than an `NSScreen` on purpose.
+    /// AppKit discards and rebuilds every `NSScreen` object whenever the
+    /// display configuration changes (sleep, unplug, resolution change), so
+    /// holding a screen reference would silently detach this window from its
+    /// monitor. The display ID is stable for as long as the monitor is
+    /// attached.
+    ///
+    /// `nil` means "unbound" — the legacy single-window behavior where the
+    /// dock follows the primary display or the pointer.
+    var assignedDisplayID: CGDirectDisplayID?
+
+    /// The live `NSScreen` for `assignedDisplayID`, or nil when that display
+    /// is no longer attached.
+    var assignedScreen: NSScreen? {
+        guard let assignedDisplayID else { return nil }
+        return NSScreen.screens.first { $0.displayID == assignedDisplayID }
+    }
+
     private var fullscreenHidingActive: Bool {
         isFullscreenActiveOnTargetScreen && preferences.hidesDuringFullscreen
     }
@@ -318,6 +338,43 @@ final class MainWindow: NSPanel {
         if let localDragRevealMonitor {
             NSEvent.removeMonitor(localDragRevealMonitor)
         }
+    }
+
+    /// Wharf: re-resolve this window's frame after a display reconfiguration.
+    ///
+    /// The window already watches `didChangeScreenParametersNotification`
+    /// itself, but the coordinator drives an explicit pass too: when a monitor
+    /// is added or removed, surviving windows need to settle against the new
+    /// geometry after the coordinator has finished adding and removing docks,
+    /// not while the set is still in flux.
+    func reapplyFrameForDisplayChange() {
+        guard assignedScreen != nil || assignedDisplayID == nil else { return }
+        applyCurrentFrame(animated: false)
+        updateFullscreenStateAndApply(animated: false)
+    }
+
+    /// Wharf: release everything this window owns before the coordinator drops
+    /// it, without relying on `deinit` timing.
+    ///
+    /// Event monitors are process-global: an orphaned global monitor keeps
+    /// firing after its window is gone and would resurrect a dock for a
+    /// display that is no longer attached. Combine subscriptions are cancelled
+    /// for the same reason.
+    func prepareForCoordinatorTeardown() {
+        cancellables.removeAll()
+        hideWorkItem?.cancel()
+        fullscreenRecheckWorkItem?.cancel()
+        fullscreenRevealWorkItem?.cancel()
+
+        for monitor in [globalPointerMonitor, localPointerMonitor, globalDragRevealMonitor, localDragRevealMonitor] {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+        globalPointerMonitor = nil
+        localPointerMonitor = nil
+        globalDragRevealMonitor = nil
+        localDragRevealMonitor = nil
+
+        orderOut(nil)
     }
 
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
@@ -510,7 +567,10 @@ final class MainWindow: NSPanel {
             self.localPointerMonitor = nil
         }
 
-        guard preferences.windowDisplayTarget == .displayContainingPointer else { return }
+        // A display-bound window never chases the pointer: it belongs to one
+        // screen and stays there.
+        guard assignedDisplayID == nil,
+              preferences.windowDisplayTarget == .displayContainingPointer else { return }
 
         let pointerEvents: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
         if PermissionsService.shared.accessibility == .granted {
@@ -545,7 +605,10 @@ final class MainWindow: NSPanel {
     }
 
     private func handlePointerScreenChangeIfNeeded() {
-        guard preferences.windowDisplayTarget == .displayContainingPointer else { return }
+        // A display-bound window never chases the pointer: it belongs to one
+        // screen and stays there.
+        guard assignedDisplayID == nil,
+              preferences.windowDisplayTarget == .displayContainingPointer else { return }
         let nextScreenFrame = targetScreen()?.frame
         guard nextScreenFrame != lastPointerScreenFrame else { return }
         lastPointerScreenFrame = nextScreenFrame
@@ -970,8 +1033,16 @@ final class MainWindow: NSPanel {
     }
 
     private func targetScreen() -> NSScreen? {
+        // Wharf: a bound window always answers with its own display and never
+        // consults the pointer or the primary screen. This is the single seam
+        // that turns "the dock" into "this screen's dock" — every frame
+        // calculation downstream already routes through here.
+        if assignedDisplayID != nil {
+            return assignedScreen
+        }
+
         switch preferences.windowDisplayTarget {
-        case .primaryDisplay:
+        case .primaryDisplay, .allDisplays:
             return NSScreen.screens.first ?? NSScreen.main
         case .displayContainingPointer:
             let mouseLocation = NSEvent.mouseLocation

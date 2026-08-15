@@ -82,13 +82,32 @@ final class WindowReservationService {
         windowCooldowns.removeAll()
     }
 
+    /// Wharf: with a dock on every display, reservation has to run once per
+    /// dock. Upstream took `.first` because there was only ever one; that
+    /// would leave every non-primary screen unprotected, so maximized windows
+    /// there would sit underneath their dock.
     private func scan(windows: [AppWindow]) {
-        guard let mainWindow = NSApp.windows.compactMap({ $0 as? MainWindow }).first,
-              let dockyScreen = mainWindow.screen,
-              let dockyFrame = mainWindow.currentReservationFrame,
-              let primaryScreenHeight = NSScreen.screens.first?.frame.height
-        else { return }
+        guard let primaryScreenHeight = NSScreen.screens.first?.frame.height else { return }
 
+        for mainWindow in NSApp.windows.compactMap({ $0 as? MainWindow }) {
+            guard let dockyScreen = mainWindow.screen,
+                  let dockyFrame = mainWindow.currentReservationFrame
+            else { continue }
+            scan(
+                windows: windows,
+                dockyScreen: dockyScreen,
+                dockyFrame: dockyFrame,
+                primaryScreenHeight: primaryScreenHeight
+            )
+        }
+    }
+
+    private func scan(
+        windows: [AppWindow],
+        dockyScreen: NSScreen,
+        dockyFrame: CGRect,
+        primaryScreenHeight: CGFloat
+    ) {
         let visibleFrame = dockyScreen.visibleFrame
         guard let dockySide = side(of: dockyFrame, on: visibleFrame) else { return }
 

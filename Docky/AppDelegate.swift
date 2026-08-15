@@ -16,7 +16,7 @@ import UniformTypeIdentifiers
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @IBOutlet var window: NSWindow!
-    private var mainWindowController: MainWindowController?
+    // Dock windows live in ScreenDockCoordinator (Wharf runs one per display).
     private var permissionsWindowController: PermissionsWindowController?
     private var settingsWindowController: SettingsWindowController?
     private var debugSnapshotWindowController: NSWindowController?
@@ -342,29 +342,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Wharf: dock windows are owned by `ScreenDockCoordinator` rather than
+    /// created here, because how many exist depends on the display target
+    /// preference and on how many monitors are attached. The coordinator also
+    /// keeps that set correct as displays come and go.
     private func showMainWindow() {
-        mainWindowController = makeMainWindowController()
-        mainWindowController?.showWindow(self)
+        ScreenDockCoordinator.shared.start()
         DockyPreferences.shared.enableOpenAtLoginOnFirstLaunchIfNeeded()
-    }
-
-    private func makeMainWindowController() -> MainWindowController? {
-        var topLevelObjects: NSArray?
-        let didLoadNib = Bundle.main.loadNibNamed(
-            "MainWindow",
-            owner: nil,
-            topLevelObjects: &topLevelObjects
-        )
-
-        guard
-            didLoadNib,
-            let mainWindow = (topLevelObjects as? [Any])?.first(where: { $0 is MainWindow }) as? MainWindow
-        else {
-            assertionFailure("Failed to load MainWindow.xib")
-            return nil
-        }
-
-        return MainWindowController(window: mainWindow)
     }
 
     private func configureMainMenu() {

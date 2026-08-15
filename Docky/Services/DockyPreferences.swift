@@ -444,6 +444,10 @@ enum DockWindowPosition: String, CaseIterable, Identifiable {
 enum DockWindowDisplayTarget: String, CaseIterable, Identifiable {
     case primaryDisplay
     case displayContainingPointer
+    /// Wharf: one dock per connected display, all visible simultaneously.
+    /// macOS itself can only ever place its Dock on one screen; this mode is
+    /// the reason Wharf exists.
+    case allDisplays
 
     var id: String { rawValue }
 
@@ -451,8 +455,13 @@ enum DockWindowDisplayTarget: String, CaseIterable, Identifiable {
         switch self {
         case .primaryDisplay: String(localized: "Primary Display")
         case .displayContainingPointer: String(localized: "Display With Pointer")
+        case .allDisplays: String(localized: "All Displays")
         }
     }
+
+    /// True when a single dock window is shared across screens. `.allDisplays`
+    /// is the only mode that spawns more than one.
+    var usesSingleWindow: Bool { self != .allDisplays }
 }
 
 enum DockWindowSpaceBehavior: String, CaseIterable, Identifiable {

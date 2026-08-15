@@ -52,6 +52,49 @@ the CGDirectDisplayID UUID) or per-display settings will be lost every time a
 monitor sleeps or is unplugged. ExtraDock's "stays where it belongs even after you
 unplug and reconnect" is exactly this problem solved.
 
+## 2026-08-15 — Multi-display shipped
+
+Verified live on a three-display desk (LG HDR 4K primary, built-in Liquid Retina
+XDR, LG ULTRAFINE): three docks visible simultaneously, one per screen.
+
+What changed:
+
+- `DockWindowDisplayTarget` gained `.allDisplays`, plus `usesSingleWindow` so the
+  two legacy modes keep their exact old behavior.
+- `MainWindow.assignedDisplayID` binds a window to a display. `targetScreen()`
+  short-circuits on it, which was the whole trick: every frame calculation in the
+  window already routed through that one function, so binding it there converted
+  "the dock" into "this screen's dock" without touching layout code.
+- Pointer-follow monitors are suppressed on bound windows.
+- `ScreenDockCoordinator` reconciles the live window set against attached displays
+  and the current preference, on `didChangeScreenParametersNotification`.
+- `WindowReservationService.scan` looped over every dock instead of `.first`.
+  Upstream's `.first` was correct for one dock and would have left every
+  non-primary screen unprotected against maximized windows.
+- `AppDelegate` no longer owns a dock window.
+
+### Verification gotcha worth remembering
+
+`nm` and `strings` on the linked app binary reported zero matches for the new
+class, which looked like the file had not compiled. It had. Swift internal symbols
+are stripped from the executable's export table, and `String(localized:)` text
+lives in the string catalog rather than the binary. The honest checks are the
+compile file list (`Docky.SwiftFileList`), the object file
+(`ScreenDockCoordinator.o`, 74 symbols), and actual runtime behavior.
+
+Also: building this project publishes a copy to `/Applications/Docky.app`, so
+`open` may launch that rather than the DerivedData product. They are byte-identical
+per `shasum`, but check before concluding which binary is under test.
+
+### Known limitations (not yet addressed)
+
+- `DockLayoutService`, `DockMagnificationService` and `TileStore` are process-wide
+  singletons, so all docks currently share one layout, one magnification state and
+  one set of tiles. Per-screen tile sets and per-screen themes need those made
+  instance-scoped. This is the next structural piece.
+- Every dock shows all apps. Per-screen filtering (show only windows on this
+  screen) is a separate feature that depends on the same instance-scoping work.
+
 ## Deviations
 
 _(none yet)_

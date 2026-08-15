@@ -1,157 +1,131 @@
 <div align="center">
 
-<img src="docs/images/logo.png" width="128" alt="Docky logo">
+# Wharf
 
-# Docky
+### The dock that lives on every display.
 
-### The same old dock, on steroids. Now free and open source.
-
-Docky is a Dock replacement for macOS that elegantly replaces the system one. It
-brings the Dock back into reach: quieter, smarter, and native-feeling, with a
-configurable layout, widgets, a fullscreen Launchpad, a live window switcher,
-custom icons, and scripted actions.
+Wharf is a macOS Dock replacement built for multi-monitor desks. macOS ships exactly
+one Dock and it can only occupy one display at a time. Wharf puts a real dock on
+every screen, at once, permanently.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](https://getdocky.com)
-[![Universal](https://img.shields.io/badge/Apple%20Silicon%20%26%20Intel-Universal-orange)](https://getdocky.com)
-[![Website](https://img.shields.io/badge/getdocky.com-Download-brightgreen)](https://getdocky.com)
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/josejuanqm)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/josejuanqm)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/vAwVNtPSgE)
-
-[**Download**](https://getdocky.com) &nbsp;·&nbsp; [**Website**](https://getdocky.com) &nbsp;·&nbsp; [**Build from source**](#building-from-source)
+[![Platform](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](https://github.com/anthonyonazure/Wharf)
+[![Universal](https://img.shields.io/badge/Apple%20Silicon%20%26%20Intel-Universal-orange)](https://github.com/anthonyonazure/Wharf)
 
 </div>
 
-<div align="center">
-  <img src="docs/images/hero.jpg" alt="Docky on macOS" width="900">
-</div>
+## Why
 
-## Why Docky
+Apple has never allowed the Dock to extend, mirror, or duplicate across displays.
+On a three-monitor desk that means the Dock lives on one screen and you fetch it by
+shoving the cursor at a screen edge and waiting. The commercial answers to this
+(uBar, ExtraDock, Sidebar) are closed source and cost between $30 and $47.
 
-The Dock is the most-used surface on a Mac, and it has barely changed in years.
-Docky rebuilds it for focus: it can run alongside, mirror, or fully replace the
-system Dock, and it moves with your workflow instead of getting in the way.
+Wharf is the open source answer, and it aims past parity rather than at it.
 
-- **Free and open source.** No paid tier, no upsell. Licensed under GPLv3.
-- **Native-feeling.** A universal binary for Apple Silicon and Intel, notarized
-  by Apple.
-- **Yours to shape.** Pin what you reach for, arrange it how you think, and drop
-  in widgets and actions that match how you work.
+## Status
 
-## Features
+Early. Wharf is a hard fork of [Docky](https://github.com/josejuanqm/docky) and
+currently builds and behaves as Docky does. The multi-display work described below
+is in progress and not yet shipped. Do not treat this as a working product yet.
 
-### Tiles and layout
+## Inherited from Docky
 
-Add and arrange anything in one strip: apps, widgets, Smart Stacks, folders,
-spacers, and dividers. Pin what you reach for, drag to reorder, and let the
-layout follow your workflow.
+These already work, courtesy of upstream:
 
-<div align="center"><img src="docs/images/feature-layout.jpg" alt="Tiles and layout" width="820"></div>
+- **Tiles and layout** — apps, widgets, Smart Stacks, folders, spacers, dividers
+- **Live window switcher** — Cmd-Tab style with live previews, plus per-tile hover previews
+- **Launchpad** — fullscreen, searchable, keyboard navigable
+- **Widgets** — Calendar, Reminders, Batteries, System, Weather, Now Playing, stackable
+- **Rich app folders** — nested navigation, Quick Look, drag and drop
+- **Custom app icons**, **scripted actions**, **themes and profiles**
+- Universal binary, notarized, Sparkle auto-updates
 
-### Window switcher, live
+## Roadmap
 
-A global, Cmd-Tab-style window switcher with live window previews, plus per-tile
-hover previews so you can see a window before you raise it.
+### 1. Multi-display (the reason this fork exists)
 
-<div align="center"><img src="docs/images/feature-window-switcher.jpg" alt="Live window switcher" width="820"></div>
+- [ ] One dock instance per screen instead of a single shared window
+- [ ] Mirror mode: identical dock on every display
+- [ ] Per-screen mode: each dock shows only the windows on its own screen
+- [ ] Docks pinned to a specific display, surviving unplug and reconnect
+- [ ] Per-screen configuration (position, theme, size, contents)
 
-### Built-in Launchpad
+### 2. Taskbar mode
 
-A fullscreen, searchable app launcher with full keyboard navigation, its own
-layout, and an optional global shortcut.
+- [ ] Per-window cards rather than per-app icons
+- [ ] Single-window apps stay collapsed as icons; multi-window apps expand
+- [ ] Window grouping: always, never, automatic
 
-<div align="center"><img src="docs/images/feature-launchpad.jpg" alt="Built-in Launchpad" width="820"></div>
+### 3. Status and awareness
 
-### Widgets in the dock
+- [ ] Notification badges
+- [ ] Attention flashing for apps requesting focus
+- [ ] Launching / unresponsive / restorable state indicators
+- [ ] Media track progress on media app tiles
+- [ ] CPU and RAM readout on modifier hold
 
-Built-in widgets (Calendar, Reminders, Batteries, System, Weather, Now Playing,
-and more) live right in the dock. Stack several into a single tile with **Smart
-Stacks** and cycle through them in place. Add community `.dockywidget` bundles
-through the widget store.
+### 4. Placement and behavior
 
-<div align="center"><img src="docs/images/feature-widgets.jpg" alt="Widgets and Smart Stacks" width="820"></div>
-
-### Rich app folders
-
-Group apps into folders with nested navigation, Quick Look, and drag-and-drop.
-Optionally show running apps inline so a folder doubles as a live workspace.
-
-<div align="center"><img src="docs/images/feature-folders.jpg" alt="Rich app folders" width="820"></div>
-
-### More
-
-- **Custom app icons:** override the icon for any pinned, running, or
-  widget-backed app.
-- **Scripted actions:** catalog-backed AppleScript and menu-click automation,
-  plus curated commands.
-- **Themes and profiles:** themeable appearance and switchable configuration
-  profiles.
-
-## Download
-
-Get the latest notarized build from [getdocky.com](https://getdocky.com), or grab
-a release from the [Releases page](https://github.com/josejuanqm/docky/releases).
-
-### Homebrew
-
-```sh
-brew install --cask josejuanqm/tap/docky
-```
-
-Updates are delivered in-app via Sparkle. No tap trust step is needed for a normal
-install. If you run Homebrew with `HOMEBREW_REQUIRE_TAP_TRUST=1`, trust the cask
-first with `brew trust --cask josejuanqm/tap/docky`.
-
-Docky needs **Accessibility** and **Screen Recording** permissions to manage
-windows and render previews. It prompts for these on first launch.
-
-> [!NOTE]
-> Docky uses private SkyLight / CoreGraphics Services and Accessibility SPI (see
-> `Docky/Private/`) to position windows, capture previews, and drive the system
-> Dock. Because of this, **Docky cannot be distributed on the Mac App Store**.
-> It is built from source or distributed directly.
+- [ ] Any screen edge, per display
+- [ ] Multi-row layouts
+- [ ] Float or snap, per dock
+- [ ] Collapse to a single button
+- [ ] Windows respect dock edges without overlapping
+- [ ] Blink-free native fullscreen transitions
+- [ ] Native Dock suppression control
 
 ## Building from source
 
 ```sh
-git clone https://github.com/josejuanqm/docky.git
-cd docky
+git clone https://github.com/anthonyonazure/Wharf.git
+cd Wharf
 open Docky.xcodeproj
 ```
 
-Build and run the `Docky` scheme. Swift Package dependencies (Sparkle) resolve
-automatically on first build.
+Build and run the `Docky` scheme. Swift Package dependencies (Sparkle) resolve on
+first build. The Xcode target is still named `Docky`; renaming it is tracked as its
+own task so that merges from upstream stay clean in the meantime.
 
 ### Requirements
 
 - macOS 14.0 (Sonoma) or later
-- Xcode 16 or later to build from source
+- Xcode 16 or later
 
-## Documentation
+Wharf needs **Accessibility** and **Screen Recording** permissions to manage windows
+and render previews, and prompts on first launch.
 
-- [External widget bundles](docs/external-widgets.md): the `.dockywidget` bundle
-  contract and how to build community widgets.
+> [!NOTE]
+> Wharf inherits Docky's use of private SkyLight / CoreGraphics Services and
+> Accessibility SPI (see `Docky/Private/`) to position windows, capture previews and
+> drive the system Dock. Because of this it **cannot be distributed on the Mac App
+> Store**. It is built from source or distributed directly.
 
-## Supporting Docky
+## Relationship to upstream
 
-Docky is free and open source with no paid tier. If it earns a place in your
-Dock, you can help fund ongoing development:
+Wharf keeps Docky's full commit history and tracks it as a git remote, so upstream
+fixes can be merged rather than reimplemented:
 
-- **[GitHub Sponsors](https://github.com/sponsors/josejuanqm)**: one-time or
-  monthly, with tiers from ☕ Coffee to ❤️ Patron.
-- **[Buy Me a Coffee](https://buymeacoffee.com/josejuanqm)**: a quick one-off
-  thank-you.
+```sh
+git fetch upstream
+git merge upstream/main
+```
 
-Sponsors also get a supporter role in the [Docky Discord](https://discord.gg/vAwVNtPSgE).
-Supporters are credited in [SUPPORTERS.md](SUPPORTERS.md); sponsoring teams can
-have their logo featured there. Every bit helps keep Docky maintained and free.
+## Credits and license
 
-## Dependencies
+Wharf is a fork of **[Docky](https://github.com/josejuanqm/docky)** by
+**Jose Quintero**, licensed GPL-3.0. All of Docky's original copyright notices are
+preserved. Enormous credit to Jose for building the foundation this stands on; if
+Wharf is useful to you, consider [sponsoring the upstream
+project](https://github.com/sponsors/josejuanqm).
 
-- [Sparkle](https://github.com/sparkle-project/Sparkle): software update
-  framework (BSD 3-Clause).
+Some planned behavior is informed by
+**[Tungsten Edge](https://github.com/moonbai-studio/tungsten-edge)** (also GPL-3.0),
+which solved per-window taskbar cards and blink-free fullscreen transitions.
 
-## License
+Licensed under the [GNU General Public License v3.0](LICENSE). Because Wharf derives
+from GPL-3.0 code, it and any distributed derivative must remain open source under
+the same license.
 
-[GNU General Public License v3.0](LICENSE). Copyright (C) 2026 Jose Quintero.
+Copyright (C) 2026 Jose Quintero (original Docky work)
+Copyright (C) 2026 Anthony Clendenen (Wharf modifications)

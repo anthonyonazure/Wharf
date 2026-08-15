@@ -22,6 +22,7 @@ struct TileContainerView: View {
     @ObservedObject private var dockDrag = DockDragService.shared
     private var magnification: DockMagnificationService { dock.magnification }
 
+    @State private var isPointerInside = false
     @State private var draggedTileID: String?
     @State private var draggedTileOffset: CGFloat = 0
     @State private var draggedTileInitialFrame: CGRect?
@@ -40,6 +41,10 @@ struct TileContainerView: View {
 
         GeometryReader { proxy in
             overflowWrappedContent(in: proxy)
+            .onHover { hovering in
+                guard DockyPreferences.shared.collapsesToButton else { return }
+                withAnimation(.easeOut(duration: 0.18)) { isPointerInside = hovering }
+            }
             .onPreferenceChange(TileFramePreferenceKey.self) { tileFrames = $0 }
             .onAppear { layout.setTileCanvasFrame(proxy.frame(in: .global)) }
             .onChange(of: proxy.frame(in: .global)) { frame in
@@ -193,18 +198,44 @@ struct TileContainerView: View {
 
     @ViewBuilder
     private func sectionTilesView(_ tiles: [Tile]) -> some View {
+        // Wharf: a per-window taskbar outgrows a single strip quickly, so the
+        // dock can wrap into several rows. Rows run across the dock's long
+        // axis, so a bottom dock stacks rows vertically and a side dock stacks
+        // them side by side.
+        let rowCount = min(max(DockyPreferences.shared.dockRowCount, 1), 5)
+        let rows = Self.chunk(tiles, intoRows: rowCount)
+
         if position.isVertical {
-            VStack(alignment: stackHorizontalAlignment, spacing: effectiveTileSpacing) {
-                ForEach(tiles) { tile in
-                    tileView(for: tile)
+            HStack(alignment: .top, spacing: effectiveTileSpacing) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    VStack(alignment: stackHorizontalAlignment, spacing: effectiveTileSpacing) {
+                        ForEach(row) { tile in
+                            tileView(for: tile)
+                        }
+                    }
                 }
             }
         } else {
-            HStack(alignment: stackVerticalAlignment, spacing: effectiveTileSpacing) {
-                ForEach(tiles) { tile in
-                    tileView(for: tile)
+            VStack(alignment: .leading, spacing: effectiveTileSpacing) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(alignment: stackVerticalAlignment, spacing: effectiveTileSpacing) {
+                        ForEach(row) { tile in
+                            tileView(for: tile)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// Splits tiles into `rowCount` rows, filling each row in order so tiles
+    /// keep left-to-right reading order rather than being dealt round-robin
+    /// down the columns.
+    static func chunk(_ tiles: [Tile], intoRows rowCount: Int) -> [[Tile]] {
+        guard rowCount > 1, tiles.count > rowCount else { return [tiles] }
+        let perRow = Int(ceil(Double(tiles.count) / Double(rowCount)))
+        return stride(from: 0, to: tiles.count, by: perRow).map { start in
+            Array(tiles[start..<min(start + perRow, tiles.count)])
         }
     }
 
@@ -305,7 +336,30 @@ struct TileContainerView: View {
         DockTileProjection.project(store.tiles, dock: dock, windows: windowRegistry.windows)
     }
 
+    /// Wharf: when collapsed, the dock renders a single button until the
+    /// pointer arrives. Implemented by trimming the tile list rather than by
+    /// swapping in a different view, so chrome sizing, magnification and hit
+    /// testing all keep working unchanged.
+    private var isCollapsedToButton: Bool {
+        DockyPreferences.shared.collapsesToButton && !isPointerInside
+    }
+
     private var displayTiles: [Tile] {
+        if isCollapsedToButton {
+            // Keep the launchpad/start tile if there is one, otherwise the
+            // first tile, so the button still does something useful.
+            let projected = projectedTiles
+            let preferred = projected.first {
+                if case .launchpad = $0.content { return true }
+                if case .startMenu = $0.content { return true }
+                return false
+            }
+            if let button = preferred ?? projected.first {
+                return [button]
+            }
+            return []
+        }
+
         let projectedTiles = self.projectedTiles
         guard let firstTile = projectedTiles.first else {
             return projectedTiles

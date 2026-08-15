@@ -48,7 +48,7 @@ These already work, courtesy of upstream:
 - [x] One dock instance per screen instead of a single shared window
 - [x] Mirror mode: identical dock on every display
 - [x] Docks pinned to a specific display, surviving unplug and reconnect
-- [ ] Per-screen mode: each dock shows only the windows on its own screen
+- [x] Per-screen mode: each dock shows only the windows on its own screen
 - [ ] Per-screen configuration (position, theme, size, contents)
 
 Turn it on in **Settings → Behavior → Placement → Display → All Displays**.
@@ -65,25 +65,29 @@ In **Settings → Behavior → Windows Keyboard**. Needs Accessibility permissio
 
 ### 2. Taskbar mode
 
-- [ ] Per-window cards rather than per-app icons
-- [ ] Single-window apps stay collapsed as icons; multi-window apps expand
-- [ ] Window grouping: always, never, automatic
+- [x] Per-window cards rather than per-app icons
+- [x] Single-window apps stay collapsed as icons; multi-window apps expand
+- [x] Window grouping: always, never, automatic
 
 ### 3. Status and awareness
 
-- [ ] Notification badges
-- [ ] Attention flashing for apps requesting focus
-- [ ] Launching / unresponsive / restorable state indicators
-- [ ] Media track progress on media app tiles
-- [ ] CPU and RAM readout on modifier hold
+- [x] Notification badges (inherited)
+- [x] Launching and unresponsive state indicators
+- [x] Media track progress on media app tiles
+- [x] CPU and RAM readout on Control hold
+- [~] Attention flashing — the tile animation is built, but macOS exposes no
+  public signal for another process calling `requestUserAttention`, so nothing
+  currently triggers it except the internal entry point
 
 ### 4. Placement and behavior
 
-- [ ] Any screen edge, per display
-- [ ] Multi-row layouts
+- [x] Any screen edge (global today, not yet per display)
+- [x] Windows respect dock edges without overlapping, on every screen
+- [x] Collapse to a single button
+- [~] Multi-row layouts — rows are built and chunked, but the dock chrome is
+  still sized for one row, so extra rows are clipped. Needs the chrome
+  measurement to account for row count
 - [ ] Float or snap, per dock
-- [ ] Collapse to a single button
-- [ ] Windows respect dock edges without overlapping
 - [ ] Blink-free native fullscreen transitions
 - [ ] Native Dock suppression control
 

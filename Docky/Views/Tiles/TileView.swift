@@ -27,6 +27,8 @@ struct TileView: View {
     let renderedTileSize: CGFloat?
     private let dockSettings = DockSettingsService.shared
     @EnvironmentObject private var dock: DockContext
+    @ObservedObject private var appActivity = AppActivityService.shared
+    @ObservedObject private var systemLoad = SystemLoadService.shared
     private var layout: DockLayoutService { dock.layout }
     @Bindable private var preferences = DockyPreferences.shared
     @ObservedObject private var workspace = WorkspaceService.shared
@@ -493,6 +495,49 @@ struct TileView: View {
     /// feature is off or the app has no badge. App folders show the summed
     /// numeric badge of the apps they contain (mirroring how the count rolls
     /// up when running apps collapse into a folder).
+    /// Bundle id this tile represents, for the state lookups below.
+    private var stateBundleIdentifier: String? {
+        switch tile.content {
+        case let .app(app): return app.bundleIdentifier
+        case let .minimizedWindow(window): return window.bundleIdentifier
+        default: return nil
+        }
+    }
+
+    private var wantsAttention: Bool {
+        guard let id = stateBundleIdentifier else { return false }
+        return appActivity.attentionRequested.contains(id)
+    }
+
+    private var isLaunching: Bool {
+        guard let id = stateBundleIdentifier else { return false }
+        return appActivity.launching.contains(id)
+    }
+
+    private var isUnresponsive: Bool {
+        guard let id = stateBundleIdentifier else { return false }
+        return appActivity.unresponsive.contains(id)
+    }
+
+    /// Fraction of the current track elapsed, or nil when this app is not
+    /// playing anything. Uses the estimated position so the bar advances
+    /// smoothly between the sparse updates the media API delivers.
+    private var mediaProgress: Double? {
+        guard DockyPreferences.shared.showsMediaProgressOnTiles,
+              let id = stateBundleIdentifier,
+              let state = mediaPlayback.state(for: id),
+              state.isPresentable, state.duration > 0 else { return nil }
+        return min(max(state.estimatedCurrentTime / state.duration, 0), 1)
+    }
+
+    /// CPU and memory text, only while the readout modifier is held.
+    private var loadText: String? {
+        guard systemLoad.isShowingLoad,
+              let id = stateBundleIdentifier,
+              let sample = systemLoad.samples[id] else { return nil }
+        return SystemLoadService.format(sample)
+    }
+
     private var badgeText: String? {
         guard preferences.showsAppBadges else { return nil }
         switch tile.content {
@@ -562,6 +607,58 @@ struct TileView: View {
                 if let badgeText {
                     DockBadgeView(text: badgeText)
                         .padding(appliedTileIconPadding)
+                }
+            }
+            // Wharf: transient app state. Attention pulses the tile the way a
+            // bouncing Dock icon does, launching dims it until the app is
+            // ready, and an unresponsive app is marked rather than left
+            // looking healthy while it is beachballing.
+            .opacity(isLaunching ? 0.55 : 1)
+            .scaleEffect(wantsAttention ? 1.12 : 1)
+            .animation(
+                wantsAttention
+                    ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true)
+                    : .easeInOut(duration: 0.15),
+                value: wantsAttention
+            )
+            .overlay(alignment: .topLeading) {
+                if isUnresponsive {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: max(8, layout.scaled(10))))
+                        .foregroundStyle(.orange)
+                        .padding(appliedTileIconPadding)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let loadText {
+                    Text(loadText)
+                        .font(.system(size: max(7, layout.scaled(9)), weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(.black.opacity(0.65))
+                        )
+                        .fixedSize()
+                }
+            }
+            // Wharf: track position on the tile of a media app, the way uBar
+            // shows playback progress without needing a widget slot.
+            .overlay(alignment: .bottom) {
+                if let mediaProgress {
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.25))
+                            Capsule()
+                                .fill(.white.opacity(0.9))
+                                .frame(width: proxy.size.width * mediaProgress)
+                        }
+                        .frame(height: 2)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                    .padding(.horizontal, appliedTileIconPadding)
+                    .allowsHitTesting(false)
                 }
             }
             .contentShape(Rectangle())

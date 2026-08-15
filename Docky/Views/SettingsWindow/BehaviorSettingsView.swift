@@ -242,6 +242,23 @@ struct BehaviorSettingsView: View {
             .padding(.vertical, 4)
 
             VStack(alignment: .leading, spacing: 8) {
+                Toggle("Track Progress on Tiles", isOn: $preferences.showsMediaProgressOnTiles)
+                    .font(.headline)
+
+                Text("Draws playback position along the bottom of a media app's tile, so you can see where a track is without opening anything.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Hold Control to read CPU and memory on every running app's tile. Sampling only runs while the key is held, so an idle dock costs nothing.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
                 Toggle("Collapse to a Button", isOn: $preferences.collapsesToButton)
                     .font(.headline)
 

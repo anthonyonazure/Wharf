@@ -1774,6 +1774,14 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// Wharf: paint track position along the bottom of a media app's tile.
+    var showsMediaProgressOnTiles: Bool {
+        didSet {
+            guard showsMediaProgressOnTiles != oldValue else { return }
+            defaults.set(showsMediaProgressOnTiles, forKey: Keys.showsMediaProgressOnTiles)
+        }
+    }
+
     /// Wharf: shrink the dock to a single button until clicked.
     var collapsesToButton: Bool {
         didSet {
@@ -3668,6 +3676,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let showsOnlyCurrentScreenWindows = "wharf.showsOnlyCurrentScreenWindows"
         static let dockRowCount = "wharf.dockRowCount"
         static let collapsesToButton = "wharf.collapsesToButton"
+        static let showsMediaProgressOnTiles = "wharf.showsMediaProgressOnTiles"
         static let windowsKeyboardMode = "wharf.windowsKeyboardMode"
         static let windowsKeyboardSnipShortcut = "wharf.windowsKeyboardSnipShortcut"
         static let windowsKeyboardExcludedBundleIDs = "wharf.windowsKeyboardExcludedBundleIDs"
@@ -3785,6 +3794,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let showsOnlyCurrentScreenWindows = false
         static let dockRowCount = 1
         static let collapsesToButton = false
+        static let showsMediaProgressOnTiles = true
         static let windowsKeyboardMode = false
         static let windowsKeyboardSnipShortcut = true
         /// Terminals, where Control keeps its Unix meaning.
@@ -3935,6 +3945,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         let storedShowsOnlyCurrentScreenWindows = defaults.object(forKey: Keys.showsOnlyCurrentScreenWindows) as? Bool
         let storedDockRowCount = defaults.object(forKey: Keys.dockRowCount) as? Int
         let storedCollapsesToButton = defaults.object(forKey: Keys.collapsesToButton) as? Bool
+        let storedShowsMediaProgressOnTiles = defaults.object(forKey: Keys.showsMediaProgressOnTiles) as? Bool
         let storedWindowsKeyboardMode = defaults.object(forKey: Keys.windowsKeyboardMode) as? Bool
         let storedWindowsKeyboardSnipShortcut = defaults.object(forKey: Keys.windowsKeyboardSnipShortcut) as? Bool
         let storedWindowsKeyboardExcludedBundleIDs = defaults.object(forKey: Keys.windowsKeyboardExcludedBundleIDs) as? [String]
@@ -4069,6 +4080,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.showsOnlyCurrentScreenWindows = storedShowsOnlyCurrentScreenWindows ?? DefaultValues.showsOnlyCurrentScreenWindows
         self.dockRowCount = storedDockRowCount ?? DefaultValues.dockRowCount
         self.collapsesToButton = storedCollapsesToButton ?? DefaultValues.collapsesToButton
+        self.showsMediaProgressOnTiles = storedShowsMediaProgressOnTiles ?? DefaultValues.showsMediaProgressOnTiles
         self.windowsKeyboardMode = storedWindowsKeyboardMode ?? DefaultValues.windowsKeyboardMode
         self.windowsKeyboardSnipShortcut = storedWindowsKeyboardSnipShortcut ?? DefaultValues.windowsKeyboardSnipShortcut
         self.windowsKeyboardExcludedBundleIDs = storedWindowsKeyboardExcludedBundleIDs ?? DefaultValues.windowsKeyboardExcludedBundleIDs
@@ -4350,6 +4362,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         showsOnlyCurrentScreenWindows = DefaultValues.showsOnlyCurrentScreenWindows
         dockRowCount = DefaultValues.dockRowCount
         collapsesToButton = DefaultValues.collapsesToButton
+        showsMediaProgressOnTiles = DefaultValues.showsMediaProgressOnTiles
         windowsKeyboardMode = DefaultValues.windowsKeyboardMode
         windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
         windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs
@@ -4417,6 +4430,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         showsOnlyCurrentScreenWindows = DefaultValues.showsOnlyCurrentScreenWindows
         dockRowCount = DefaultValues.dockRowCount
         collapsesToButton = DefaultValues.collapsesToButton
+        showsMediaProgressOnTiles = DefaultValues.showsMediaProgressOnTiles
         windowsKeyboardMode = DefaultValues.windowsKeyboardMode
         windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
         windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs

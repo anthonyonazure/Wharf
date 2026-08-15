@@ -11,6 +11,7 @@ struct BehaviorSettingsView: View {
         case placement
         case visibility
         case windowsKeyboard
+        case taskbar
         case appTileClick
         case widgets
         case launch
@@ -48,6 +49,8 @@ struct BehaviorSettingsView: View {
                 visibilitySection
             case .windowsKeyboard:
                 windowsKeyboardSection
+            case .taskbar:
+                taskbarSection
             case .appTileClick:
                 appTileClickSection
             case .widgets:
@@ -164,6 +167,91 @@ struct BehaviorSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private var taskbarSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Content")
+                        .font(.headline)
+                    Spacer()
+                    Picker("Content", selection: $preferences.dockContentMode) {
+                        ForEach(DockContentMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+
+                Text("Dock shows one tile per app, the way macOS does. Taskbar shows one card per window, the way Windows does, so you can reach any window in a single click.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Group Windows")
+                        .font(.headline)
+                    Spacer()
+                    Picker("Group Windows", selection: $preferences.windowGrouping) {
+                        ForEach(DockWindowGrouping.allCases) { grouping in
+                            Text(grouping.title).tag(grouping)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+
+                Text("Always keeps every app as a single tile. Never gives every window its own card. Automatic collapses single-window apps to an icon and splits out only apps with several windows, which keeps the strip readable.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Only This Screen's Windows", isOn: $preferences.showsOnlyCurrentScreenWindows)
+                    .font(.headline)
+
+                Text("Each dock lists only the windows on its own display. Pinned apps stay on every dock, since they are launchers rather than window indicators.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Rows")
+                        .font(.headline)
+                    Spacer()
+                    Stepper(value: $preferences.dockRowCount, in: 1...5) {
+                        Text("\(preferences.dockRowCount)")
+                            .monospacedDigit()
+                    }
+                    .labelsHidden()
+                }
+
+                Text("Let the dock grow to several rows instead of one long strip. Useful once a per-window taskbar fills the screen edge.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Collapse to a Button", isOn: $preferences.collapsesToButton)
+                    .font(.headline)
+
+                Text("Shrinks the dock to a single button. Click it to expand, and it collapses again when the pointer leaves.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Taskbar")
         }
     }
 

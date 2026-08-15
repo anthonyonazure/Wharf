@@ -441,6 +441,39 @@ enum DockWindowPosition: String, CaseIterable, Identifiable {
     }
 }
 
+/// Whether the dock shows one tile per app (macOS) or one card per window
+/// (Windows taskbar).
+enum DockContentMode: String, CaseIterable, Identifiable {
+    case dock
+    case taskbar
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dock: String(localized: "Dock")
+        case .taskbar: String(localized: "Taskbar")
+        }
+    }
+}
+
+/// How windows of the same app are collapsed onto tiles in taskbar mode.
+enum DockWindowGrouping: String, CaseIterable, Identifiable {
+    case always
+    case never
+    case automatic
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .always: String(localized: "Always")
+        case .never: String(localized: "Never")
+        case .automatic: String(localized: "Automatic")
+        }
+    }
+}
+
 enum DockWindowDisplayTarget: String, CaseIterable, Identifiable {
     case primaryDisplay
     case displayContainingPointer
@@ -1704,6 +1737,48 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         didSet {
             guard windowSpaceBehavior != oldValue else { return }
             defaults.set(windowSpaceBehavior.rawValue, forKey: Keys.windowSpaceBehavior)
+        }
+    }
+
+    /// Wharf: one tile per app, or one card per window.
+    var dockContentMode: DockContentMode {
+        didSet {
+            guard dockContentMode != oldValue else { return }
+            defaults.set(dockContentMode.rawValue, forKey: Keys.dockContentMode)
+        }
+    }
+
+    /// Wharf: how windows of one app collapse onto tiles in taskbar mode.
+    var windowGrouping: DockWindowGrouping {
+        didSet {
+            guard windowGrouping != oldValue else { return }
+            defaults.set(windowGrouping.rawValue, forKey: Keys.windowGrouping)
+        }
+    }
+
+    /// Wharf: each dock lists only the windows living on its own display.
+    var showsOnlyCurrentScreenWindows: Bool {
+        didSet {
+            guard showsOnlyCurrentScreenWindows != oldValue else { return }
+            defaults.set(showsOnlyCurrentScreenWindows, forKey: Keys.showsOnlyCurrentScreenWindows)
+        }
+    }
+
+    /// Wharf: how many rows of tiles the dock may grow to.
+    var dockRowCount: Int {
+        didSet {
+            let clamped = min(max(dockRowCount, 1), 5)
+            if dockRowCount != clamped { dockRowCount = clamped; return }
+            guard dockRowCount != oldValue else { return }
+            defaults.set(dockRowCount, forKey: Keys.dockRowCount)
+        }
+    }
+
+    /// Wharf: shrink the dock to a single button until clicked.
+    var collapsesToButton: Bool {
+        didSet {
+            guard collapsesToButton != oldValue else { return }
+            defaults.set(collapsesToButton, forKey: Keys.collapsesToButton)
         }
     }
 
@@ -3588,6 +3663,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let windowDisplayTarget = "docky.windowDisplayTarget"
         static let windowSpaceBehavior = "docky.windowSpaceBehavior"
         static let autohidesWindow = "docky.autohidesWindow"
+        static let dockContentMode = "wharf.dockContentMode"
+        static let windowGrouping = "wharf.windowGrouping"
+        static let showsOnlyCurrentScreenWindows = "wharf.showsOnlyCurrentScreenWindows"
+        static let dockRowCount = "wharf.dockRowCount"
+        static let collapsesToButton = "wharf.collapsesToButton"
         static let windowsKeyboardMode = "wharf.windowsKeyboardMode"
         static let windowsKeyboardSnipShortcut = "wharf.windowsKeyboardSnipShortcut"
         static let windowsKeyboardExcludedBundleIDs = "wharf.windowsKeyboardExcludedBundleIDs"
@@ -3700,6 +3780,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let windowDisplayTarget: DockWindowDisplayTarget = .primaryDisplay
         static let windowSpaceBehavior: DockWindowSpaceBehavior = .allSpaces
         static let autohidesWindow = false
+        static let dockContentMode: DockContentMode = .dock
+        static let windowGrouping: DockWindowGrouping = .automatic
+        static let showsOnlyCurrentScreenWindows = false
+        static let dockRowCount = 1
+        static let collapsesToButton = false
         static let windowsKeyboardMode = false
         static let windowsKeyboardSnipShortcut = true
         /// Terminals, where Control keeps its Unix meaning.
@@ -3845,6 +3930,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         let storedWindowDisplayTarget = defaults.string(forKey: Keys.windowDisplayTarget)
         let storedWindowSpaceBehavior = defaults.string(forKey: Keys.windowSpaceBehavior)
         let storedAutohidesWindow = defaults.object(forKey: Keys.autohidesWindow) as? Bool
+        let storedDockContentMode = defaults.string(forKey: Keys.dockContentMode)
+        let storedWindowGrouping = defaults.string(forKey: Keys.windowGrouping)
+        let storedShowsOnlyCurrentScreenWindows = defaults.object(forKey: Keys.showsOnlyCurrentScreenWindows) as? Bool
+        let storedDockRowCount = defaults.object(forKey: Keys.dockRowCount) as? Int
+        let storedCollapsesToButton = defaults.object(forKey: Keys.collapsesToButton) as? Bool
         let storedWindowsKeyboardMode = defaults.object(forKey: Keys.windowsKeyboardMode) as? Bool
         let storedWindowsKeyboardSnipShortcut = defaults.object(forKey: Keys.windowsKeyboardSnipShortcut) as? Bool
         let storedWindowsKeyboardExcludedBundleIDs = defaults.object(forKey: Keys.windowsKeyboardExcludedBundleIDs) as? [String]
@@ -3974,6 +4064,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.windowDisplayTarget = (storedWindowDisplayTarget.flatMap(DockWindowDisplayTarget.init(rawValue:)) ?? DefaultValues.windowDisplayTarget)
         self.windowSpaceBehavior = (storedWindowSpaceBehavior.flatMap(DockWindowSpaceBehavior.init(rawValue:)) ?? DefaultValues.windowSpaceBehavior)
         self.autohidesWindow = storedAutohidesWindow ?? DefaultValues.autohidesWindow
+        self.dockContentMode = storedDockContentMode.flatMap(DockContentMode.init(rawValue:)) ?? DefaultValues.dockContentMode
+        self.windowGrouping = storedWindowGrouping.flatMap(DockWindowGrouping.init(rawValue:)) ?? DefaultValues.windowGrouping
+        self.showsOnlyCurrentScreenWindows = storedShowsOnlyCurrentScreenWindows ?? DefaultValues.showsOnlyCurrentScreenWindows
+        self.dockRowCount = storedDockRowCount ?? DefaultValues.dockRowCount
+        self.collapsesToButton = storedCollapsesToButton ?? DefaultValues.collapsesToButton
         self.windowsKeyboardMode = storedWindowsKeyboardMode ?? DefaultValues.windowsKeyboardMode
         self.windowsKeyboardSnipShortcut = storedWindowsKeyboardSnipShortcut ?? DefaultValues.windowsKeyboardSnipShortcut
         self.windowsKeyboardExcludedBundleIDs = storedWindowsKeyboardExcludedBundleIDs ?? DefaultValues.windowsKeyboardExcludedBundleIDs
@@ -4250,6 +4345,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
 
         // Visibility
         autohidesWindow = DefaultValues.autohidesWindow
+        dockContentMode = DefaultValues.dockContentMode
+        windowGrouping = DefaultValues.windowGrouping
+        showsOnlyCurrentScreenWindows = DefaultValues.showsOnlyCurrentScreenWindows
+        dockRowCount = DefaultValues.dockRowCount
+        collapsesToButton = DefaultValues.collapsesToButton
         windowsKeyboardMode = DefaultValues.windowsKeyboardMode
         windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
         windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs
@@ -4312,6 +4412,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         windowDisplayTarget = DefaultValues.windowDisplayTarget
         windowSpaceBehavior = DefaultValues.windowSpaceBehavior
         autohidesWindow = DefaultValues.autohidesWindow
+        dockContentMode = DefaultValues.dockContentMode
+        windowGrouping = DefaultValues.windowGrouping
+        showsOnlyCurrentScreenWindows = DefaultValues.showsOnlyCurrentScreenWindows
+        dockRowCount = DefaultValues.dockRowCount
+        collapsesToButton = DefaultValues.collapsesToButton
         windowsKeyboardMode = DefaultValues.windowsKeyboardMode
         windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
         windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs

@@ -16,6 +16,7 @@ struct TileContainerView: View {
     private let dockSettings = DockSettingsService.shared
     @EnvironmentObject private var dock: DockContext
     private var layout: DockLayoutService { dock.layout }
+    @ObservedObject private var windowRegistry = WindowRegistry.shared
     @Bindable private var preferences = DockyPreferences.shared
     @ObservedObject private var editMode = DockEditModeService.shared
     @ObservedObject private var dockDrag = DockDragService.shared
@@ -298,9 +299,16 @@ struct TileContainerView: View {
         }
     }
 
+    /// This dock's view of the shared tile list: filtered to its own screen
+    /// and expanded into per-window cards when taskbar mode is on.
+    private var projectedTiles: [Tile] {
+        DockTileProjection.project(store.tiles, dock: dock, windows: windowRegistry.windows)
+    }
+
     private var displayTiles: [Tile] {
-        guard let firstTile = store.tiles.first else {
-            return store.tiles
+        let projectedTiles = self.projectedTiles
+        guard let firstTile = projectedTiles.first else {
+            return projectedTiles
         }
 
         // Shelve mode drops the leading Finder tile, so the first store
@@ -317,8 +325,8 @@ struct TileContainerView: View {
         var appendedTrailingSection = false
 
         let remainingTiles: ArraySlice<Tile> = leadsWithFinder
-            ? store.tiles.dropFirst()
-            : store.tiles[...]
+            ? projectedTiles.dropFirst()
+            : projectedTiles[...]
         for tile in remainingTiles {
             if appendedTrailingSection {
                 continue

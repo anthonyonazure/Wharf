@@ -58,14 +58,10 @@ final class WindowActionsService {
 
     // MARK: - Fullscreen
 
-    /// Whether the app's frontmost window currently fills its screen.
+    /// Whether the window is in native fullscreen, per the accessibility flag
+    /// rather than a geometry guess.
     func isFullscreen(_ window: AppWindow) -> Bool {
-        guard let frame = window.frame,
-              let screen = screenFor(window) else { return false }
-        // Compared against the full frame, not visibleFrame: a fullscreen
-        // window covers the menu bar too.
-        let target = screen.frame
-        return abs(frame.width - target.width) < 4 && abs(frame.height - target.height) < 4
+        WindowRegistry.shared.isFullscreen(window)
     }
 
     /// Toggles native fullscreen through the accessibility API.
@@ -125,7 +121,14 @@ final class WindowActionsService {
             return
         }
 
-        for window in WindowRegistry.shared.windows {
+        // Only the locked windows, not every window on the system. Scanning
+        // them all ran an accessibility query per window every 0.75s to service
+        // what is usually a single lock.
+        let lockedWindows = WindowRegistry.shared.windows.filter {
+            sizeLockedWindowIDs.contains($0.windowIdentifier)
+        }
+
+        for window in lockedWindows {
             let id = window.windowIdentifier
             guard let locked = lockedSizes[id], let frame = window.frame else { continue }
             guard abs(frame.width - locked.width) > 2 || abs(frame.height - locked.height) > 2 else { continue }

@@ -119,8 +119,12 @@ final class WorkspaceLayoutService: ObservableObject {
     /// requirement would restore almost nothing after a real day's use. Windows
     /// are matched per app: exact title first, then by position in the app's
     /// window list.
+    /// - Parameter capturesUndo: whether to snapshot the current arrangement
+    ///   first. False when the restore IS the undo, otherwise undoing would
+    ///   immediately record the state it just left and the two arrangements
+    ///   would ping-pong forever.
     @discardableResult
-    func restore(_ layout: WorkspaceLayout) -> (moved: Int, missed: Int) {
+    func restore(_ layout: WorkspaceLayout, capturesUndo: Bool = true) -> (moved: Int, missed: Int) {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return (0, 0) }
 
         // Snapshot before moving anything. Restore rearranges real windows and
@@ -128,7 +132,9 @@ final class WorkspaceLayoutService: ObservableObject {
         // firing at the wrong moment, would otherwise scatter a working desk
         // with no way back. Held in memory only — it is an undo, not a saved
         // layout, and persisting it would clutter the user's list.
-        captureUndoSnapshot()
+        if capturesUndo {
+            captureUndoSnapshot()
+        }
 
         isRestoring = true
         defer { isRestoring = false }
@@ -184,6 +190,40 @@ final class WorkspaceLayoutService: ObservableObject {
 
     /// Launches any app the layout needs that is not currently running.
     /// Returns how many were launched, so a caller can wait before restoring.
+    /// Launches missing apps, then restores once their windows actually exist.
+    ///
+    /// Replaces a fixed delay. Apps launch at wildly different speeds, and a
+    /// hardcoded wait either restores before a slow app has drawn a window (so
+    /// that app is silently skipped) or idles after a fast one. This polls for
+    /// the windows it is waiting on and gives up at a deadline.
+    func launchAndRestore(_ layout: WorkspaceLayout, timeout: TimeInterval = 15) {
+        let launched = launchMissingApps(for: layout)
+        guard launched > 0 else {
+            restore(layout)
+            return
+        }
+
+        let expected = Set(layout.bundleIdentifiers)
+        let deadline = Date().addingTimeInterval(timeout)
+
+        func attempt() {
+            let present = Set(
+                WindowRegistry.shared.windows
+                    .filter { !$0.isMinimized }
+                    .map(\.bundleIdentifier)
+            )
+            let stillWaiting = expected.subtracting(present)
+
+            if stillWaiting.isEmpty || Date() >= deadline {
+                restore(layout)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: attempt)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: attempt)
+    }
+
     @discardableResult
     func launchMissingApps(for layout: WorkspaceLayout) -> Int {
         let running = Set(
@@ -243,7 +283,7 @@ final class WorkspaceLayoutService: ObservableObject {
         // Cleared first so undoing an undo cannot ping-pong between two
         // arrangements.
         undoSnapshot = nil
-        return restore(snapshot)
+        return restore(snapshot, capturesUndo: false)
     }
 
     func delete(_ layout: WorkspaceLayout) {

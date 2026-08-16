@@ -135,14 +135,7 @@ struct LayoutsWidgetView: View {
     /// immediately would move only what was already open and silently skip
     /// everything it just launched.
     private func restoreLaunching(_ layout: WorkspaceLayout) {
-        let launched = service.launchMissingApps(for: layout)
         isShowingMenu = false
-        guard launched > 0 else {
-            service.restore(layout)
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            service.restore(layout)
-        }
+        service.launchAndRestore(layout)
     }
 }

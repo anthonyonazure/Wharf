@@ -335,6 +335,19 @@ final class WindowRegistry: ObservableObject {
         ) == .success
     }
 
+    /// Wharf: reads the window's native fullscreen flag.
+    ///
+    /// Geometry is not a reliable proxy: a manually zoomed window can match the
+    /// screen bounds without being fullscreen, so a menu built on measurements
+    /// offers "Enter Full Screen" for a window that is already fullscreen.
+    func isFullscreen(_ window: AppWindow) -> Bool {
+        guard AXIsProcessTrusted(), let element = liveElement(for: window) else { return false }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, "AXFullScreen" as CFString, &value) == .success,
+              let number = value as? Bool else { return false }
+        return number
+    }
+
     /// Wharf: flips the window's native fullscreen state.
     ///
     /// `AXFullScreen` is the same switch the green button uses, so the window

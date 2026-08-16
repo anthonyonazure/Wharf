@@ -70,6 +70,12 @@ final class LayoutTriggerEngine: ObservableObject {
     /// minute; without this the desk would rearrange itself dozens of times.
     private var lastFired: [String: Date] = [:]
 
+    /// Calendar events each rule has already handled. The refractory period
+    /// alone is time-based, so back-to-back meetings could each land inside one
+    /// window and only the first would fire — or a long window could fire twice
+    /// for the same meeting. Keyed by rule id to the event identifier.
+    private var handledEventByRule: [String: String] = [:]
+
     private var cancellables: Set<AnyCancellable> = []
     private var timer: Timer?
     private let defaultsKey = "wharf.layoutRules"
@@ -139,8 +145,10 @@ final class LayoutTriggerEngine: ObservableObject {
                 let windowStart = TimeInterval(minutesBefore * 60)
                 // A band, not an instant: the check runs every 20 seconds and
                 // would step straight over an exact-second comparison.
-                guard secondsAway > 0, secondsAway <= windowStart, secondsAway > windowStart - 60 else { continue }
-                fire(rule)
+                guard secondsAway > 0, secondsAway <= windowStart else { continue }
+                guard handledEventByRule[rule.id] != event.eventIdentifier else { continue }
+                handledEventByRule[rule.id] = event.eventIdentifier
+                fire(rule, bypassRefractory: true)
 
             default:
                 continue
@@ -162,22 +170,19 @@ final class LayoutTriggerEngine: ObservableObject {
         }
     }
 
-    private func fire(_ rule: LayoutRule) {
-        if let last = lastFired[rule.id], Date().timeIntervalSince(last) < refractoryPeriod { return }
+    private func fire(_ rule: LayoutRule, bypassRefractory: Bool = false) {
+        if !bypassRefractory,
+           let last = lastFired[rule.id],
+           Date().timeIntervalSince(last) < refractoryPeriod { return }
         guard let layout = WorkspaceLayoutService.shared.layouts.first(where: { $0.name == rule.layoutName }) else { return }
 
         lastFired[rule.id] = Date()
 
-        guard rule.launchesMissingApps,
-              WorkspaceLayoutService.shared.launchMissingApps(for: layout) > 0 else {
+        guard rule.launchesMissingApps else {
             WorkspaceLayoutService.shared.restore(layout)
             return
         }
-
-        // Newly launched apps have no windows yet.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-            WorkspaceLayoutService.shared.restore(layout)
-        }
+        WorkspaceLayoutService.shared.launchAndRestore(layout)
     }
 
     // MARK: - Persistence

@@ -17,13 +17,19 @@ struct ClockWidgetView: View {
     let span: TileSpan
 
     @ObservedObject private var calendar = CalendarService.shared
-    @State private var now = Date()
-
-    /// One tick a second. The glow animates between ticks, so a faster timer
-    /// would burn CPU to redraw the same thing.
-    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        // TimelineView rather than a Timer publisher: SwiftUI suspends it when
+        // the view is off-screen or the display sleeps. An autoconnected
+        // publisher keeps firing for the life of the process whether anyone is
+        // looking at the clock or not.
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            clockFace(now: context.date)
+        }
+    }
+
+    @ViewBuilder
+    private func clockFace(now: Date) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(.thinMaterial)
@@ -36,15 +42,14 @@ struct ClockWidgetView: View {
                 if span != .one {
                     Text(now, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(dateColor)
-                        .shadow(color: glowColor, radius: glowRadius)
+                        .foregroundStyle(dateColor(now: now))
+                        .shadow(color: glowColor(now: now), radius: glowRadius(now: now))
                 }
             }
             .padding(.horizontal, 4)
         }
-        .onReceive(tick) { now = $0 }
-        .help(nextEventDescription)
-        .animation(.easeInOut(duration: 0.6), value: urgency)
+        .help(nextEventDescription(now: now))
+        .animation(.easeInOut(duration: 0.6), value: urgency(now: now))
     }
 
     // MARK: - Urgency
@@ -54,7 +59,7 @@ struct ClockWidgetView: View {
     /// Ramps over the last 30 minutes rather than linearly across hours: an
     /// event four hours out should look identical to no event at all, or the
     /// glow becomes background noise and stops meaning anything.
-    private var urgency: Double {
+    private func urgency(now: Date) -> Double {
         guard let event = calendar.nextEvent else { return 0 }
         let secondsAway = event.startDate.timeIntervalSince(now)
 
@@ -69,19 +74,20 @@ struct ClockWidgetView: View {
         return 1 - (secondsAway / window)
     }
 
-    private var dateColor: Color {
-        urgency <= 0 ? .secondary : Color.orange.opacity(0.5 + 0.5 * urgency)
+    private func dateColor(now: Date) -> Color {
+        let value = urgency(now: now)
+        return value <= 0 ? .secondary : Color.orange.opacity(0.5 + 0.5 * value)
     }
 
-    private var glowColor: Color {
-        .orange.opacity(urgency * 0.9)
+    private func glowColor(now: Date) -> Color {
+        .orange.opacity(urgency(now: now) * 0.9)
     }
 
-    private var glowRadius: CGFloat {
-        urgency * 6
+    private func glowRadius(now: Date) -> CGFloat {
+        urgency(now: now) * 6
     }
 
-    private var nextEventDescription: String {
+    private func nextEventDescription(now: Date) -> String {
         guard let event = calendar.nextEvent else { return "No upcoming events" }
         let minutes = Int(event.startDate.timeIntervalSince(now) / 60)
         guard minutes > 0 else { return "\(event.title) — now" }

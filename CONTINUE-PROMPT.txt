@@ -1,0 +1,24 @@
+Continue work on Wharf, a macOS Dock replacement at /Users/anthony/projects/wharf.
+It is a GPL-3.0 hard fork of Docky that runs a dock on every display, plus taskbar
+mode, a Windows-keyboard translation layer, and saved window layouts with rules
+that fire them.
+
+State: main is clean and fully pushed. The build succeeds. The app runs from
+/Applications/Wharf.app. There is no test suite, so every behavioral claim must be
+verified by running the app. Accessibility is currently NOT granted to the renamed
+bundle (com.anthonyonazure.Wharf), so keyboard translation and all window moving,
+including layout restore, are inert.
+
+Next action: get Accessibility granted to Wharf.app (System Settings → Privacy &
+Security → Accessibility; the Wharf menu bar item links there and reports its own
+state). Confirm ~/Library/Application Support/Docky/wharf-keyboard-status.txt reads
+ACTIVE. Then prove the layout-rule path, the one shipped feature that has never
+actually run: Settings → Layout Rules, add a rule firing the saved TestLayout two
+minutes out, and watch whether windows move.
+
+Constraints: after every build, install with
+ditto <DerivedData>/Build/Products/Debug/Wharf.app /Applications/Wharf.app —
+otherwise you are testing a stale binary. Do not rename the Xcode target or
+internal Docky* types; only product name, bundle id and user-visible strings are
+Wharf, to keep upstream merges clean. Read HANDOFF.md Traps before debugging
+anything; several failure modes here are silent.

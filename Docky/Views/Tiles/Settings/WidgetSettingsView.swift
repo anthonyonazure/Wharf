@@ -66,7 +66,7 @@ struct WidgetSettingsView: View {
                 tileID: tileID,
                 schema: ExternalWidgetRegistry.shared.metadata(for: identifier)?.settingsSchema ?? []
             )
-        case .calendarDate, .reminders, .batteries, .systemStatus, .search, .photoFrame, .layouts:
+        case .calendarDate, .reminders, .batteries, .systemStatus, .search, .photoFrame, .layouts, .clock:
             EmptyView()
         }
     }

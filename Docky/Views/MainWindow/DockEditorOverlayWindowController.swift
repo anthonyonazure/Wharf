@@ -253,6 +253,8 @@ private struct DockEditorGalleryItem: Equatable, Identifiable {
         switch kind {
         case .layouts:
             String(localized: "Save window arrangements and switch between them.")
+        case .clock:
+            String(localized: "Date and time. The date brightens as your next event approaches.")
         case .calendar:
             String(localized: "Shows the current date and month at a glance.")
         case .calendarDate:
@@ -292,6 +294,8 @@ private struct DockEditorGalleryItem: Equatable, Identifiable {
             switch kind {
             case .layouts:
                 "square.grid.3x3.topleft.filled"
+            case .clock:
+                "clock"
             case .calendar, .calendarDate:
                 "calendar"
             case .reminders:

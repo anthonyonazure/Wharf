@@ -335,6 +335,22 @@ final class WindowRegistry: ObservableObject {
         ) == .success
     }
 
+    /// Wharf: flips the window's native fullscreen state.
+    ///
+    /// `AXFullScreen` is the same switch the green button uses, so the window
+    /// gets a real fullscreen Space. Resizing it to the screen bounds instead
+    /// would only look fullscreen and would still show the menu bar and dock.
+    @discardableResult
+    func setFullscreen(_ window: AppWindow, fullscreen: Bool) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        guard let element = liveElement(for: window) else { return false }
+        return AXUIElementSetAttributeValue(
+            element,
+            "AXFullScreen" as CFString,
+            fullscreen as CFBoolean
+        ) == .success
+    }
+
     @discardableResult
     func close(_ window: AppWindow) -> Bool {
         guard PermissionsService.shared.accessibility == .granted else {

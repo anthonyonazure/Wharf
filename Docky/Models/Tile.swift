@@ -112,6 +112,9 @@ enum WidgetKind: Codable, Identifiable, Hashable {
     case photoFrame
     /// Wharf: saved window layouts, switchable from the dock itself.
     case layouts
+    /// Wharf: date and time, with the date brightening as the next calendar
+    /// event approaches.
+    case clock
     /// Widget supplied by a community bundle loaded at startup. The
     /// associated value is the plugin's stable identifier (e.g.
     /// "com.example.MyWidget"); the live registration is owned by
@@ -129,6 +132,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
         .search,
         .photoFrame,
         .layouts,
+        .clock,
     ]
 
     /// Round-trips through DockyPreferences / persistence as a single
@@ -147,6 +151,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
         case .search: "search"
         case .photoFrame: "photoFrame"
         case .layouts: "layouts"
+        case .clock: "clock"
         case .external(let identifier): "external:\(identifier)"
         }
     }
@@ -169,6 +174,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
         case "search": self = .search
         case "photoFrame": self = .photoFrame
         case "layouts": self = .layouts
+        case "clock": self = .clock
         default: return nil
         }
     }
@@ -214,6 +220,8 @@ enum WidgetKind: Codable, Identifiable, Hashable {
             String(localized: "Photo Frame")
         case .layouts:
             String(localized: "Layouts")
+        case .clock:
+            String(localized: "Clock")
         case .external(let identifier):
             ExternalWidgetRegistry.shared.metadata(for: identifier)?.displayName ?? identifier
         }
@@ -223,7 +231,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
         switch self {
         case .calendarDate:
             [.one]
-        case .calendar, .reminders, .batteries, .systemStatus, .nowPlaying, .weather, .search, .photoFrame, .layouts:
+        case .calendar, .reminders, .batteries, .systemStatus, .nowPlaying, .weather, .search, .photoFrame, .layouts, .clock:
             TileSpan.allCases
         case .external(let identifier):
             ExternalWidgetRegistry.shared.metadata(for: identifier)?.supportedSpans ?? TileSpan.allCases
@@ -234,7 +242,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
         switch self {
         case .nowPlaying:
             WidgetExpansionExtent(widthTiles: 5, heightTiles: 2)
-        case .calendar, .calendarDate, .reminders, .batteries, .systemStatus, .weather, .search, .photoFrame, .layouts:
+        case .calendar, .calendarDate, .reminders, .batteries, .systemStatus, .weather, .search, .photoFrame, .layouts, .clock:
             .standard
         case .external(let identifier):
             ExternalWidgetRegistry.shared.metadata(for: identifier)?.expansionExtent ?? .standard
@@ -251,7 +259,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
         case .calendar, .reminders, .batteries, .systemStatus, .nowPlaying, .weather, .photoFrame:
             true
         // Layouts opens a menu on click; a hover preview would fight it.
-        case .calendarDate, .search, .layouts:
+        case .calendarDate, .search, .layouts, .clock:
             false
         case .external(let identifier):
             ExternalWidgetRegistry.shared.metadata(for: identifier)?.isExpandable ?? false

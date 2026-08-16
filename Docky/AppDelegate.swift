@@ -48,6 +48,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         AppActivityService.shared.start()
         SystemLoadService.shared.start()
         WharfMenuBarController.shared.start()
+        LayoutTriggerEngine.shared.start()
 
         // Must precede TileStore.syncPreferencesFromSystemDockIfNeeded
         // below: persisted dock contents may reference external widget

@@ -97,6 +97,16 @@ final class WharfMenuBarController: NSObject {
             }
         }
 
+        if WorkspaceLayoutService.shared.undoSnapshot != nil {
+            let undo = NSMenuItem(
+                title: "Undo Last Restore",
+                action: #selector(undoRestore),
+                keyEquivalent: ""
+            )
+            undo.target = self
+            menu.addItem(undo)
+        }
+
         menu.addItem(.separator())
 
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -129,6 +139,10 @@ final class WharfMenuBarController: NSObject {
         guard let id = sender.representedObject as? String,
               let layout = WorkspaceLayoutService.shared.layouts.first(where: { $0.id == id }) else { return }
         WorkspaceLayoutService.shared.restore(layout)
+    }
+
+    @objc private func undoRestore() {
+        WorkspaceLayoutService.shared.undoLastRestore()
     }
 
     @objc private func openSettings() {

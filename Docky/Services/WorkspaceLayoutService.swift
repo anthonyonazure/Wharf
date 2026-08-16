@@ -123,6 +123,13 @@ final class WorkspaceLayoutService: ObservableObject {
     func restore(_ layout: WorkspaceLayout) -> (moved: Int, missed: Int) {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return (0, 0) }
 
+        // Snapshot before moving anything. Restore rearranges real windows and
+        // there is no system-level undo for that; a wrong layout, or a rule
+        // firing at the wrong moment, would otherwise scatter a working desk
+        // with no way back. Held in memory only — it is an undo, not a saved
+        // layout, and persisting it would clutter the user's list.
+        captureUndoSnapshot()
+
         isRestoring = true
         defer { isRestoring = false }
 
@@ -193,6 +200,50 @@ final class WorkspaceLayoutService: ObservableObject {
         }
 
         return launched
+    }
+
+    /// The arrangement as it was immediately before the last restore.
+    private(set) var undoSnapshot: WorkspaceLayout?
+
+    private func captureUndoSnapshot() {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+
+        var placements: [WindowPlacement] = []
+        for window in WindowRegistry.shared.windows where !window.isMinimized {
+            guard let axFrame = window.frame, axFrame.width > 0, axFrame.height > 0 else { continue }
+            let nsFrame = CGRect(
+                x: axFrame.minX,
+                y: primaryHeight - axFrame.maxY,
+                width: axFrame.width,
+                height: axFrame.height
+            )
+            placements.append(
+                WindowPlacement(
+                    bundleIdentifier: window.bundleIdentifier,
+                    windowTitle: window.windowTitle,
+                    frame: nsFrame,
+                    displayUUID: Self.displayUUID(containing: nsFrame)
+                )
+            )
+        }
+
+        guard !placements.isEmpty else { return }
+        undoSnapshot = WorkspaceLayout(
+            id: "undo",
+            name: "Before Last Restore",
+            placements: placements,
+            bundleIdentifiers: []
+        )
+    }
+
+    /// Puts windows back where they were before the last restore.
+    @discardableResult
+    func undoLastRestore() -> (moved: Int, missed: Int) {
+        guard let snapshot = undoSnapshot else { return (0, 0) }
+        // Cleared first so undoing an undo cannot ping-pong between two
+        // arrangements.
+        undoSnapshot = nil
+        return restore(snapshot)
     }
 
     func delete(_ layout: WorkspaceLayout) {

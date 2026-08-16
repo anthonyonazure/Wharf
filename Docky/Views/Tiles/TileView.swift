@@ -1780,7 +1780,74 @@ struct TileView: View {
         }
         let withWindows = injectingAppWindowActions(windows, into: actions)
         let withFinder = injectingFinderHomeNavigation(into: withWindows, for: app)
-        return injectingRemoveFromFolder(into: withFinder, for: app)
+        let withFolder = injectingRemoveFromFolder(into: withFinder, for: app)
+        return injectingWharfWindowActions(into: withFolder, for: app, windows: windows)
+    }
+
+    /// Wharf: window and process management, the actions a taskbar is expected
+    /// to offer on a right-click.
+    ///
+    /// Appended rather than woven in, so upstream's menu keeps its shape and
+    /// merges from Docky stay clean.
+    private func injectingWharfWindowActions(
+        into actions: [ContextAction],
+        for app: AppTile,
+        windows: [AppWindow]
+    ) -> [ContextAction] {
+        var result = actions
+        let bundleID = app.bundleIdentifier
+        let isRunning = !windows.isEmpty
+            || !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+
+        result.append(.divider)
+
+        if let front = windows.first(where: { !$0.isMinimized }) ?? windows.first {
+            let service = WindowActionsService.shared
+
+            let fullscreenTitle = service.isFullscreen(front)
+                ? String(localized: "Exit Full Screen")
+                : String(localized: "Enter Full Screen")
+            result.append(.action(fullscreenTitle) {
+                Task { @MainActor in service.toggleFullscreen(front) }
+            })
+
+            let lockTitle = service.isSizeLocked(front)
+                ? String(localized: "Unlock Window Size")
+                : String(localized: "Lock Window Size")
+            result.append(.action(lockTitle) {
+                Task { @MainActor in service.toggleSizeLock(front) }
+            })
+        }
+
+        if isRunning {
+            result.append(.action(String(localized: "Close All Windows")) {
+                Task { @MainActor in
+                    WindowActionsService.shared.closeAllWindows(bundleIdentifier: bundleID)
+                }
+            })
+
+            result.append(.action(String(localized: "Quit")) {
+                Task { @MainActor in
+                    WindowActionsService.shared.quit(bundleIdentifier: bundleID)
+                }
+            })
+
+            // Separated from Quit on purpose: this one loses unsaved work.
+            result.append(.action(String(localized: "Force Quit")) {
+                Task { @MainActor in
+                    WindowActionsService.shared.forceQuit(bundleIdentifier: bundleID)
+                }
+            })
+        }
+
+        result.append(.divider)
+        result.append(.action(String(localized: "Hide from Dock")) {
+            Task { @MainActor in
+                WindowActionsService.shared.hideFromDock(bundleIdentifier: bundleID)
+            }
+        })
+
+        return result
     }
 
     /// Tile id format for inline / grouped-opened children of an app folder:
@@ -2051,7 +2118,7 @@ struct TileView: View {
     private func widgetContextActions(for widget: WidgetTile) -> [ContextAction] {
         switch widget.kind {
         // Wharf: the layouts switcher owns its own menu on click.
-        case .layouts:
+        case .layouts, .clock:
             return []
         case .calendar:
             var actions: [ContextAction] = []
@@ -2430,6 +2497,8 @@ struct TileView: View {
         case .layouts:
             // The widget view presents its own popover; nothing to do here.
             break
+        case .clock:
+            WorkspaceService.shared.activateOrOpen(bundleIdentifier: WidgetOwnerBundleIdentifiers.calendar)
         case .calendar:
             WorkspaceService.shared.activateOrOpen(bundleIdentifier: WidgetOwnerBundleIdentifiers.calendar)
         case .calendarDate:

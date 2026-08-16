@@ -75,6 +75,8 @@ struct WidgetTileView: View {
             )
         case .layouts:
             LayoutsWidgetView(span: renderedSpan)
+        case .clock:
+            ClockWidgetView(span: renderedSpan)
         case .search:
             SearchWidgetTileView(
                 tile: tile,

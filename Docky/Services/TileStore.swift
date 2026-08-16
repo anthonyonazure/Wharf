@@ -2446,7 +2446,7 @@ final class TileStore: ObservableObject {
         switch display.kind {
         case .nowPlaying:
             mediaPlayback.state(for: display.bundleIdentifier)?.hasContent == true
-        case .calendar, .calendarDate, .reminders, .batteries, .systemStatus, .weather, .search, .photoFrame, .layouts:
+        case .calendar, .calendarDate, .reminders, .batteries, .systemStatus, .weather, .search, .photoFrame, .layouts, .clock:
             true
         case .external:
             true

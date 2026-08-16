@@ -2050,6 +2050,9 @@ struct TileView: View {
 
     private func widgetContextActions(for widget: WidgetTile) -> [ContextAction] {
         switch widget.kind {
+        // Wharf: the layouts switcher owns its own menu on click.
+        case .layouts:
+            return []
         case .calendar:
             var actions: [ContextAction] = []
 
@@ -2424,6 +2427,9 @@ struct TileView: View {
     }
     private func handleWidgetTap(_ widget: WidgetTile) {
         switch widget.kind {
+        case .layouts:
+            // The widget view presents its own popover; nothing to do here.
+            break
         case .calendar:
             WorkspaceService.shared.activateOrOpen(bundleIdentifier: WidgetOwnerBundleIdentifiers.calendar)
         case .calendarDate:

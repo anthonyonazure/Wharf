@@ -73,6 +73,8 @@ struct WidgetTileView: View {
                 isExpanded: isExpanded,
                 isExpandedPreviewOpen: isExpandedPreviewOpen
             )
+        case .layouts:
+            LayoutsWidgetView(span: renderedSpan)
         case .search:
             SearchWidgetTileView(
                 tile: tile,

@@ -62,7 +62,7 @@ struct DividerTileView: View {
                 SettingsNavigator.shared.requestPane(id: "feedback")
             },
             .divider,
-            .action(String(localized: "About Docky")) {
+            .action(String(localized: "About Wharf")) {
                 NSApp.activate(ignoringOtherApps: true)
                 NSApp.orderFrontStandardAboutPanel(nil)
             },
@@ -70,7 +70,7 @@ struct DividerTileView: View {
                 (NSApp.delegate as? AppDelegate)?.showSettingsWindow(nil)
             },
             .divider,
-            .action(String(localized: "Quit Docky"), isDestructive: true) {
+            .action(String(localized: "Quit Wharf"), isDestructive: true) {
                 NSApp.terminate(nil)
             }
         ]

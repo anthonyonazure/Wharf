@@ -2070,7 +2070,7 @@ struct TileView: View {
             return nil
         }
 
-        return .action(String(localized: "Hide in Docky")) {
+        return .action(String(localized: "Hide in Wharf")) {
             preferences.setAppHiddenInDocky(bundleIdentifier: app.bundleIdentifier, isHidden: true)
         }
     }

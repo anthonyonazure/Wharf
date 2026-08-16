@@ -1045,7 +1045,14 @@ struct TileContainerView: View {
     /// list with base sizes. Spacings are uniform across sections and
     /// dividers, so a single cumulative pass matches the rendered layout.
     private func restAxisCenter(forTileID id: String) -> CGFloat? {
-        let tiles = displayTiles
+        // Measure within the tile's own row. The walk accumulates along-axis
+        // offsets, which is only correct for a single strip: with rows enabled
+        // a tile in row two was measured as though it followed every tile in
+        // row one, so hovering it magnified the wrong tile entirely.
+        let rowCount = min(max(DockyPreferences.shared.dockRowCount, 1), 5)
+        let rows = Self.chunk(displayTiles, intoRows: rowCount)
+        let tiles = rows.first { row in row.contains { $0.id == id } } ?? displayTiles
+
         let spacing = effectiveTileSpacing
         var runningOffset: CGFloat = effectiveEdgePadding
         for (index, tile) in tiles.enumerated() {

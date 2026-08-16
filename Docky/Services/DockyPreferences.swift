@@ -576,16 +576,16 @@ enum MaximizedWindowBehavior: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .ignore: String(localized: "Ignore")
-        case .hideDocky: String(localized: "Hide Docky")
+        case .hideDocky: String(localized: "Hide Wharf")
         case .resizeWindow: String(localized: "Resize Windows")
         }
     }
 
     var detail: String {
         switch self {
-        case .ignore: String(localized: "Maximized windows render under Docky.")
-        case .hideDocky: String(localized: "Slide Docky off-screen while a maximized window is on its display, with edge-dwell to reveal.")
-        case .resizeWindow: String(localized: "When an app maximizes, shrink its window to leave room for Docky. Requires Accessibility permission and may not work for every app.")
+        case .ignore: String(localized: "Maximized windows render under Wharf.")
+        case .hideDocky: String(localized: "Slide Wharf off-screen while a maximized window is on its display, with edge-dwell to reveal.")
+        case .resizeWindow: String(localized: "When an app maximizes, shrink its window to leave room for Wharf. Requires Accessibility permission and may not work for every app.")
         }
     }
 }

@@ -512,7 +512,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "Docky"
+        statusItem.button?.title = "Wharf"
 
         let debugMenu = NSMenu(title: "Docky")
         let snapshotItem = NSMenuItem(

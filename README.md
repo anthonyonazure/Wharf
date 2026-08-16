@@ -113,9 +113,19 @@ cd Wharf
 open Docky.xcodeproj
 ```
 
-Build and run the `Docky` scheme. Swift Package dependencies (Sparkle) resolve on
-first build. The Xcode target is still named `Docky`; renaming it is tracked as its
-own task so that merges from upstream stay clean in the meantime.
+Build and run the `Docky` scheme; the product it builds is `Wharf.app`. Swift
+Package dependencies (Sparkle) resolve on first build.
+
+The Xcode *target* is still named `Docky` on purpose, as are internal type names
+like `DockyPreferences`. Only the product name, bundle identifier and
+user-visible strings are Wharf, which keeps merges from upstream clean while the
+app you install and run is unmistakably yours.
+
+After each build, install it over the running copy:
+
+```sh
+ditto <DerivedData>/Build/Products/Debug/Wharf.app /Applications/Wharf.app
+```
 
 ### Requirements
 

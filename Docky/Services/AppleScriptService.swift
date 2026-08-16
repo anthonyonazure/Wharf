@@ -263,13 +263,13 @@ final class AppleScriptService {
         let appName = displayName(for: targetApp)
         if includesSystemEvents {
             alert.informativeText = String(
-                format: String(localized: "Allow Docky to control System Events and %1$@ in Privacy & Security > Automation, then try %2$@ again."),
+                format: String(localized: "Allow Wharf to control System Events and %1$@ in Privacy & Security > Automation, then try %2$@ again."),
                 appName,
                 actionTitle.lowercased()
             )
         } else {
             alert.informativeText = String(
-                format: String(localized: "Allow Docky to control %1$@ in Privacy & Security > Automation, then try %2$@ again."),
+                format: String(localized: "Allow Wharf to control %1$@ in Privacy & Security > Automation, then try %2$@ again."),
                 appName,
                 actionTitle.lowercased()
             )

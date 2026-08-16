@@ -76,6 +76,21 @@ final class DockBadgeService: ObservableObject {
         }
 
         if newBadges != badgesByBundleID {
+            // Wharf: a badge that appears or grows on an app you are not
+            // looking at is the closest public signal to "this app wants your
+            // attention". macOS exposes no API for another process calling
+            // requestUserAttention, so this stands in for the Dock's bounce.
+            for (bundleID, badge) in newBadges {
+                let previous = badgesByBundleID[bundleID]
+                guard previous != badge else { continue }
+                let grew = (Int(badge) ?? 0) > (previous.flatMap(Int.init) ?? 0)
+                if previous == nil || grew {
+                    Task { @MainActor in
+                        AppActivityService.shared.noteAttentionRequested(bundleIdentifier: bundleID)
+                    }
+                }
+            }
+
             badgesByBundleID = newBadges
         }
     }

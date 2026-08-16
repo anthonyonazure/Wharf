@@ -2154,20 +2154,40 @@ struct TileContainerView: View {
         compactWidgets: Bool = false,
         edgePadding: CGFloat = Self.edgePadding
     ) -> CGSize {
-        let sizes = tiles.map {
-            size(for: $0, tileSize: tileSize, tileHeight: tileHeight, tileSpacing: tileSpacing, position: position, compactWidgets: compactWidgets)
+        // Wharf: multi-row docks measure per row. Summing every tile along one
+        // axis is only correct for a single strip; with rows enabled it
+        // reports a dock far too long and far too thin, and the extra rows get
+        // clipped out of the chrome.
+        let rowCount = min(max(DockyPreferences.shared.dockRowCount, 1), 5)
+        let rows = chunk(tiles, intoRows: rowCount)
+
+        let rowMetrics: [(along: CGFloat, cross: CGFloat)] = rows.map { row in
+            let sizes = row.map {
+                size(for: $0, tileSize: tileSize, tileHeight: tileHeight, tileSpacing: tileSpacing, position: position, compactWidgets: compactWidgets)
+            }
+            let spacings = max(0, CGFloat(row.count) - 1) * tileSpacing
+            if position.isVertical {
+                return (
+                    along: sizes.reduce(CGFloat(0)) { $0 + $1.height } + spacings,
+                    cross: sizes.map(\.width).max() ?? tileSize
+                )
+            }
+            return (
+                along: sizes.reduce(CGFloat(0)) { $0 + $1.width } + spacings,
+                cross: sizes.map(\.height).max() ?? tileHeight
+            )
         }
-        let spacings = max(0, CGFloat(tiles.count) - 1) * tileSpacing
+
+        // Along-axis is the longest row; cross-axis stacks every row plus the
+        // gaps between them.
+        let alongAxis = (rowMetrics.map(\.along).max() ?? 0) + edgePadding * 2
+        let crossAxis = rowMetrics.reduce(CGFloat(0)) { $0 + $1.cross }
+            + max(0, CGFloat(rowMetrics.count) - 1) * tileSpacing
 
         if position.isVertical {
-            let height = sizes.reduce(CGFloat(0)) { $0 + $1.height } + spacings + edgePadding * 2
-            let width = sizes.map(\.width).max() ?? tileSize
-            return CGSize(width: width, height: height)
+            return CGSize(width: crossAxis, height: alongAxis)
         }
-
-        let width = sizes.reduce(CGFloat(0)) { $0 + $1.width } + spacings + edgePadding * 2
-        let height = sizes.map(\.height).max() ?? tileHeight
-        return CGSize(width: width, height: height)
+        return CGSize(width: alongAxis, height: crossAxis)
     }
 
     static func previewedTiles(

@@ -1025,7 +1025,41 @@ final class MainWindow: NSPanel {
         return CGSize(width: displayedAxisLength, height: contentSize.height)
     }
 
+    /// Wharf: this dock's edge, honouring a per-display override before the
+    /// global preference.
+    var resolvedPositionForThisDock: ResolvedDockWindowPosition {
+        let override = PerDisplaySettings.shared.position(for: assignedDisplayID)
+        return (override ?? preferences.windowPosition)
+            .resolved(systemOrientation: dockSettings.orientation)
+    }
+
     private func frameOrigin(
+        in screenBounds: CGRect,
+        size: CGSize,
+        position: ResolvedDockWindowPosition,
+        visibilityState: VisibilityState
+    ) -> CGPoint {
+        // Wharf: a floating dock is the snapped origin plus a stored offset,
+        // so it keeps edge, sizing and hide behaviour instead of becoming a
+        // free window that would have to reimplement all of it.
+        let floatOffset = PerDisplaySettings.shared.floatOffset(for: assignedDisplayID)
+        let base = snappedFrameOrigin(
+            in: screenBounds,
+            size: size,
+            position: position,
+            visibilityState: visibilityState
+        )
+        guard floatOffset != .zero else { return base }
+
+        // Clamped so a dragged dock cannot be parked off-screen where it can
+        // never be grabbed again.
+        return CGPoint(
+            x: min(max(base.x + floatOffset.width, screenBounds.minX), screenBounds.maxX - size.width),
+            y: min(max(base.y + floatOffset.height, screenBounds.minY), screenBounds.maxY - size.height)
+        )
+    }
+
+    private func snappedFrameOrigin(
         in screenBounds: CGRect,
         size: CGSize,
         position: ResolvedDockWindowPosition,

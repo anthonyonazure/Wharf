@@ -519,18 +519,18 @@ struct PermissionsView: View {
     }
 
     private var mediaResourceName: String? {
+        // Wharf: the onboarding demo clips are pre-rendered videos from
+        // upstream with its branding burned into the pixels — one shows a
+        // speech bubble reading "Ducky". They cannot be renamed, only
+        // re-recorded, so the fork falls back to the static surface below,
+        // which draws this app's own icon and name.
+        //
+        // Restore a case here only once a replacement clip has been recorded
+        // for it.
         switch step {
-        case .userFolders:
-            return "folder-preview"
-        case .finderAutomation:
-            return "trash"
-        case .accessibility:
-            return "window-switching"
-        case .systemEventsAutomation:
-            return "automation"
-        case .screenCapture:
-            return "window-switching"
-        case .location, .calendar, .reminders:
+        case .userFolders, .finderAutomation, .accessibility,
+             .systemEventsAutomation, .screenCapture,
+             .location, .calendar, .reminders:
             return nil
         }
     }

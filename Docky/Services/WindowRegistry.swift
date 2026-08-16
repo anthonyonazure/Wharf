@@ -381,7 +381,11 @@ final class WindowRegistry: ObservableObject {
     /// services) want a silent failure when permission is missing.
     @discardableResult
     func resize(_ window: AppWindow, to frame: CGRect) -> Bool {
-        guard PermissionsService.shared.accessibility == .granted else { return false }
+        // Wharf: ask the API that actually enforces this, not the cached
+        // PermissionsService value. The cache can still read denied after a
+        // grant lands, and every window move then fails silently — the layout
+        // restore looks like it ran and nothing moves.
+        guard AXIsProcessTrusted() else { return false }
 
         var origin = frame.origin
         var size = frame.size

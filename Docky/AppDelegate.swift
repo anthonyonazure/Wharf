@@ -82,8 +82,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func application(_ application: NSApplication, open urls: [URL]) {
         guard !urls.isEmpty else { return }
 
-        let dockyURLs = urls.filter { $0.scheme == "docky" }
-        let themeURLs = urls.filter { $0.scheme != "docky" }
+        // Wharf: both schemes route to the same handler. Filtering on "docky"
+        // alone sent every wharf:// URL down the theme-import path, where it
+        // failed silently.
+        let controlSchemes: Set<String> = ["docky", "wharf"]
+        let dockyURLs = urls.filter { controlSchemes.contains($0.scheme ?? "") }
+        let themeURLs = urls.filter { !controlSchemes.contains($0.scheme ?? "") }
 
         for url in dockyURLs {
             handleDockyURL(url)
@@ -160,6 +164,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             applyDockAction(path: path)
         case "profile":
             applyProfileAction(path: path, queryItems: queryItems)
+        case "layout":
+            applyLayoutAction(path: path, queryItems: queryItems)
         default:
             break
         }
@@ -190,6 +196,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             preferences.autohidesWindow = true
         default:
             preferences.autohidesWindow.toggle()
+        }
+    }
+
+    /// Wharf: window layouts over the URL scheme.
+    ///
+    ///  - `wharf://layout/save?name=Work` captures the current arrangement
+    ///  - `wharf://layout/restore?name=Work` puts it back
+    ///  - `wharf://layout/restore?name=Work&launch=1` opens missing apps first
+    ///
+    /// Exposed as URLs so a layout can be bound to a hotkey, a Stream Deck key
+    /// or a Raycast command, which is where switching context actually happens.
+    /// A layout buried in a settings window is one nobody switches to.
+    private func applyLayoutAction(path: String, queryItems: [URLQueryItem]) {
+        let service = WorkspaceLayoutService.shared
+        guard let name = queryItems.first(where: { $0.name == "name" })?.value, !name.isEmpty else { return }
+
+        switch path {
+        case "/save", "/capture":
+            service.capture(name: name)
+        case "/restore", "/apply":
+            guard let layout = service.layouts.first(where: { $0.name == name }) else { return }
+            let wantsLaunch = queryItems.first(where: { $0.name == "launch" })?.value.map {
+                $0 == "1" || $0.lowercased() == "true"
+            } ?? false
+
+            guard wantsLaunch, service.launchMissingApps(for: layout) > 0 else {
+                service.restore(layout)
+                return
+            }
+            // Freshly launched apps have no window yet; placing immediately
+            // would move only what already existed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                service.restore(layout)
+            }
+        case "/delete":
+            guard let layout = service.layouts.first(where: { $0.name == name }) else { return }
+            service.delete(layout)
+        default:
+            break
         }
     }
 

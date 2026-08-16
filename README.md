@@ -79,6 +79,20 @@ In **Settings → Behavior → Windows Keyboard**. Needs Accessibility permissio
   public signal for another process calling `requestUserAttention`, so nothing
   currently triggers it except the internal entry point
 
+### 3b. Workspace layouts
+
+- [x] Capture every window's position, size and display under a name
+- [x] Restore them all with one action
+- [x] Launch missing apps first, then place their windows
+- [x] URL scheme so a layout can be bound to a hotkey, Stream Deck or Raycast:
+      `wharf://layout/save?name=Work`, `wharf://layout/restore?name=Work`,
+      `wharf://layout/restore?name=Work&launch=1`
+- [x] Windows whose display is gone come back on-screen instead of being sent
+      to coordinates no monitor occupies
+- [ ] Trigger layouts from the dock itself rather than Settings or a URL
+
+In **Settings → Layouts**. Verified restoring a window across displays.
+
 ### 4. Placement and behavior
 
 - [x] Any screen edge (global today, not yet per display)

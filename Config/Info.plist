@@ -61,6 +61,7 @@
 			<string>Docky</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>wharf</string>
 				<string>docky</string>
 			</array>
 		</dict>

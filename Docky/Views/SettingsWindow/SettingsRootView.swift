@@ -20,6 +20,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case behaviorVisibility
     case behaviorWindowsKeyboard
     case behaviorTaskbar
+    case layouts
     case behaviorAppTileClick
     case behaviorAppFolders
     case behaviorWidgets
@@ -53,6 +54,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorVisibility: "Visibility"
         case .behaviorWindowsKeyboard: "Windows Keyboard"
         case .behaviorTaskbar: "Taskbar"
+        case .layouts: "Layouts"
         case .behaviorAppTileClick: "App Tile Click"
         case .behaviorAppFolders: "App Folders"
         case .behaviorWidgets: "Widgets"
@@ -86,6 +88,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorVisibility: "eye"
         case .behaviorWindowsKeyboard: "keyboard"
         case .behaviorTaskbar: "rectangle.grid.1x2"
+        case .layouts: "square.grid.3x3.topleft.filled"
         case .behaviorAppTileClick: "cursorarrow.click"
         case .behaviorAppFolders: "folder"
         case .behaviorWidgets: "puzzlepiece.extension"
@@ -119,6 +122,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorVisibility: .cyan
         case .behaviorWindowsKeyboard: .indigo
         case .behaviorTaskbar: .teal
+        case .layouts: .pink
         case .behaviorAppTileClick: .mint
         case .behaviorAppFolders: .yellow
         case .behaviorWidgets: .purple
@@ -162,6 +166,7 @@ private let settingsSections: [SettingsSection] = [
         .behaviorVisibility,
         .behaviorWindowsKeyboard,
         .behaviorTaskbar,
+        .layouts,
         .behaviorAppTileClick,
         .behaviorAppFolders,
         .behaviorWidgets,
@@ -380,6 +385,8 @@ private struct SettingsDetailView: View {
             BehaviorSettingsView(subsection: .windowsKeyboard)
         case .behaviorTaskbar:
             BehaviorSettingsView(subsection: .taskbar)
+        case .layouts:
+            LayoutsSettingsView()
         case .behaviorAppTileClick:
             BehaviorSettingsView(subsection: .appTileClick)
         case .behaviorAppFolders:

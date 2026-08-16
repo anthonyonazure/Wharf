@@ -33,6 +33,11 @@ final class AppActivityService: ObservableObject {
     private var pollTimer: Timer?
     private let probeQueue = DispatchQueue(label: "wharf.app-activity.probe", qos: .utility)
 
+    /// True while a probe pass is still running. Several hung apps can make a
+    /// pass outlast the 2s timer; without this the queue grows and an old,
+    /// slower pass finishes last and overwrites current state with stale data.
+    private var isProbing = false
+
     /// How long an app may ignore an accessibility query before it counts as
     /// hung. Deliberately longer than the process-wide 1s AX timeout so a
     /// single slow answer doesn't flag a healthy app.
@@ -124,6 +129,9 @@ final class AppActivityService: ObservableObject {
                     return (bundleID, app.processIdentifier, app.isFinishedLaunching)
                 }
 
+        guard !isProbing else { return }
+        isProbing = true
+
         let currentlyLaunching = launching
         let threshold = unresponsiveThreshold
 
@@ -145,6 +153,7 @@ final class AppActivityService: ObservableObject {
 
             Task { @MainActor in
                 guard let self else { return }
+                self.isProbing = false
                 if self.launching != stillLaunching { self.launching = stillLaunching }
                 if self.unresponsive != hung { self.unresponsive = hung }
             }

@@ -506,7 +506,31 @@ final class MainWindow: NSPanel {
 
     }
 
+    /// Wharf: in taskbar or per-screen mode the dock's size is a function of
+    /// the window list, so the panel has to re-measure when windows open and
+    /// close. Without this the tile view adds a card while the panel keeps its
+    /// old width and clips it.
+    ///
+    /// Debounced because the registry updates in bursts during app launch and
+    /// space changes, and each frame recompute walks every tile.
+    private func observeWindowRegistryForSizing() {
+        WindowRegistry.shared.$windows
+            .map { $0.count }
+            .removeDuplicates()
+            .debounce(for: .milliseconds(120), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let preferences = DockyPreferences.shared
+                guard preferences.dockContentMode == .taskbar
+                        || preferences.showsOnlyCurrentScreenWindows else { return }
+                self.applyCurrentFrame(animated: false)
+            }
+            .store(in: &cancellables)
+    }
+
     private func observeScreenAndSpaceInputs() {
+        observeWindowRegistryForSizing()
+
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in

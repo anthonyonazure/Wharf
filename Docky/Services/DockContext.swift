@@ -50,6 +50,10 @@ final class DockContext: ObservableObject {
         if let displayID {
             return NSScreen.screens.first { $0.displayID == displayID }
         }
-        return NSScreen.main
+        // Unbound (single-window) docks follow their window. NSScreen.main is
+        // the screen with the focused window, not the one this dock sits on,
+        // so a pointer-following dock on monitor 2 would have filtered its
+        // window list against monitor 1.
+        return window?.screen ?? NSScreen.main
     }
 }

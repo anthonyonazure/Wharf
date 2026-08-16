@@ -123,9 +123,13 @@ enum DockTileProjection {
     /// work on a single display and silently misplaces every window once a
     /// second monitor is attached above or below.
     static func isWindow(_ window: AppWindow, on screen: NSScreen?) -> Bool {
-        guard let screen,
-              let axFrame = window.frame,
-              let primaryHeight = NSScreen.screens.first?.frame.height else { return false }
+        guard let screen else { return false }
+
+        // Some apps report no frame through the accessibility API. Treating
+        // "unknown" as "not on this screen" makes those windows disappear from
+        // every dock at once, which is worse than showing them on all of them.
+        guard let axFrame = window.frame,
+              let primaryHeight = NSScreen.screens.first?.frame.height else { return true }
 
         let flipped = CGRect(
             x: axFrame.origin.x,

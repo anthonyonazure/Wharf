@@ -588,7 +588,10 @@ struct TileContainerView: View {
     }
 
     private var previewTrailingSectionTiles: [Tile] {
-        let minimizedWindowTiles = store.tiles.compactMap { tile in
+        // Projected, not raw: rebuilding from the store put every display's
+        // minimized windows back onto every dock, undoing per-screen filtering
+        // one step after it was applied.
+        let minimizedWindowTiles = projectedTiles.compactMap { tile in
             if case .minimizedWindow = tile.content {
                 return tile
             }

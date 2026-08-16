@@ -223,6 +223,13 @@ final class WindowsKeyboardService {
         // Win+Shift+S. The Win key already arrives as Command, so this reads
         // as Cmd+Shift+S. Swallowed rather than forwarded, otherwise the app
         // underneath also runs its Save As.
+        // Clear the latch on any S release. Releasing the Win key before S
+        // means the chord no longer matches, so a latch that only cleared
+        // inside the matching branch would stay set and kill every later snip.
+        if type == .keyUp, keyCode == Int64(kVK_ANSI_S) {
+            isSnipInFlight = false
+        }
+
         if DockyPreferences.shared.windowsKeyboardSnipShortcut,
            shouldTranslateControl(),
            keyCode == Int64(kVK_ANSI_S),

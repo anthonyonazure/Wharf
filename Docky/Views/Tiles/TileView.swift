@@ -1832,9 +1832,18 @@ struct TileView: View {
                 }
             })
 
-            // Separated from Quit on purpose: this one loses unsaved work.
-            result.append(.action(String(localized: "Force Quit")) {
+            // Separated from Quit on purpose: this one loses unsaved work, so
+            // it is styled destructive AND confirmed. A menu item that
+            // discards work should never be one slip away from firing.
+            result.append(.action(String(localized: "Force Quit"), isDestructive: true) {
                 Task { @MainActor in
+                    let alert = NSAlert()
+                    alert.messageText = String(localized: "Force quit \(app.displayName)?")
+                    alert.informativeText = String(localized: "Unsaved changes will be lost. Quit asks the app to close and lets it save first.")
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: String(localized: "Force Quit"))
+                    alert.addButton(withTitle: String(localized: "Cancel"))
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
                     WindowActionsService.shared.forceQuit(bundleIdentifier: bundleID)
                 }
             })

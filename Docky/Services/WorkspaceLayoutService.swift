@@ -132,6 +132,9 @@ final class WorkspaceLayoutService: ObservableObject {
         // firing at the wrong moment, would otherwise scatter a working desk
         // with no way back. Held in memory only — it is an undo, not a saved
         // layout, and persisting it would clutter the user's list.
+        // A placement happening now supersedes anything still waiting on apps.
+        pendingGeneration += 1
+
         if capturesUndo {
             captureUndoSnapshot()
         }
@@ -197,24 +200,35 @@ final class WorkspaceLayoutService: ObservableObject {
     /// that app is silently skipped) or idles after a fast one. This polls for
     /// the windows it is waiting on and gives up at a deadline.
     func launchAndRestore(_ layout: WorkspaceLayout, timeout: TimeInterval = 15) {
-        let launched = launchMissingApps(for: layout)
-        guard launched > 0 else {
+        let launchedIDs = launchMissingAppsReturningIDs(for: layout)
+        guard !launchedIDs.isEmpty else {
             restore(layout)
             return
         }
 
-        let expected = Set(layout.bundleIdentifiers)
+        // A pending placement is cancellable. Apps can take many seconds to
+        // draw a window, and in that gap the user may pick a different layout
+        // or turn the rule off. Without a generation token the earlier, now
+        // unwanted placement still lands and scatters the desk.
+        pendingGeneration += 1
+        let generation = pendingGeneration
+
+        // Only the apps actually launched are waited on. Waiting on every app
+        // in the layout stalls the full timeout whenever a captured app is
+        // running with all its windows closed.
+        let expected = launchedIDs
         let deadline = Date().addingTimeInterval(timeout)
 
         func attempt() {
+            guard generation == pendingGeneration else { return }
+
             let present = Set(
                 WindowRegistry.shared.windows
                     .filter { !$0.isMinimized }
                     .map(\.bundleIdentifier)
             )
-            let stillWaiting = expected.subtracting(present)
 
-            if stillWaiting.isEmpty || Date() >= deadline {
+            if expected.subtracting(present).isEmpty || Date() >= deadline {
                 restore(layout)
                 return
             }
@@ -222,6 +236,26 @@ final class WorkspaceLayoutService: ObservableObject {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: attempt)
+    }
+
+    /// Cancels any placement that is waiting on apps to finish launching.
+    func cancelPendingRestore() {
+        pendingGeneration += 1
+    }
+
+    private func launchMissingAppsReturningIDs(for layout: WorkspaceLayout) -> Set<String> {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        var launched: Set<String> = []
+
+        for bundleID in layout.bundleIdentifiers where !running.contains(bundleID) {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { continue }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            launched.insert(bundleID)
+        }
+
+        return launched
     }
 
     @discardableResult
@@ -244,6 +278,10 @@ final class WorkspaceLayoutService: ObservableObject {
 
     /// The arrangement as it was immediately before the last restore.
     private(set) var undoSnapshot: WorkspaceLayout?
+
+    /// Bumped whenever a new placement starts or one is cancelled, so a
+    /// still-waiting poll from an older request quietly gives up.
+    private var pendingGeneration = 0
 
     private func captureUndoSnapshot() {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
@@ -309,10 +347,27 @@ final class WorkspaceLayoutService: ObservableObject {
     private static func resolvedFrame(for placement: WindowPlacement) -> CGRect {
         guard let uuid = placement.displayUUID else { return placement.frame }
 
-        let stillAttached = NSScreen.screens.contains { screen in
+        let attachedScreen = NSScreen.screens.first { screen in
             screen.displayID.flatMap(displayUUIDString) == uuid
         }
-        if stillAttached { return placement.frame }
+
+        if let attachedScreen {
+            // Attached is not the same as unmoved. Rearranging displays in
+            // System Settings changes their global origins, so a frame captured
+            // when this monitor sat to the left replays off-screen once it sits
+            // to the right. Clamp it back inside the screen it belongs to.
+            let visible = attachedScreen.visibleFrame
+            if visible.contains(placement.frame) { return placement.frame }
+
+            let width = min(placement.frame.width, visible.width)
+            let height = min(placement.frame.height, visible.height)
+            return CGRect(
+                x: min(max(placement.frame.minX, visible.minX), visible.maxX - width),
+                y: min(max(placement.frame.minY, visible.minY), visible.maxY - height),
+                width: width,
+                height: height
+            )
+        }
 
         guard let fallback = NSScreen.main else { return placement.frame }
         let visible = fallback.visibleFrame

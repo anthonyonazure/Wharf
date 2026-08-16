@@ -60,7 +60,7 @@ struct ClockWidgetView: View {
     /// event four hours out should look identical to no event at all, or the
     /// glow becomes background noise and stops meaning anything.
     private func urgency(now: Date) -> Double {
-        guard let event = calendar.nextEvent else { return 0 }
+        guard let event = nextFutureEvent(now: now) else { return 0 }
         let secondsAway = event.startDate.timeIntervalSince(now)
 
         // Already started, or starting now: full brightness until it is
@@ -87,8 +87,15 @@ struct ClockWidgetView: View {
         urgency(now: now) * 6
     }
 
+    /// The first event that has not started yet. `nextEvent` can be the
+    /// meeting you are already in, which would leave the glow dark while the
+    /// following one approaches.
+    private func nextFutureEvent(now: Date) -> CalendarEventSnapshot? {
+        calendar.upcomingEvents.first { $0.startDate > now }
+    }
+
     private func nextEventDescription(now: Date) -> String {
-        guard let event = calendar.nextEvent else { return "No upcoming events" }
+        guard let event = nextFutureEvent(now: now) else { return "No upcoming events" }
         let minutes = Int(event.startDate.timeIntervalSince(now) / 60)
         guard minutes > 0 else { return "\(event.title) — now" }
         return "\(event.title) — in \(minutes) min"

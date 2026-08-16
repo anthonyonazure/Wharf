@@ -52,6 +52,11 @@ enum LayoutTrigger: Codable, Equatable {
 
 struct LayoutRule: Codable, Equatable, Identifiable {
     var id: String
+    /// Bound by id, not name. Names are user-editable and not unique, so a
+    /// rename or a second layout called "Work" would silently point the rule
+    /// at a different arrangement. Optional for rules saved before this field
+    /// existed, which still fall back to the name.
+    var layoutID: String?
     var layoutName: String
     var trigger: LayoutTrigger
     var isEnabled: Bool
@@ -88,6 +93,10 @@ final class LayoutTriggerEngine: ObservableObject {
     }
 
     func start() {
+        // Idempotent: a second call would otherwise stack another timer and
+        // another set of subscriptions, and every rule would fire twice.
+        guard timer == nil else { return }
+
         let checkTimer = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.evaluateTimeAndCalendarRules() }
         }
@@ -140,7 +149,11 @@ final class LayoutTriggerEngine: ObservableObject {
                 fire(rule)
 
             case let .beforeCalendarEvent(minutesBefore):
-                guard let event = CalendarService.shared.nextEvent else { continue }
+                // First event that has not started. `nextEvent` can be the
+                // meeting currently in progress, in which case a rule for the
+                // one after it would never fire.
+                guard let event = CalendarService.shared.upcomingEvents
+                    .first(where: { $0.startDate > now }) else { continue }
                 let secondsAway = event.startDate.timeIntervalSince(now)
                 let windowStart = TimeInterval(minutesBefore * 60)
                 // A band, not an instant: the check runs every 20 seconds and
@@ -174,7 +187,10 @@ final class LayoutTriggerEngine: ObservableObject {
         if !bypassRefractory,
            let last = lastFired[rule.id],
            Date().timeIntervalSince(last) < refractoryPeriod { return }
-        guard let layout = WorkspaceLayoutService.shared.layouts.first(where: { $0.name == rule.layoutName }) else { return }
+        let layouts = WorkspaceLayoutService.shared.layouts
+        let resolved = rule.layoutID.flatMap { id in layouts.first { $0.id == id } }
+            ?? layouts.first { $0.name == rule.layoutName }
+        guard let layout = resolved else { return }
 
         lastFired[rule.id] = Date()
 

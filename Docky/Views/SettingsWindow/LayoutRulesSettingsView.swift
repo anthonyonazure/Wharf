@@ -151,6 +151,7 @@ struct LayoutRulesSettingsView: View {
         engine.add(
             LayoutRule(
                 id: UUID().uuidString,
+                layoutID: layouts.layouts.first { $0.name == name }?.id,
                 layoutName: name,
                 trigger: trigger,
                 isEnabled: true,

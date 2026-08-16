@@ -20,6 +20,10 @@ final class DockContext: ObservableObject {
     /// where the dock is not bound to a particular screen.
     @Published var displayID: CGDirectDisplayID?
 
+    /// The window this context belongs to. Weak: the window owns the context,
+    /// so a strong link here would keep every dock alive forever.
+    weak var window: MainWindow?
+
     /// Chrome measurements for this dock alone.
     let layout = DockLayoutService()
 

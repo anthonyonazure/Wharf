@@ -31,6 +31,7 @@ final class AppActivityService: ObservableObject {
 
     private var cancellables: Set<AnyCancellable> = []
     private var pollTimer: Timer?
+    private let probeQueue = DispatchQueue(label: "wharf.app-activity.probe", qos: .utility)
 
     /// How long an app may ignore an accessibility query before it counts as
     /// hung. Deliberately longer than the process-wide 1s AX timeout so a
@@ -99,9 +100,6 @@ final class AppActivityService: ObservableObject {
     // MARK: - Unresponsive
 
     private func startUnresponsivePolling() {
-        // Polled rather than event-driven: macOS has no notification for "this
-        // app stopped answering". Two seconds is frequent enough to catch a
-        // beachball while staying off the main thread's critical path.
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshUnresponsive() }
         }
@@ -110,35 +108,55 @@ final class AppActivityService: ObservableObject {
     }
 
     private func refreshUnresponsive() {
-        var hung: Set<String> = []
-        var stillLaunching: Set<String> = []
-        for app in NSWorkspace.shared.runningApplications
-        where app.activationPolicy == .regular && !app.isTerminated {
-            guard let bundleID = app.bundleIdentifier else { continue }
-            if isUnresponsive(pid: app.processIdentifier) {
-                hung.insert(bundleID)
-            }
-            // Polled rather than observed with KVO: an NSRunningApplication can
-            // be deallocated while an observer is still attached, which macOS
-            // warns about and later crashes on.
-            if !app.isFinishedLaunching, launching.contains(bundleID) {
-                stillLaunching.insert(bundleID)
-            }
-        }
+        // Snapshot on the main actor, probe off it.
+        //
+        // The probe is the whole point of this poll and it is also the danger:
+        // querying a hung app blocks the caller until the messaging timeout
+        // expires. Running that on the main thread would freeze the dock for
+        // up to three seconds per beachballing app, every two seconds — the
+        // dock would hang precisely when an app hangs, which is when the user
+        // most needs it to work.
+        let candidates: [(bundleID: String, pid: pid_t, finishedLaunching: Bool)] =
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular && !$0.isTerminated }
+                .compactMap { app in
+                    guard let bundleID = app.bundleIdentifier else { return nil }
+                    return (bundleID, app.processIdentifier, app.isFinishedLaunching)
+                }
 
-        if launching != stillLaunching {
-            launching = stillLaunching
+        let currentlyLaunching = launching
+        let threshold = unresponsiveThreshold
+
+        probeQueue.async { [weak self] in
+            var hung: Set<String> = []
+            var stillLaunching: Set<String> = []
+
+            for candidate in candidates {
+                if Self.isUnresponsive(pid: candidate.pid, threshold: threshold) {
+                    hung.insert(candidate.bundleID)
+                }
+                // Polled rather than observed with KVO: an NSRunningApplication
+                // can be deallocated while an observer is still attached, which
+                // macOS warns about and later crashes on.
+                if !candidate.finishedLaunching, currentlyLaunching.contains(candidate.bundleID) {
+                    stillLaunching.insert(candidate.bundleID)
+                }
+            }
+
+            Task { @MainActor in
+                guard let self else { return }
+                if self.launching != stillLaunching { self.launching = stillLaunching }
+                if self.unresponsive != hung { self.unresponsive = hung }
+            }
         }
-        guard hung != unresponsive else { return }
-        unresponsive = hung
     }
 
     /// Asks the accessibility API for the app's focused window and treats a
-    /// timeout as "not answering". `AXUIElementSetMessagingTimeout` bounds the
-    /// call so a hung app cannot stall the poll itself.
-    private func isUnresponsive(pid: pid_t) -> Bool {
+    /// timeout as "not answering". Static and pid-based so it carries no actor
+    /// isolation and can run on the probe queue.
+    nonisolated private static func isUnresponsive(pid: pid_t, threshold: TimeInterval) -> Bool {
         let element = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(element, Float(unresponsiveThreshold))
+        AXUIElementSetMessagingTimeout(element, Float(threshold))
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, kAXFocusedWindowAttribute as CFString, &value)
         return result == .cannotComplete

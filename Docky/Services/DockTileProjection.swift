@@ -45,8 +45,20 @@ enum DockTileProjection {
             windowsByBundle[window.bundleIdentifier, default: []].append(window)
         }
 
+        // Minimized-window cards name a specific window, so per-screen
+        // filtering has to judge them individually. Passing them through
+        // untouched put every display's minimized windows on every dock.
+        let visibleWindowIDs = Set(windowsForThisDock.map(\.windowIdentifier))
+
         var result: [Tile] = []
         for tile in tiles {
+            if case let .minimizedWindow(window) = tile.content {
+                if !filtersToScreen || visibleWindowIDs.contains(window.windowIdentifier) {
+                    result.append(tile)
+                }
+                continue
+            }
+
             guard case let .app(appTile) = tile.content else {
                 result.append(tile)
                 continue

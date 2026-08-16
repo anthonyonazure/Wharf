@@ -15,7 +15,9 @@ import Darwin
 struct AppLoadSample: Equatable {
     /// Percent of one core, matching how Activity Monitor reports it, so 150
     /// means an app is using one and a half cores.
-    let cpuPercent: Double
+    /// nil on an app's first sample: CPU is a rate, and a rate needs two
+    /// readings. Reporting 0% there would show a busy app as idle.
+    let cpuPercent: Double?
     /// Physical footprint in bytes, the same figure Activity Monitor calls
     /// Memory.
     let memoryBytes: UInt64
@@ -106,7 +108,7 @@ final class SystemLoadService: ObservableObject {
 
         let totalNanos = info.ri_user_time + info.ri_system_time
         let now = Date()
-        var cpuPercent: Double = 0
+        var cpuPercent: Double?
 
         if let previous = previousCPUTime[pid] {
             let elapsed = now.timeIntervalSince(previous.at)
@@ -127,6 +129,7 @@ final class SystemLoadService: ObservableObject {
         let memoryText = megabytes >= 1024
             ? String(format: "%.1fG", megabytes / 1024)
             : String(format: "%.0fM", megabytes)
-        return String(format: "%.0f%% %@", sample.cpuPercent, memoryText)
+        guard let cpu = sample.cpuPercent else { return "— \(memoryText)" }
+        return String(format: "%.0f%% %@", cpu, memoryText)
     }
 }

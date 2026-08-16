@@ -42,10 +42,18 @@
 	<string>Docky uses reminders access to show your open tasks in the reminders widget.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Docky uses reminders access to show your open tasks in the reminders widget.</string>
-	<key>SUFeedURL</key>
-	<string>https://getdocky.com/releases/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>LfZUqraK4HiOj/+9iztgnWzdQTrC1ccmJPp/Fy/aTPc=</string>
+	<!-- Wharf: the auto-update feed is deliberately absent.
+
+	     Inheriting upstream Docky's appcast means Sparkle would eventually
+	     find a "newer" Docky release and install it over Wharf, silently
+	     replacing the fork with the project it was forked from. The signing
+	     key is upstream's too, so Wharf could never publish an update that
+	     the inherited configuration would accept.
+
+	     Restore SUFeedURL and SUPublicEDKey only once Wharf has its own
+	     appcast and its own EdDSA key pair. -->
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

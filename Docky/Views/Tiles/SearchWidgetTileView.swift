@@ -19,6 +19,7 @@ import AppKit
 import SwiftUI
 
 struct SearchWidgetTileView: View {
+    @EnvironmentObject private var dock: DockContext
     let tile: WidgetTile
     let cornerRadius: CGFloat
     let renderedSpan: TileSpan
@@ -50,9 +51,13 @@ struct SearchWidgetTileView: View {
             // focus so keystrokes reach the field, then ask AppKit to
             // (un)make-key now (`canBecomeKey` alone doesn't change the
             // current key window, it just gates future requests).
-            MainWindow.allowsKeyWindow = focused
+            // Wharf: act on THIS dock's window. `NSApp.windows.first` picked
+            // whichever dock happened to be first in the window list, so on a
+            // multi-display setup typing in the search field on one screen
+            // handed key status to a dock on another.
+            dock.window?.allowsKeyWindow = focused
             DispatchQueue.main.async {
-                guard let window = NSApp.windows.first(where: { $0 is MainWindow }) else { return }
+                guard let window = dock.window else { return }
                 if focused {
                     window.makeKey()
                 } else {

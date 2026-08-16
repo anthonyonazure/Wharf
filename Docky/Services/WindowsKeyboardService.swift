@@ -27,6 +27,10 @@ final class WindowsKeyboardService {
     /// lookup in the input path.
     private var frontmostBundleID: String?
 
+    /// Guards against autorepeat launching a second region capture while the
+    /// first crosshair is still up.
+    private var isSnipInFlight = false
+
     /// Keys that mean the same thing on Windows with Control as they do on
     /// macOS with Command.
     ///
@@ -220,13 +224,22 @@ final class WindowsKeyboardService {
         // as Cmd+Shift+S. Swallowed rather than forwarded, otherwise the app
         // underneath also runs its Save As.
         if DockyPreferences.shared.windowsKeyboardSnipShortcut,
+           shouldTranslateControl(),
            keyCode == Int64(kVK_ANSI_S),
            flags.contains(.maskCommand),
            flags.contains(.maskShift),
            !flags.contains(.maskControl),
            !flags.contains(.maskAlternate) {
-            if type == .keyDown {
+            // Autorepeat fires this many times a second while the key is held.
+            // Without the guard, leaning on the shortcut spawns a pile of
+            // screencapture processes, each grabbing the screen in turn.
+            let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            if type == .keyDown, !isRepeat, !isSnipInFlight {
+                isSnipInFlight = true
                 captureRegionToClipboard()
+            }
+            if type == .keyUp {
+                isSnipInFlight = false
             }
             return nil
         }
@@ -266,14 +279,19 @@ final class WindowsKeyboardService {
     /// selection UI, so the crosshair, window snapping, escape-to-cancel and
     /// Space-to-grab-a-window all behave exactly as macOS users expect.
     private func captureRegionToClipboard() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        // -i interactive selection, -c to clipboard, -x no shutter sound.
-        process.arguments = ["-i", "-c", "-x"]
-        do {
-            try process.run()
-        } catch {
-            NSLog("[Wharf] Windows keyboard mode: region capture failed: \(error.localizedDescription)")
+        // Launched off the tap callback. The callback runs on the main runloop
+        // and the system disables an event tap that takes too long to return,
+        // so a slow fork/exec here would cost the user their keyboard.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            // -i interactive selection, -c to clipboard, -x no shutter sound.
+            process.arguments = ["-i", "-c", "-x"]
+            do {
+                try process.run()
+            } catch {
+                NSLog("[Wharf] Windows keyboard mode: region capture failed: \(error.localizedDescription)")
+            }
         }
     }
 }

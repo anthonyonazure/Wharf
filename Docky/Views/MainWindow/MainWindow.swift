@@ -189,8 +189,12 @@ final class MainWindow: NSPanel {
     /// 2x/3x text field, set `allowsKeyWindow` to `true` while focused
     /// so SwiftUI can route keystrokes into them, then flip it back off
     /// on resign.
-    static var allowsKeyWindow: Bool = false
-    override var canBecomeKey: Bool { Self.allowsKeyWindow }
+    /// Wharf: per-window, not static. With a dock on every display a shared
+    /// flag means focusing a text widget on one screen makes every other dock
+    /// eligible to become key, so a click on a different monitor steals focus
+    /// out of the field being typed in.
+    var allowsKeyWindow: Bool = false
+    override var canBecomeKey: Bool { allowsKeyWindow }
     override var canBecomeMain: Bool { false }
 
     override var level: NSWindow.Level { get { .mainMenu } set {} }
@@ -245,6 +249,13 @@ final class MainWindow: NSPanel {
     /// display, so these cannot be process-wide.
     let dockContext = DockContext()
 
+    /// Links the context back to this window so views can act on their own
+    /// dock rather than on whichever dock happens to be first in the app's
+    /// window list.
+    private func bindDockContext() {
+        dockContext.window = self
+    }
+
     /// The live `NSScreen` for `assignedDisplayID`, or nil when that display
     /// is no longer attached.
     var assignedScreen: NSScreen? {
@@ -284,8 +295,7 @@ final class MainWindow: NSPanel {
     func chromeScreenFrame() -> CGRect? {
         let chromeSize = dockContext.layout.chromeSize
         guard chromeSize.width > 0, chromeSize.height > 0 else { return nil }
-        let position = DockyPreferences.shared.windowPosition
-            .resolved(systemOrientation: DockSettingsService.shared.orientation)
+        let position = resolvedPositionForThisDock
         let f = frame
         let width = min(chromeSize.width, f.width)
         let height = min(chromeSize.height, f.height)
@@ -323,6 +333,7 @@ final class MainWindow: NSPanel {
     private func performSetupIfNeeded() {
         guard !hasCompletedSetup else { return }
         hasCompletedSetup = true
+        bindDockContext()
 
         backgroundColor = .clear
         isOpaque = false
@@ -776,7 +787,7 @@ final class MainWindow: NSPanel {
             : preferences.effectiveWindowContentInsetLeading + preferences.effectiveWindowContentInsetTrailing
         let verticalContentPadding: CGFloat = fullAxis ? 0
             : preferences.effectiveWindowContentInsetTop + preferences.effectiveWindowContentInsetBottom
-        let position = preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        let position = resolvedPositionForThisDock
         let baseTileSize = dockSettings.displayTileSize
         let baseTileHeight = baseTileSize + preferences.effectiveTileVerticalPadding * 2
         let externalAppDropPreview: AppTile? = {
@@ -795,8 +806,17 @@ final class MainWindow: NSPanel {
             }
             return tile
         }()
+        // Size from the same list the view renders. Measuring the raw store
+        // meant a dock in taskbar mode was sized for one tile per app while
+        // drawing one card per window, so the panel was far too small for its
+        // own contents.
+        let projectedForSizing = DockTileProjection.project(
+            tileStore.tiles,
+            dock: dockContext,
+            windows: WindowRegistry.shared.windows
+        )
         let sizingTiles = TileContainerView.previewedTiles(
-            from: tileStore.tiles,
+            from: projectedForSizing,
             paletteDrag: editMode.paletteDrag,
             paletteDropDestination: editMode.paletteDropDestination,
             externalAppDropPreview: externalAppDropPreview,
@@ -1153,7 +1173,7 @@ final class MainWindow: NSPanel {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let frame = screen.frame
         let visibleFrame = screen.visibleFrame
-        let dockSide = preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        let dockSide = resolvedPositionForThisDock
         var fullscreenCandidate = false
         var foundMaximized = false
         var fullscreenCandidatePIDs = Set<pid_t>()

@@ -83,8 +83,13 @@ final class DockBadgeService: ObservableObject {
             for (bundleID, badge) in newBadges {
                 let previous = badgesByBundleID[bundleID]
                 guard previous != badge else { continue }
-                let grew = (Int(badge) ?? 0) > (previous.flatMap(Int.init) ?? 0)
-                if previous == nil || grew {
+                // Any change counts. Badges are not always numbers — Messages
+                // and some apps use a dot or a glyph — so an increase test
+                // silently ignores exactly those apps.
+                let numericDrop = (Int(badge).map { current in
+                    previous.flatMap(Int.init).map { $0 > current } ?? false
+                }) ?? false
+                if !numericDrop {
                     Task { @MainActor in
                         AppActivityService.shared.noteAttentionRequested(bundleIdentifier: bundleID)
                     }

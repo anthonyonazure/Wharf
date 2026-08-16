@@ -17,7 +17,7 @@ import os.log
 final class TileStore: ObservableObject {
     static let shared = TileStore()
 
-    private static let logger = Logger(subsystem: "gt.quintero.Docky", category: "TileStore")
+    private static let logger = Logger(subsystem: "gt.quintero.Wharf", category: "TileStore")
 
     @Published private(set) var tiles: [Tile] = []
 
@@ -1871,7 +1871,7 @@ final class TileStore: ObservableObject {
 
     private func logTrailingItems(_ message: String) {
         let summary = preferences.trailingItems.map(Self.trailingItemDebugDescription(_:))
-        NSLog("[Docky] \(message): \(summary)")
+        NSLog("[Wharf] \(message): \(summary)")
     }
 
     private static func trailingItemDebugDescription(_ item: TrailingTileItem) -> String {

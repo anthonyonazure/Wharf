@@ -12,12 +12,12 @@ struct HiddenAppsSettingsView: View {
     var body: some View {
         Form {
             Section("Restore") {
-                Text("Apps hidden with \"Hide in Docky\" stay out of Docky's pinned and running app surfaces until you restore them here.")
+                Text("Apps hidden with \"Hide in Wharf\" stay out of Wharf's pinned and running app surfaces until you restore them here.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if hiddenApps.isEmpty {
-                    Text("No apps are currently hidden from Docky.")
+                    Text("No apps are currently hidden from Wharf.")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(hiddenApps) { app in
@@ -82,7 +82,7 @@ private struct HiddenAppRow: View {
 
             Spacer()
 
-            Button("Show in Docky") {
+            Button("Show in Wharf") {
                 preferences.setAppHiddenInDocky(bundleIdentifier: app.bundleIdentifier, isHidden: false)
             }
         }

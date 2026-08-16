@@ -72,7 +72,7 @@ final class MarketplaceClient {
         try Self.validateHTTP(response)
 
         let workDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Docky-Marketplace-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Wharf-Marketplace-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
 
         let lastPath = url.lastPathComponent

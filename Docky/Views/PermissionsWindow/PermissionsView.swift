@@ -106,7 +106,7 @@ struct PermissionsView: View {
     private var bottomSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Welcome to Docky")
+                Text("Welcome to Wharf")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
 
@@ -160,7 +160,7 @@ struct PermissionsView: View {
                     .shadow(color: Color.black.opacity(0.18), radius: 16, y: 10)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("Docky Setup", systemImage: "sparkles.rectangle.stack")
+                    Label("Wharf Setup", systemImage: "sparkles.rectangle.stack")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.secondary)
 
@@ -218,7 +218,7 @@ struct PermissionsView: View {
 
     private var draggableAppProxy: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Drag Docky into the list in System Settings to add it without searching.")
+            Text("Drag Wharf into the list in System Settings to add it without searching.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -230,7 +230,7 @@ struct PermissionsView: View {
                     .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Docky.app")
+                    Text("Wharf.app")
                         .font(.headline)
                     Text("Drag this into the macOS privacy list")
                         .font(.subheadline)
@@ -493,7 +493,7 @@ struct PermissionsView: View {
         case .denied:
             return "macOS has this disabled right now. Open System Settings, enable it, then come back and re-check."
         case .notDetermined:
-            return "Docky will guide you through the fastest way to enable this on your Mac."
+            return "Wharf will guide you through the fastest way to enable this on your Mac."
         }
     }
 
@@ -545,7 +545,7 @@ struct PermissionsView: View {
         }
 
         if step.isRequiredAtLaunch {
-            return "This permission unlocks a core Docky feature, but you can skip it for now and grant it later."
+            return "This permission unlocks a core Wharf feature, but you can skip it for now and grant it later."
         }
 
         return "This permission unlocks an optional feature and can be granted later from Settings."

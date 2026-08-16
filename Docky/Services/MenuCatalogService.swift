@@ -383,11 +383,11 @@ final class MenuCatalogService: ObservableObject {
 
     private func record(_ message: String) {
         diagnostics.append(message)
-        NSLog("[Docky] \(message)")
+        NSLog("[Wharf] \(message)")
     }
 
     private func logDiagnostics() {
-        diagnostics.forEach { NSLog("[Docky] \($0)") }
+        diagnostics.forEach { NSLog("[Wharf] \($0)") }
     }
 }
 

@@ -118,7 +118,7 @@ struct BehaviorSettingsView: View {
                     .labelsHidden()
                 }
 
-                Text("Choose where Docky sits on screen, or mirror the macOS Dock position.")
+                Text("Choose where Wharf sits on screen, or mirror the macOS Dock position.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -162,7 +162,7 @@ struct BehaviorSettingsView: View {
                     .labelsHidden()
                 }
 
-                Text("Choose whether Docky appears only in the active Space or joins every Space, including fullscreen auxiliary presentation.")
+                Text("Choose whether Wharf appears only in the active Space or joins every Space, including fullscreen auxiliary presentation.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -326,7 +326,7 @@ struct BehaviorSettingsView: View {
                 Toggle("Autohide Window", isOn: $preferences.autohidesWindow)
                     .font(.headline)
 
-                Text("Slides Docky's window off-screen until the pointer reaches its edge. Hide timing is controlled by Docky's own delay below, so hiding the system Dock does not stretch it.")
+                Text("Slides Wharf's window off-screen until the pointer reaches its edge. Hide timing is controlled by Wharf's own delay below, so hiding the system Dock does not stretch it.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -347,7 +347,7 @@ struct BehaviorSettingsView: View {
                         .frame(width: 56, alignment: .trailing)
                 }
 
-                Text("Controls how long Docky waits after the pointer leaves and interactions end before the window hides.")
+                Text("Controls how long Wharf waits after the pointer leaves and interactions end before the window hides.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -369,7 +369,7 @@ struct BehaviorSettingsView: View {
                         .frame(width: 56, alignment: .trailing)
                 }
 
-                Text("How long the slide takes when Docky shows or hides its window. Set to 0 to snap instantly.")
+                Text("How long the slide takes when Wharf shows or hides its window. Set to 0 to snap instantly.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -380,7 +380,7 @@ struct BehaviorSettingsView: View {
                 Toggle("Hide in Fullscreen", isOn: $preferences.hidesDuringFullscreen)
                     .font(.headline)
 
-                Text("When turned off, Docky stays pinned over fullscreen apps. When on, Docky autohides while a fullscreen app is on its display and reveals on edge dwell.")
+                Text("When turned off, Wharf stays pinned over fullscreen apps. When on, Wharf autohides while a fullscreen app is on its display and reveals on edge dwell.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -401,7 +401,7 @@ struct BehaviorSettingsView: View {
                         .frame(width: 56, alignment: .trailing)
                 }
 
-                Text("How long the pointer must dwell at the screen edge before Docky reveals while a fullscreen app is active. Mirrors the macOS Dock's intent gating.")
+                Text("How long the pointer must dwell at the screen edge before Wharf reveals while a fullscreen app is active. Mirrors the macOS Dock's intent gating.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -446,7 +446,7 @@ struct BehaviorSettingsView: View {
                     .labelsHidden()
                 }
 
-                Text("Choose whether Docky shrinks to fit the screen or keeps its size and scrolls when it runs out of room on the current dock axis.")
+                Text("Choose whether Wharf shrinks to fit the screen or keeps its size and scrolls when it runs out of room on the current dock axis.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -468,7 +468,7 @@ struct BehaviorSettingsView: View {
                     .labelsHidden()
                 }
 
-                Text("Choose whether Docky hugs its tiles or stretches across the full screen width or height of the current dock axis.")
+                Text("Choose whether Wharf hugs its tiles or stretches across the full screen width or height of the current dock axis.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -489,7 +489,7 @@ struct BehaviorSettingsView: View {
                 Toggle("Show Running Apps", isOn: $preferences.showsRunningApps)
                     .font(.headline)
 
-                Text("When turned off, unpinned running apps are hidden from Docky so it acts as a static shelf alongside the system Dock.")
+                Text("When turned off, unpinned running apps are hidden from Wharf so it acts as a static shelf alongside the system Dock.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -580,7 +580,7 @@ struct BehaviorSettingsView: View {
                 Toggle("Show Minimized Windows", isOn: $preferences.showsMinimizedWindows)
                     .font(.headline)
 
-                Text("When turned off, minimized window tiles do not appear in Docky's trailing section.")
+                Text("When turned off, minimized window tiles do not appear in Wharf's trailing section.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -688,7 +688,7 @@ struct BehaviorSettingsView: View {
                 Toggle("Open at Login", isOn: $preferences.opensAtLogin)
                     .font(.headline)
 
-                Text("Registers Docky as a login item so it starts automatically after you sign in.")
+                Text("Registers Wharf as a login item so it starts automatically after you sign in.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -703,7 +703,7 @@ struct BehaviorSettingsView: View {
                 Toggle("Hide System Dock", isOn: $preferences.hidesSystemDock)
                     .font(.headline)
 
-                Text("Forces the macOS Dock to autohide with a long delay, disables bouncing and launch animations, and keeps the system Dock aligned with Docky's explicit edge selection while this stays on. Docky snapshots your current Dock settings first and restores them when you turn this off or quit Docky. This no longer affects Docky's own autohide delay.")
+                Text("Forces the macOS Dock to autohide with a long delay, disables bouncing and launch animations, and keeps the system Dock aligned with Wharf's explicit edge selection while this stays on. Wharf snapshots your current Dock settings first and restores them when you turn this off or quit Wharf. This no longer affects Wharf's own autohide delay.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 

@@ -67,7 +67,7 @@ final class ApplicationInstallService {
         let sourceURL = Bundle.main.bundleURL.standardizedFileURL
 
         guard let destinationDirectory = preferredApplicationsDirectory() else {
-            presentMoveFailureAlert(message: "Docky could not find a writable Applications folder.")
+            presentMoveFailureAlert(message: "Wharf could not find a writable Applications folder.")
             return false
         }
 
@@ -97,7 +97,7 @@ final class ApplicationInstallService {
             do {
                 try fileManager.createDirectory(at: userApplications, withIntermediateDirectories: true)
             } catch {
-                NSLog("[Docky] Failed to create ~/Applications: \(error.localizedDescription)")
+                NSLog("[Wharf] Failed to create ~/Applications: \(error.localizedDescription)")
                 return nil
             }
         }
@@ -129,7 +129,7 @@ final class ApplicationInstallService {
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: destinationURL, configuration: configuration) { _, error in
             if let error {
-                NSLog("[Docky] Failed to relaunch moved app: \(error.localizedDescription)")
+                NSLog("[Wharf] Failed to relaunch moved app: \(error.localizedDescription)")
             }
         }
     }

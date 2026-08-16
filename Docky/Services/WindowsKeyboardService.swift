@@ -96,7 +96,7 @@ final class WindowsKeyboardService {
         FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?
-            .appendingPathComponent("Docky/wharf-keyboard-status.txt")
+            .appendingPathComponent("Wharf/wharf-keyboard-status.txt")
     }
 
     private func writeStatus(_ message: String) {

@@ -56,7 +56,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // rehydrating.
         ExternalWidgetLoader.shared.discoverAndLoad()
 
-        DockyPreferences.shared.applySystemDockVisibilityPreference()
         DockyPreferences.shared.applyOpenAtLoginPreference()
         TileStore.shared.syncPreferencesFromSystemDockIfNeeded()
         ProfileTriggerEngine.shared.start()
@@ -67,6 +66,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             PermissionsService.shared.markInitialOnboardingCompleted()
             showMainWindow()
         } else {
+            // Never leave the user dockless. A previous run may have hidden the
+            // system Dock; if we cannot show ours, give theirs back.
+            SystemDockVisibilityService.shared.restore()
             showPermissionsWindow(
                 steps: PermissionsService.shared.setupPermissions,
                 marksInitialOnboardingCompleted: true,
@@ -301,9 +303,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
                 let alert = NSAlert()
                 alert.messageText = "Widget installed"
-                alert.informativeText = "Restart Docky to start using \(downloadURL.lastPathComponent)."
+                alert.informativeText = "Restart Wharf to start using \(downloadURL.lastPathComponent)."
                 alert.alertStyle = .informational
-                alert.addButton(withTitle: "Restart Docky")
+                alert.addButton(withTitle: "Restart Wharf")
                 alert.addButton(withTitle: "Later")
                 if alert.runModal() == .alertFirstButtonReturn {
                     NSApp.terminate(nil)
@@ -398,6 +400,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// keeps that set correct as displays come and go.
     private func showMainWindow() {
         ScreenDockCoordinator.shared.start()
+
+        // Wharf: hide the system Dock only once our own docks exist.
+        //
+        // This used to run at launch, before permissions were known. If setup
+        // was incomplete the app stopped at the permissions window, having
+        // already hidden the system Dock and never having drawn its own — so
+        // the user was left with no dock at all and no visible cause.
+        DockyPreferences.shared.applySystemDockVisibilityPreference()
         DockyPreferences.shared.enableOpenAtLoginOnFirstLaunchIfNeeded()
     }
 
@@ -467,34 +477,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func pinDefaultDockAppsForLoadTest(_ sender: Any?) {
         let pinnedCount = TileStore.shared.replacePinnedAppsWithDefaultDockAppsForLoadTest()
-        NSLog("[Docky] Debug load test pinned \(pinnedCount) default Dock apps")
+        NSLog("[Wharf] Debug load test pinned \(pinnedCount) default Dock apps")
     }
 
     @objc private func pinEveryAppForLoadTest(_ sender: Any?) {
         let pinnedCount = TileStore.shared.replacePinnedAppsWithEveryInstalledAppForLoadTest()
-        NSLog("[Docky] Debug load test pinned \(pinnedCount) installed apps")
+        NSLog("[Wharf] Debug load test pinned \(pinnedCount) installed apps")
     }
 
     @objc private func resetPinnedItemsToSystemDock(_ sender: Any?) {
         let pinnedCount = TileStore.shared.resetPinnedItemsToSystemDock()
-        NSLog("[Docky] Reset pinned items to \(pinnedCount) system Dock entries")
+        NSLog("[Wharf] Reset pinned items to \(pinnedCount) system Dock entries")
     }
 
     @objc private func seedDummyDebugLayout(_ sender: Any?) {
         TileStore.shared.seedDummyDebugLayout()
-        NSLog("[Docky] Seeded dummy debug layout")
+        NSLog("[Wharf] Seeded dummy debug layout")
     }
 
     @objc private func loadDemoDebugLayout(_ sender: Any?) {
         TileStore.shared.loadDemoDebugLayout()
-        NSLog("[Docky] Loaded demo debug layout")
+        NSLog("[Wharf] Loaded demo debug layout")
     }
 
     @objc private func seedDummyWidgetDebugContent(_ sender: Any?) {
         RemindersService.shared.seedDummyDebugSnapshot()
         CalendarService.shared.seedDummyDebugSnapshot()
         WeatherService.shared.seedDummyDebugSnapshot()
-        NSLog("[Docky] Seeded dummy widget debug content")
+        NSLog("[Wharf] Seeded dummy widget debug content")
     }
 
     @objc private func showDebugOnboarding(_ sender: Any?) {
@@ -514,7 +524,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "Wharf"
 
-        let debugMenu = NSMenu(title: "Docky")
+        let debugMenu = NSMenu(title: "Wharf")
         let snapshotItem = NSMenuItem(
             title: "Show Dock Preferences and Settings",
             action: #selector(showDebugSnapshot(_:)),
@@ -572,7 +582,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showOnboardingItem.target = self
 
         let overrideSettingsItem = NSMenuItem(
-            title: "Override Docky Settings with plist…",
+            title: "Override Wharf Settings with plist…",
             action: #selector(overrideSettingsWithPlist(_:)),
             keyEquivalent: ""
         )
@@ -600,7 +610,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         checkForUpdatesItem.target = self
 
         let quitItem = NSMenuItem(
-            title: "Quit Docky",
+            title: "Quit Wharf",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -737,7 +747,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
             let confirm = NSAlert()
             confirm.messageText = "Override \(dockyKeys.count) docky.* keys?"
-            confirm.informativeText = "Existing docky.* UserDefaults will be cleared first, then replaced with the values from \(url.lastPathComponent). Docky will relaunch after."
+            confirm.informativeText = "Existing docky.* UserDefaults will be cleared first, then replaced with the values from \(url.lastPathComponent). Wharf will relaunch after."
             confirm.addButton(withTitle: "Override and Relaunch")
             confirm.addButton(withTitle: "Cancel")
             guard confirm.runModal() == .alertFirstButtonReturn else { return }
@@ -769,7 +779,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         do {
             try task.run()
         } catch {
-            NSLog("[Docky] Relaunch failed: \(error.localizedDescription)")
+            NSLog("[Wharf] Relaunch failed: \(error.localizedDescription)")
             return
         }
         NSApp.terminate(nil)
@@ -794,7 +804,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let dockSettings = DockSettingsService.shared
 
         return [
-            "Docky Preferences",
+            "Wharf Preferences",
             "---------------",
             "tileVerticalPadding: \(preferences.tileVerticalPadding)",
             "tileSpacing: \(preferences.tileSpacing)",

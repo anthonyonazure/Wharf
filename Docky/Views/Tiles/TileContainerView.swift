@@ -10,7 +10,7 @@ import OSLog
 struct TileContainerView: View {
     static let edgePadding: CGFloat = 8
     private let tileMutationAnimation: Animation = .easeInOut(duration: 0.18)
-    private static let logger = Logger(subsystem: "gt.quintero.Docky", category: "TileDrag")
+    private static let logger = Logger(subsystem: "gt.quintero.Wharf", category: "TileDrag")
 
     @ObservedObject private var store = TileStore.shared
     private let dockSettings = DockSettingsService.shared

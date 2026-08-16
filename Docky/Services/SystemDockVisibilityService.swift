@@ -20,7 +20,7 @@ final class SystemDockVisibilityService {
     private static let snapshotKey = "docky.systemDockVisibilitySnapshot"
     private static let snapshotNullMarker = "__docky_null__"
     private static let stateFilename = "SystemDockVisibilityState.plist"
-    private static let fallbackBundleIdentifier = "gt.quintero.Docky"
+    private static let fallbackBundleIdentifier = "gt.quintero.Wharf"
     private static let watchdogAppName = "DockyDockWatchdog.app"
 
     private static let managedKeys: [String] = [
@@ -147,13 +147,13 @@ final class SystemDockVisibilityService {
         FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?
-            .appendingPathComponent("Docky", isDirectory: true)
+            .appendingPathComponent("Wharf", isDirectory: true)
             .appendingPathComponent(Self.stateFilename)
     }
 
     private func writeActiveState(snapshot: [String: Any]) {
         guard let stateFileURL else {
-            NSLog("[Docky] Failed to resolve system Dock visibility watchdog state URL")
+            NSLog("[Wharf] Failed to resolve system Dock visibility watchdog state URL")
             return
         }
 
@@ -177,7 +177,7 @@ final class SystemDockVisibilityService {
             )
             try data.write(to: stateFileURL, options: .atomic)
         } catch {
-            NSLog("[Docky] Failed to write system Dock visibility watchdog state: \(error.localizedDescription)")
+            NSLog("[Wharf] Failed to write system Dock visibility watchdog state: \(error.localizedDescription)")
         }
     }
 
@@ -190,7 +190,7 @@ final class SystemDockVisibilityService {
             try FileManager.default.removeItem(at: stateFileURL)
             isWatchdogLaunchPendingOrRunning = false
         } catch {
-            NSLog("[Docky] Failed to clear system Dock visibility watchdog state: \(error.localizedDescription)")
+            NSLog("[Wharf] Failed to clear system Dock visibility watchdog state: \(error.localizedDescription)")
         }
     }
 
@@ -220,7 +220,7 @@ final class SystemDockVisibilityService {
         }
 
         guard let stateFileURL else {
-            NSLog("[Docky] Failed to resolve system Dock visibility watchdog state URL")
+            NSLog("[Wharf] Failed to resolve system Dock visibility watchdog state URL")
             return
         }
 
@@ -230,7 +230,7 @@ final class SystemDockVisibilityService {
             .appendingPathComponent("LoginItems", isDirectory: true)
             .appendingPathComponent(Self.watchdogAppName, isDirectory: true)
         guard FileManager.default.fileExists(atPath: helperURL.path) else {
-            NSLog("[Docky] Failed to locate system Dock visibility watchdog app at \(helperURL.path)")
+            NSLog("[Wharf] Failed to locate system Dock visibility watchdog app at \(helperURL.path)")
             return
         }
 
@@ -246,7 +246,7 @@ final class SystemDockVisibilityService {
         isWatchdogLaunchPendingOrRunning = true
         NSWorkspace.shared.openApplication(at: helperURL, configuration: configuration) { [weak self] _, error in
             if let error {
-                NSLog("[Docky] Failed to launch system Dock visibility watchdog: \(error.localizedDescription)")
+                NSLog("[Wharf] Failed to launch system Dock visibility watchdog: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     self?.isWatchdogLaunchPendingOrRunning = false
                 }

@@ -161,14 +161,14 @@ final class AppleScriptService {
             PermissionsService.shared.updateFinderAutomation(status: .denied)
             presentAlert(
                 title: "Finder automation wasn’t allowed",
-                body: "Allow Docky to control Finder in Privacy & Security > Automation, or use the Automation (Finder) row in Docky Settings to request access again."
+                body: "Allow Wharf to control Finder in Privacy & Security > Automation, or use the Automation (Finder) row in Wharf Settings to request access again."
             )
         case .accessibilityDenied:
             PermissionsService.shared.presentPermissionAlert(for: .accessibility, actionTitle: "Finder action")
         case .compilationFailed:
             presentAlert(
                 title: "Finder action failed",
-                body: "Docky couldn't prepare the AppleScript needed for this Finder action."
+                body: "Wharf couldn't prepare the AppleScript needed for this Finder action."
             )
         case .executionFailed(let message):
             presentAlert(
@@ -222,7 +222,7 @@ final class AppleScriptService {
         case .compilationFailed:
             presentAlert(
                 title: "Script action failed",
-                body: "Docky couldn't prepare the AppleScript needed for \(actionTitle.lowercased())."
+                body: "Wharf couldn't prepare the AppleScript needed for \(actionTitle.lowercased())."
             )
         case .executionFailed(let message):
             presentAlert(
@@ -288,14 +288,14 @@ final class AppleScriptService {
             PermissionsService.shared.updateSystemEventsAutomation(status: .denied)
             presentAlert(
                 title: "System Events automation wasn’t allowed",
-                body: "Allow Docky to control System Events in Privacy & Security > Automation, or use the Automation (System Events) row in Docky Settings to request access again."
+                body: "Allow Wharf to control System Events in Privacy & Security > Automation, or use the Automation (System Events) row in Wharf Settings to request access again."
             )
         case .accessibilityDenied:
             PermissionsService.shared.presentPermissionAlert(for: .accessibility, actionTitle: "Request System Events Access")
         case .compilationFailed:
             presentAlert(
                 title: "System Events action failed",
-                body: "Docky couldn't prepare the AppleScript needed to request System Events automation."
+                body: "Wharf couldn't prepare the AppleScript needed to request System Events automation."
             )
         case .executionFailed(let message):
             presentAlert(

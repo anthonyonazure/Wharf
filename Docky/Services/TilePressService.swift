@@ -25,7 +25,7 @@ import OSLog
 @MainActor
 final class TilePressService: ObservableObject {
     static let shared = TilePressService()
-    private static let logger = Logger(subsystem: "gt.quintero.Docky", category: "TilePress")
+    private static let logger = Logger(subsystem: "gt.quintero.Wharf", category: "TilePress")
 
     @Published private(set) var pressedTileID: String?
 

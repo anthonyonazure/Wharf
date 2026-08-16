@@ -323,7 +323,7 @@ final class ClickThroughHostingView: NSHostingView<MainWindowView> {
         let pasteboardTypes = sender.draggingPasteboard.types?.map(\.rawValue) ?? []
         if let kind = DockDragService.resolvePreview(from: urls) {
             NSLog(
-                "[Docky] drag entered: kind=%@ urls=%@ pasteboardTypes=%@",
+                "[Wharf] drag entered: kind=%@ urls=%@ pasteboardTypes=%@",
                 Self.describe(kind: kind),
                 urls.map(\.path).joined(separator: ", "),
                 pasteboardTypes.joined(separator: ", ")
@@ -334,7 +334,7 @@ final class ClickThroughHostingView: NSHostingView<MainWindowView> {
         }
         if DockEditModeService.shared.paletteDrag != nil {
             NSLog(
-                "[Docky] drag entered: kind=palette urls=%@ pasteboardTypes=%@",
+                "[Wharf] drag entered: kind=palette urls=%@ pasteboardTypes=%@",
                 urls.map(\.path).joined(separator: ", "),
                 pasteboardTypes.joined(separator: ", ")
             )
@@ -343,7 +343,7 @@ final class ClickThroughHostingView: NSHostingView<MainWindowView> {
             return .copy
         }
         NSLog(
-            "[Docky] drag entered: kind=rejected urls=%@ pasteboardTypes=%@",
+            "[Wharf] drag entered: kind=rejected urls=%@ pasteboardTypes=%@",
             urls.map(\.path).joined(separator: ", "),
             pasteboardTypes.joined(separator: ", ")
         )
@@ -439,7 +439,7 @@ final class ClickThroughHostingView: NSHostingView<MainWindowView> {
             let destinationIndex = DockDragService.shared.destinationIndex
             let targetTileID = DockDragService.shared.documentTargetTileID
             NSLog(
-                "[Docky] drag drop: kind=%@ destinationIndex=%@ documentTargetTileID=%@",
+                "[Wharf] drag drop: kind=%@ destinationIndex=%@ documentTargetTileID=%@",
                 Self.describe(kind: kind),
                 destinationIndex.map(String.init) ?? "nil",
                 targetTileID ?? "nil"

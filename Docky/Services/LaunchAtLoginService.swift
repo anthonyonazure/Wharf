@@ -33,7 +33,7 @@ final class LaunchAtLoginService {
 
             return true
         } catch {
-            NSLog("[Docky] Failed to update login item registration: \(error.localizedDescription)")
+            NSLog("[Wharf] Failed to update login item registration: \(error.localizedDescription)")
             return false
         }
     }

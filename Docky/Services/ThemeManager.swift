@@ -543,7 +543,7 @@ import Observation
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appending(path: "Library/Application Support", directoryHint: .isDirectory)
         return base
-            .appending(path: "Docky", directoryHint: .isDirectory)
+            .appending(path: "Wharf", directoryHint: .isDirectory)
             .appending(path: "Themes", directoryHint: .isDirectory)
     }
 

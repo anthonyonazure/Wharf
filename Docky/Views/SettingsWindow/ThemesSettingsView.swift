@@ -260,7 +260,7 @@ struct ThemesSettingsView: View {
         }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return "My Docky Theme \(formatter.string(from: Date())).dockytheme"
+        return "My Wharf Theme \(formatter.string(from: Date())).dockytheme"
     }
 
     private var deletionDialogBinding: Binding<Bool> {

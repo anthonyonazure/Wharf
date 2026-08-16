@@ -3,11 +3,11 @@
   "packages": [
     {
       "id": "docky.core",
-      "title": "Docky Core Actions",
-      "author": "Docky",
+      "title": "Wharf Core Actions",
+      "author": "Wharf",
       "version": "1.0.0",
       "reviewStatus": "curated",
-      "description": "Built-in Docky actions and reviewed scripted extensions.",
+      "description": "Built-in Wharf actions and reviewed scripted extensions.",
       "actions": [
         {
           "id": "app.open",
@@ -249,10 +249,10 @@
     {
       "id": "docky.curated-app-integrations",
       "title": "Curated App Integrations",
-      "author": "Docky",
+      "author": "Wharf",
       "version": "1.0.0",
       "reviewStatus": "curated",
-      "description": "Docky-reviewed actions for selected third-party apps and browsers.",
+      "description": "Wharf-reviewed actions for selected third-party apps and browsers.",
       "actions": [
         {
           "id": "ghostty.new-window",

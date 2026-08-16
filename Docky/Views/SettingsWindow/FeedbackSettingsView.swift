@@ -81,9 +81,9 @@ struct FeedbackSettingsView: View {
             Section("What gets sent") {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Your message", systemImage: "text.alignleft")
-                    Label("Docky preferences (every `docky.*` UserDefaults key)", systemImage: "doc.text")
+                    Label("Wharf preferences (every `docky.*` UserDefaults key)", systemImage: "doc.text")
                     Label("Live macOS Dock prefs (`com.apple.dock`)", systemImage: "dock.rectangle")
-                    Label("Basic system info (macOS version, screens, Docky build)", systemImage: "info.circle")
+                    Label("Basic system info (macOS version, screens, Wharf build)", systemImage: "info.circle")
                     if attachmentURL != nil {
                         Label("Your attachment", systemImage: "paperclip")
                     }
@@ -141,7 +141,7 @@ struct FeedbackSettingsView: View {
     /// Mail.app with our address pre-filled). Falls back to a generic
     /// `NSSharingServicePicker` if Mail.app isn't configured.
     private func present(items: [Any]) {
-        let subject = "Docky Feedback (v\(Bundle.main.shortVersion))"
+        let subject = "Wharf Feedback (v\(Bundle.main.shortVersion))"
         if let mail = NSSharingService(named: .composeEmail) {
             mail.recipients = [feedbackDestinationEmail]
             mail.subject = subject

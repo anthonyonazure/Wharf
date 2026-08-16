@@ -25,7 +25,7 @@ import os.log
 final class ExternalWidgetLoader {
     static let shared = ExternalWidgetLoader()
 
-    private let log = Logger(subsystem: "gt.quintero.Docky", category: "ExternalWidgetLoader")
+    private let log = Logger(subsystem: "gt.quintero.Wharf", category: "ExternalWidgetLoader")
     private(set) var hasDiscovered = false
 
     /// Reason the loader couldn't bring a bundle into the registry. Used
@@ -141,7 +141,7 @@ final class ExternalWidgetLoader {
             .appendingPathComponent("Library/Application Support")
 
         return appSupport
-            .appendingPathComponent("Docky", isDirectory: true)
+            .appendingPathComponent("Wharf", isDirectory: true)
             .appendingPathComponent("Widgets", isDirectory: true)
     }
 

@@ -8,12 +8,12 @@ import Foundation
 enum WidgetOwnerBundleIdentifiers {
     static let calendar = "com.apple.iCal"
     static let reminders = "com.apple.reminders"
-    static let batteries = "gt.quintero.Docky.batteries"
-    static let systemStatus = "gt.quintero.Docky.system-status"
-    static let weather = "gt.quintero.Docky.weather"
-    static let genericNowPlaying = "gt.quintero.Docky.now-playing"
-    static let search = "gt.quintero.Docky.search"
-    static let photoFrame = "gt.quintero.Docky.photo-frame"
+    static let batteries = "gt.quintero.Wharf.batteries"
+    static let systemStatus = "gt.quintero.Wharf.system-status"
+    static let weather = "gt.quintero.Wharf.weather"
+    static let genericNowPlaying = "gt.quintero.Wharf.now-playing"
+    static let search = "gt.quintero.Wharf.search"
+    static let photoFrame = "gt.quintero.Wharf.photo-frame"
 }
 
 struct WidgetRegistration: Equatable, Identifiable {

@@ -46,7 +46,7 @@ struct UpdatesSettingsView: View {
                         .disabled(!appUpdateService.automaticallyChecksForUpdates)
                     }
 
-                    Text("Docky can periodically check getdocky.com for new signed releases. Sparkle stores these update preferences directly in your user defaults.")
+                    Text("Wharf can periodically check getdocky.com for new signed releases. Sparkle stores these update preferences directly in your user defaults.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

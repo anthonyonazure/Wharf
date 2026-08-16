@@ -197,7 +197,7 @@ final class WorkspaceService: ObservableObject {
                 return
             }
 
-            NSLog("[Docky] Failed to open dropped files with app %@: %@ (%@)", bundleIdentifier, fileURLs.map(\.path).joined(separator: ", "), error.localizedDescription)
+            NSLog("[Wharf] Failed to open dropped files with app %@: %@ (%@)", bundleIdentifier, fileURLs.map(\.path).joined(separator: ", "), error.localizedDescription)
         }
     }
 
@@ -259,7 +259,7 @@ final class WorkspaceService: ObservableObject {
             liveFocusPreviewSession = session
             return true
         } catch {
-            NSLog("[Docky] Live focus preview stream failed for \(window.windowIdentifier): \(error.localizedDescription)")
+            NSLog("[Wharf] Live focus preview stream failed for \(window.windowIdentifier): \(error.localizedDescription)")
             liveFocusPreviewSession = nil
             return false
         }
@@ -963,7 +963,7 @@ final class WorkspaceService: ObservableObject {
 
             guard let shareableWindow = matchingShareableWindow(for: window, in: shareableContent.windows) else {
                 NSLog(
-                    "[Docky] App window preview: no shareable window for \(window.windowIdentifier) title=\(window.windowTitle) totalShareableWindows=\(shareableContent.windows.count)"
+                    "[Wharf] App window preview: no shareable window for \(window.windowIdentifier) title=\(window.windowTitle) totalShareableWindows=\(shareableContent.windows.count)"
                 )
                 return nil
             }
@@ -995,7 +995,7 @@ final class WorkspaceService: ObservableObject {
             let cgImage = try await captureImage(contentFilter: filter, configuration: configuration)
             return makeThumbnail(from: cgImage, maxSize: CGSize(width: 480, height: 300))
         } catch {
-            NSLog("[Docky] App window preview capture failed for \(window.windowIdentifier): \(error.localizedDescription)")
+            NSLog("[Wharf] App window preview capture failed for \(window.windowIdentifier): \(error.localizedDescription)")
             return nil
         }
     }
@@ -1028,7 +1028,7 @@ final class WorkspaceService: ObservableObject {
             let cgImage = try await captureImage(contentFilter: filter, configuration: configuration)
             return makeFullSizeImage(from: cgImage)
         } catch {
-            NSLog("[Docky] Live focus preview capture failed for \(window.windowIdentifier): \(error.localizedDescription)")
+            NSLog("[Wharf] Live focus preview capture failed for \(window.windowIdentifier): \(error.localizedDescription)")
             return nil
         }
     }
@@ -1042,7 +1042,7 @@ final class WorkspaceService: ObservableObject {
             let shareableContent = try await shareableContentIncludingOffscreenWindows()
             guard let shareableWindow = matchingShareableWindow(for: window, in: shareableContent.windows) else {
                 NSLog(
-                    "[Docky] Minimized window preview: no shareable window for \(window.windowIdentifier) title=\(window.windowTitle) totalShareableWindows=\(shareableContent.windows.count)"
+                    "[Wharf] Minimized window preview: no shareable window for \(window.windowIdentifier) title=\(window.windowTitle) totalShareableWindows=\(shareableContent.windows.count)"
                 )
                 return nil
             }
@@ -1074,7 +1074,7 @@ final class WorkspaceService: ObservableObject {
             let cgImage = try await captureImage(contentFilter: filter, configuration: configuration)
             return makeThumbnail(from: cgImage, maxSize: CGSize(width: 320, height: 200))
         } catch {
-            NSLog("[Docky] Minimized window preview capture failed for \(window.windowIdentifier): \(error.localizedDescription)")
+            NSLog("[Wharf] Minimized window preview capture failed for \(window.windowIdentifier): \(error.localizedDescription)")
             return nil
         }
     }
@@ -1184,7 +1184,7 @@ final class WorkspaceService: ObservableObject {
                 }
 
                 guard let content else {
-                    continuation.resume(throwing: NSError(domain: "Docky.WindowPreview", code: -2, userInfo: nil))
+                    continuation.resume(throwing: NSError(domain: "Wharf.WindowPreview", code: -2, userInfo: nil))
                     return
                 }
 
@@ -1252,7 +1252,7 @@ final class WorkspaceService: ObservableObject {
                 }
 
                 guard let image else {
-                    continuation.resume(throwing: NSError(domain: "Docky.WindowPreview", code: -1, userInfo: nil))
+                    continuation.resume(throwing: NSError(domain: "Wharf.WindowPreview", code: -1, userInfo: nil))
                     return
                 }
 
@@ -1310,7 +1310,7 @@ private final class ShareableContentCache {
 
 private final class LiveWindowPreviewSession: NSObject, SCStreamOutput {
     private let stream: SCStream
-    private let outputQueue = DispatchQueue(label: "Docky.LiveWindowPreview", qos: .userInteractive)
+    private let outputQueue = DispatchQueue(label: "Wharf.LiveWindowPreview", qos: .userInteractive)
     private let ciContext = CIContext(options: nil)
     private let onFrame: @MainActor (NSImage?) -> Void
     private var isStopped = false

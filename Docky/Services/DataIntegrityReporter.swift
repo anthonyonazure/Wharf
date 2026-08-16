@@ -28,7 +28,7 @@ enum DataIntegrityReporter {
         guard !duplicates.isEmpty else { return }
         let sample = duplicates.prefix(5).map { String(describing: $0) }
         NSLog(
-            "[Docky] duplicate keys at \(site) count=\(duplicates.count) sample=\(sample)"
+            "[Wharf] duplicate keys at \(site) count=\(duplicates.count) sample=\(sample)"
         )
     }
 }

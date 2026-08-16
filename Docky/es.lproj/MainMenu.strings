@@ -1,8 +1,8 @@
 /* Class = "NSMenuItem"; title = "Customize Toolbar…"; ObjectID = "1UK-8n-QPP"; */
 "1UK-8n-QPP.title" = "Personalizar barra de herramientas…";
 
-/* Class = "NSMenuItem"; title = "Docky"; ObjectID = "1Xt-HY-uBw"; */
-"1Xt-HY-uBw.title" = "Docky";
+/* Class = "NSMenuItem"; title = "Wharf"; ObjectID = "1Xt-HY-uBw"; */
+"1Xt-HY-uBw.title" = "Wharf";
 
 /* Class = "NSMenu"; title = "Find"; ObjectID = "1b7-l0-nxx"; */
 "1b7-l0-nxx.title" = "Buscar";
@@ -34,8 +34,8 @@
 /* Class = "NSMenuItem"; title = "Enter Full Screen"; ObjectID = "4J7-dP-txa"; */
 "4J7-dP-txa.title" = "Entrar en pantalla completa";
 
-/* Class = "NSMenuItem"; title = "Quit Docky"; ObjectID = "4sb-4s-VLi"; */
-"4sb-4s-VLi.title" = "Salir de Docky";
+/* Class = "NSMenuItem"; title = "Quit Wharf"; ObjectID = "4sb-4s-VLi"; */
+"4sb-4s-VLi.title" = "Salir de Wharf";
 
 /* Class = "NSMenuItem"; title = "Edit"; ObjectID = "5QF-Oa-p0T"; */
 "5QF-Oa-p0T.title" = "Edición";
@@ -43,8 +43,8 @@
 /* Class = "NSMenuItem"; title = "Copy Style"; ObjectID = "5Vv-lz-BsD"; */
 "5Vv-lz-BsD.title" = "Copiar estilo";
 
-/* Class = "NSMenuItem"; title = "About Docky"; ObjectID = "5kV-Vb-QxS"; */
-"5kV-Vb-QxS.title" = "Acerca de Docky";
+/* Class = "NSMenuItem"; title = "About Wharf"; ObjectID = "5kV-Vb-QxS"; */
+"5kV-Vb-QxS.title" = "Acerca de Wharf";
 
 /* Class = "NSMenuItem"; title = "Redo"; ObjectID = "6dh-zS-Vam"; */
 "6dh-zS-Vam.title" = "Rehacer";
@@ -82,8 +82,8 @@
 /* Class = "NSMenu"; title = "Help"; ObjectID = "F2S-fz-NVQ"; */
 "F2S-fz-NVQ.title" = "Ayuda";
 
-/* Class = "NSMenuItem"; title = "Docky Help"; ObjectID = "FKE-Sm-Kum"; */
-"FKE-Sm-Kum.title" = "Ayuda de Docky";
+/* Class = "NSMenuItem"; title = "Wharf Help"; ObjectID = "FKE-Sm-Kum"; */
+"FKE-Sm-Kum.title" = "Ayuda de Wharf";
 
 /* Class = "NSMenuItem"; title = "Text"; ObjectID = "Fal-I4-PZk"; */
 "Fal-I4-PZk.title" = "Texto";
@@ -160,8 +160,8 @@
 /* Class = "NSMenuItem"; title = "Baseline"; ObjectID = "OaQ-X3-Vso"; */
 "OaQ-X3-Vso.title" = "Línea base";
 
-/* Class = "NSMenuItem"; title = "Hide Docky"; ObjectID = "Olw-nP-bQN"; */
-"Olw-nP-bQN.title" = "Ocultar Docky";
+/* Class = "NSMenuItem"; title = "Hide Wharf"; ObjectID = "Olw-nP-bQN"; */
+"Olw-nP-bQN.title" = "Ocultar Wharf";
 
 /* Class = "NSMenuItem"; title = "Find Previous"; ObjectID = "OwM-mh-QMV"; */
 "OwM-mh-QMV.title" = "Buscar anterior";
@@ -352,8 +352,8 @@
 /* Class = "NSMenu"; title = "Kern"; ObjectID = "tlD-Oa-oAM"; */
 "tlD-Oa-oAM.title" = "Interletraje";
 
-/* Class = "NSMenu"; title = "Docky"; ObjectID = "uQy-DD-JDr"; */
-"uQy-DD-JDr.title" = "Docky";
+/* Class = "NSMenu"; title = "Wharf"; ObjectID = "uQy-DD-JDr"; */
+"uQy-DD-JDr.title" = "Wharf";
 
 /* Class = "NSMenuItem"; title = "Cut"; ObjectID = "uRl-iY-unG"; */
 "uRl-iY-unG.title" = "Cortar";

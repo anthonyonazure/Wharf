@@ -89,7 +89,7 @@ struct LaunchpadTile: Equatable {
 /// pipeline resolves to the running app icon (and the user can swap it
 /// out via the App Icons settings pane like the Launchpad tile).
 struct StartMenuTile: Equatable {
-    nonisolated static let iconBundleIdentifier = "gt.quintero.Docky"
+    nonisolated static let iconBundleIdentifier = "gt.quintero.Wharf"
 
     let identifier: String
     let title: String

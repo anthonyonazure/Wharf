@@ -904,7 +904,7 @@ private struct LaunchpadOverlayView: View {
     @ViewBuilder
     private func appContextMenu(for app: AppTile) -> some View {
         let isPinned = TileStore.shared.isPinned(bundleIdentifier: app.bundleIdentifier)
-        Button(isPinned ? "Remove from Docky" : "Add to Docky") {
+        Button(isPinned ? "Remove from Wharf" : "Add to Wharf") {
             _ = TileStore.shared.setPinnedApp(
                 bundleIdentifier: app.bundleIdentifier,
                 pinned: !isPinned
@@ -2034,7 +2034,7 @@ private struct ExpandedFolderOverlay: View {
                     )
                     .contextMenu {
                         let isPinned = TileStore.shared.isPinned(bundleIdentifier: app.bundleIdentifier)
-                        Button(isPinned ? "Remove from Docky" : "Add to Docky") {
+                        Button(isPinned ? "Remove from Wharf" : "Add to Wharf") {
                             _ = TileStore.shared.setPinnedApp(
                                 bundleIdentifier: app.bundleIdentifier,
                                 pinned: !isPinned

@@ -169,7 +169,7 @@ final class PinnedDockSmartOrganizerService {
                 "- \($0.title) [kind=\($0.kind.rawValue), owner=\($0.ownerBundleIdentifier), defaultSpan=\($0.defaultSpan.rawValue)]"
             }.joined(separator: "\n")
             let prompt = """
-            Organize these pinned macOS apps into a new Docky pinned layout.
+            Organize these pinned macOS apps into a new Wharf pinned layout.
 
             Available apps:
             \(appList)

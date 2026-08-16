@@ -45,7 +45,7 @@ struct WidgetsSettingsView: View {
                 bundleURLPendingDeletion = nil
             }
         } message: { url in
-            Text("\(url.lastPathComponent) will be removed from disk. It will keep running until you restart Docky.")
+            Text("\(url.lastPathComponent) will be removed from disk. It will keep running until you restart Wharf.")
         }
         .alert(
             "Could not install widget",
@@ -67,14 +67,14 @@ struct WidgetsSettingsView: View {
                         .foregroundStyle(.tint)
                         .font(.title3)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Restart Docky to apply changes")
+                        Text("Restart Wharf to apply changes")
                             .font(.callout.weight(.medium))
                         Text("Widget bundles are loaded once per launch. New installs and removals take effect after a restart.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
-                    Button("Quit Docky") {
+                    Button("Quit Wharf") {
                         NSApp.terminate(nil)
                     }
                 }

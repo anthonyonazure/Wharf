@@ -197,7 +197,37 @@ final class MainWindow: NSPanel {
     override var canBecomeKey: Bool { allowsKeyWindow }
     override var canBecomeMain: Bool { false }
 
-    override var level: NSWindow.Level { get { .mainMenu } set {} }
+    /// Wharf: the dock normally sits at menu-bar level, above everything.
+    ///
+    /// That is wrong for apps that own the whole screen and have their own
+    /// bottom bar — a remote Windows session draws its taskbar exactly where
+    /// this dock floats, so the dock covers it. For those apps the dock drops
+    /// below ordinary windows instead, staying available on other screens and
+    /// reappearing the moment you switch away.
+    private var staysBehindFrontmostApp = false
+
+    override var level: NSWindow.Level {
+        get {
+            staysBehindFrontmostApp
+                ? NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.normalWindow)) - 1)
+                : .mainMenu
+        }
+        set {}
+    }
+
+    /// Re-evaluates whether this dock should sit behind the frontmost app.
+    func updateStackingForFrontmostApp(_ bundleIdentifier: String?) {
+        let shouldStayBehind = bundleIdentifier.map {
+            DockyPreferences.shared.dockStaysBehindBundleIDs.contains($0)
+        } ?? false
+
+        guard shouldStayBehind != staysBehindFrontmostApp else { return }
+        staysBehindFrontmostApp = shouldStayBehind
+
+        // The overridden setter is a no-op, so push the new value through
+        // NSWindow itself; otherwise the level is recomputed but never applied.
+        super.level = level
+    }
 
     private enum VisibilityState {
         case visible
@@ -555,7 +585,9 @@ final class MainWindow: NSPanel {
 
         workspaceCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] notification in
+                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                self?.updateStackingForFrontmostApp(app?.bundleIdentifier)
                 self?.updateFullscreenStateAndApply(animated: true)
                 self?.scheduleFullscreenRecheck()
             }

@@ -20,6 +20,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case behaviorVisibility
     case behaviorWindowsKeyboard
     case behaviorTaskbar
+    case behaviorStacking
     case layouts
     case layoutRules
     case behaviorAppTileClick
@@ -55,6 +56,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorVisibility: "Visibility"
         case .behaviorWindowsKeyboard: "Windows Keyboard"
         case .behaviorTaskbar: "Taskbar"
+        case .behaviorStacking: "Stacking"
         case .layouts: "Layouts"
         case .layoutRules: "Layout Rules"
         case .behaviorAppTileClick: "App Tile Click"
@@ -90,6 +92,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorVisibility: "eye"
         case .behaviorWindowsKeyboard: "keyboard"
         case .behaviorTaskbar: "rectangle.grid.1x2"
+        case .behaviorStacking: "square.3.layers.3d"
         case .layouts: "square.grid.3x3.topleft.filled"
         case .layoutRules: "clock.arrow.trianglehead.counterclockwise.rotate.90"
         case .behaviorAppTileClick: "cursorarrow.click"
@@ -125,6 +128,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorVisibility: .cyan
         case .behaviorWindowsKeyboard: .indigo
         case .behaviorTaskbar: .teal
+        case .behaviorStacking: .brown
         case .layouts: .pink
         case .layoutRules: .purple
         case .behaviorAppTileClick: .mint
@@ -170,6 +174,7 @@ private let settingsSections: [SettingsSection] = [
         .behaviorVisibility,
         .behaviorWindowsKeyboard,
         .behaviorTaskbar,
+        .behaviorStacking,
         .layouts,
         .layoutRules,
         .behaviorAppTileClick,
@@ -390,6 +395,8 @@ private struct SettingsDetailView: View {
             BehaviorSettingsView(subsection: .windowsKeyboard)
         case .behaviorTaskbar:
             BehaviorSettingsView(subsection: .taskbar)
+        case .behaviorStacking:
+            BehaviorSettingsView(subsection: .stacking)
         case .layouts:
             LayoutsSettingsView()
         case .layoutRules:

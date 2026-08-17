@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct BehaviorSettingsView: View {
     enum Subsection {
@@ -12,6 +13,7 @@ struct BehaviorSettingsView: View {
         case visibility
         case windowsKeyboard
         case taskbar
+        case stacking
         case appTileClick
         case widgets
         case launch
@@ -51,6 +53,8 @@ struct BehaviorSettingsView: View {
                 windowsKeyboardSection
             case .taskbar:
                 taskbarSection
+            case .stacking:
+                stackingSection
             case .appTileClick:
                 appTileClickSection
             case .widgets:
@@ -270,6 +274,64 @@ struct BehaviorSettingsView: View {
         } header: {
             Text("Taskbar")
         }
+    }
+
+    @ViewBuilder
+    private var stackingSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Stay Behind These Apps")
+                    .font(.headline)
+
+                Text("The dock normally floats above every window. Apps listed here get the screen edge to themselves: while one is frontmost the dock drops behind ordinary windows, then returns when you switch away. Meant for full-screen remote desktop and virtual machine clients, which draw their own taskbar exactly where the dock sits.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ForEach(preferences.dockStaysBehindBundleIDs, id: \.self) { bundleID in
+                    HStack {
+                        Text(displayName(for: bundleID))
+                        Text(bundleID)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Remove", role: .destructive) {
+                            preferences.dockStaysBehindBundleIDs.removeAll { $0 == bundleID }
+                        }
+                    }
+                }
+
+                HStack {
+                    Button("Add App…") { addStayBehindApp() }
+                    Spacer()
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Stacking")
+        }
+    }
+
+    /// Friendly name for a bundle id, falling back to the id when the app is
+    /// not installed — a list of raw identifiers is unreadable.
+    private func displayName(for bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return bundleID
+        }
+        return FileManager.default.displayName(atPath: url.path)
+    }
+
+    private func addStayBehindApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add"
+        guard panel.runModal() == .OK,
+              let url = panel.url,
+              let bundle = Bundle(url: url),
+              let identifier = bundle.bundleIdentifier,
+              !preferences.dockStaysBehindBundleIDs.contains(identifier) else { return }
+        preferences.dockStaysBehindBundleIDs.append(identifier)
     }
 
     @ViewBuilder

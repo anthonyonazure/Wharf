@@ -1774,6 +1774,18 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// Wharf: apps the dock should sit BEHIND rather than float over.
+    ///
+    /// Full-screen remote-desktop and virtualization clients draw their own
+    /// bottom bar exactly where this dock sits, so a dock pinned at menu-bar
+    /// level covers the guest's taskbar.
+    var dockStaysBehindBundleIDs: [String] {
+        didSet {
+            guard dockStaysBehindBundleIDs != oldValue else { return }
+            defaults.set(dockStaysBehindBundleIDs, forKey: Keys.dockStaysBehindBundleIDs)
+        }
+    }
+
     /// Wharf: paint track position along the bottom of a media app's tile.
     var showsMediaProgressOnTiles: Bool {
         didSet {
@@ -3677,6 +3689,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let dockRowCount = "wharf.dockRowCount"
         static let collapsesToButton = "wharf.collapsesToButton"
         static let showsMediaProgressOnTiles = "wharf.showsMediaProgressOnTiles"
+        static let dockStaysBehindBundleIDs = "wharf.dockStaysBehindBundleIDs"
         static let windowsKeyboardMode = "wharf.windowsKeyboardMode"
         static let windowsKeyboardSnipShortcut = "wharf.windowsKeyboardSnipShortcut"
         static let windowsKeyboardExcludedBundleIDs = "wharf.windowsKeyboardExcludedBundleIDs"
@@ -3795,6 +3808,20 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let dockRowCount = 1
         static let collapsesToButton = false
         static let showsMediaProgressOnTiles = true
+        /// Remote-desktop and virtualization clients, which own the whole
+        /// screen and draw a taskbar along the bottom edge.
+        static let dockStaysBehindBundleIDs: [String] = [
+            "com.microsoft.rdc.macos",          // Windows App / Microsoft Remote Desktop
+            "com.microsoft.rdc.osx.beta",
+            "com.citrix.receiver.nomas",           // Citrix Workspace
+            "com.citrix.receiver.icaviewer.mac",
+            "com.vmware.horizon",
+            "com.parallels.desktop.console",
+            "com.teamviewer.TeamViewer",
+            "com.anydesk.anydeskmac",
+            "org.virtualbox.app.VirtualBoxVM",
+            "com.utmapp.UTM"
+        ]
         static let windowsKeyboardMode = false
         static let windowsKeyboardSnipShortcut = true
         /// Terminals, where Control keeps its Unix meaning.
@@ -3946,6 +3973,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         let storedDockRowCount = defaults.object(forKey: Keys.dockRowCount) as? Int
         let storedCollapsesToButton = defaults.object(forKey: Keys.collapsesToButton) as? Bool
         let storedShowsMediaProgressOnTiles = defaults.object(forKey: Keys.showsMediaProgressOnTiles) as? Bool
+        let storedDockStaysBehindBundleIDs = defaults.object(forKey: Keys.dockStaysBehindBundleIDs) as? [String]
         let storedWindowsKeyboardMode = defaults.object(forKey: Keys.windowsKeyboardMode) as? Bool
         let storedWindowsKeyboardSnipShortcut = defaults.object(forKey: Keys.windowsKeyboardSnipShortcut) as? Bool
         let storedWindowsKeyboardExcludedBundleIDs = defaults.object(forKey: Keys.windowsKeyboardExcludedBundleIDs) as? [String]
@@ -4081,6 +4109,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.dockRowCount = storedDockRowCount ?? DefaultValues.dockRowCount
         self.collapsesToButton = storedCollapsesToButton ?? DefaultValues.collapsesToButton
         self.showsMediaProgressOnTiles = storedShowsMediaProgressOnTiles ?? DefaultValues.showsMediaProgressOnTiles
+        self.dockStaysBehindBundleIDs = storedDockStaysBehindBundleIDs ?? DefaultValues.dockStaysBehindBundleIDs
         self.windowsKeyboardMode = storedWindowsKeyboardMode ?? DefaultValues.windowsKeyboardMode
         self.windowsKeyboardSnipShortcut = storedWindowsKeyboardSnipShortcut ?? DefaultValues.windowsKeyboardSnipShortcut
         self.windowsKeyboardExcludedBundleIDs = storedWindowsKeyboardExcludedBundleIDs ?? DefaultValues.windowsKeyboardExcludedBundleIDs
@@ -4363,6 +4392,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         dockRowCount = DefaultValues.dockRowCount
         collapsesToButton = DefaultValues.collapsesToButton
         showsMediaProgressOnTiles = DefaultValues.showsMediaProgressOnTiles
+        dockStaysBehindBundleIDs = DefaultValues.dockStaysBehindBundleIDs
         windowsKeyboardMode = DefaultValues.windowsKeyboardMode
         windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
         windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs
@@ -4431,6 +4461,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         dockRowCount = DefaultValues.dockRowCount
         collapsesToButton = DefaultValues.collapsesToButton
         showsMediaProgressOnTiles = DefaultValues.showsMediaProgressOnTiles
+        dockStaysBehindBundleIDs = DefaultValues.dockStaysBehindBundleIDs
         windowsKeyboardMode = DefaultValues.windowsKeyboardMode
         windowsKeyboardSnipShortcut = DefaultValues.windowsKeyboardSnipShortcut
         windowsKeyboardExcludedBundleIDs = DefaultValues.windowsKeyboardExcludedBundleIDs

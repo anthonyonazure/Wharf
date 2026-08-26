@@ -1405,7 +1405,15 @@ struct TileContainerView: View {
         // Non-zero minimum so a pure click (no motion) never claims the
         // gesture. On Sequoia, minimumDistance: 0 caused mouse-down to
         // immediately start a drag, eating right-click and tap events.
-        DragGesture(minimumDistance: 4, coordinateSpace: .global)
+        //
+        // Wharf: 4 points was still inside ordinary click jitter. A mouse
+        // drifts a few points between press and release, the parent drag
+        // recognized, and SwiftUI cancelled the tile's own tap: the click
+        // did nothing at all. 10 points matches AppKit's own drag slop
+        // (NSEvent's pressure/drag threshold used by Finder and the Dock),
+        // which is the distance a deliberate drag clears immediately and a
+        // click never reaches.
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
             .onChanged { value in
                 updateDrag(for: tile, value: value)
             }

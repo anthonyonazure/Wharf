@@ -159,3 +159,49 @@ mode is on but Accessibility is missing.
 **Settings copy for the display picker was rewritten.** Upstream's text asserts
 "Docky uses a single main window", which stopped being true. Conservative option
 taken: reword rather than restructure the settings layout.
+
+## Clicks and permissions, 2026-08-26
+
+Two reports: the dock did not always accept clicks, and macOS kept asking for
+screen-recording permission on every snip. Three distinct causes.
+
+### 1. Signing: the app was ad-hoc, so every rebuild reset its permissions
+
+`DEVELOPMENT_TEAM` was still upstream Docky's `2KC3797KP9`, a team with no
+certificate on this machine, so every build silently fell back to an ad-hoc,
+linker-signed bundle: no team identifier, no sealed resources, no designated
+requirement. TCC stores a code requirement beside each grant. With no designated
+requirement it can only store the executable's cdhash, so the grant matched one
+build and nothing after it, while System Settings still drew the toggle as on.
+
+Confirmed against the live database rather than inferred. `csreq` for
+`kTCCServiceScreenCapture` was the cdhash of a binary that no longer existed,
+which is why capture prompted every time, and `kTCCServiceAccessibility` happened
+to still match, which is why keyboard mode worked and capture did not.
+
+Fixed by setting `DEVELOPMENT_TEAM = 4P54C2K45P` (the OU of the installed Apple
+Development certificate, not the `NY74J2RQ57` shown in its common name). The
+bundle now signs with hardened runtime and a designated requirement of
+identifier + Apple anchor + leaf certificate, so grants survive every rebuild
+until the certificate itself rotates (2027-05-04).
+
+Old cdhash-pinned rows had to be cleared once with `tccutil reset` so TCC would
+record the new requirement.
+
+### 2. Reorder drag stole ordinary clicks
+
+`TileContainerView.reorderGesture` used `DragGesture(minimumDistance: 4)`
+alongside the tile's own `onTapGesture`. Four points is inside ordinary click
+jitter: a mouse that drifts five points between press and release recognizes the
+drag, SwiftUI cancels the tap, and the click does nothing at all. Raised to 10,
+which is AppKit's own drag slop.
+
+### 3. Stay-behind dropped every dock, not the one being covered
+
+The stacking rule for remote-desktop clients set the window level on whichever
+dock received `didActivateApplicationNotification`, which is all of them. Bringing
+a remote session forward on one display buried the docks on the other two
+underneath ordinary windows, where they were still drawn but no longer took
+clicks. `updateStackingForFrontmostApp` now takes the running application and
+only yields when that process actually has a window overlapping this dock's own
+screen.

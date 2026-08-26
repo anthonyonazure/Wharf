@@ -216,10 +216,19 @@ final class MainWindow: NSPanel {
     }
 
     /// Re-evaluates whether this dock should sit behind the frontmost app.
-    func updateStackingForFrontmostApp(_ bundleIdentifier: String?) {
-        let shouldStayBehind = bundleIdentifier.map {
+    ///
+    /// Wharf: the decision is per dock, not per app. With a dock on every
+    /// screen, dropping all of them because a remote-desktop client came
+    /// forward on one display left the other docks buried under ordinary
+    /// windows, where they were still drawn but no longer took clicks. A
+    /// dock only yields when the app actually occupies its own screen.
+    func updateStackingForFrontmostApp(_ app: NSRunningApplication?) {
+        let isListed = app?.bundleIdentifier.map {
             DockyPreferences.shared.dockStaysBehindBundleIDs.contains($0)
         } ?? false
+
+        let occupiesThisScreen = app.map { appOccupiesTargetScreen(pid: $0.processIdentifier) } ?? false
+        let shouldStayBehind = isListed && occupiesThisScreen
 
         guard shouldStayBehind != staysBehindFrontmostApp else { return }
         staysBehindFrontmostApp = shouldStayBehind
@@ -227,6 +236,38 @@ final class MainWindow: NSPanel {
         // The overridden setter is a no-op, so push the new value through
         // NSWindow itself; otherwise the level is recomputed but never applied.
         super.level = level
+    }
+
+    /// True when the given process has an ordinary window overlapping this
+    /// dock's screen. Bounds and owner come back from the window server
+    /// without Screen Recording; only window titles are gated by it.
+    private func appOccupiesTargetScreen(pid: pid_t) -> Bool {
+        guard let screen = targetScreen(),
+              let primaryScreenHeight = NSScreen.screens.first?.frame.height,
+              let windows = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly, .excludeDesktopElements],
+                  kCGNullWindowID
+              ) as? [[String: Any]]
+        else { return false }
+
+        return windows.contains { info in
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let ownerPID = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  ownerPID == pid,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let cgBounds = CGRect(dictionaryRepresentation: boundsDict)
+            else { return false }
+
+            // CGWindow uses a flipped Y axis anchored at the primary display's
+            // top-left; convert before comparing against NSScreen space.
+            let nsBounds = CGRect(
+                x: cgBounds.minX,
+                y: primaryScreenHeight - cgBounds.maxY,
+                width: cgBounds.width,
+                height: cgBounds.height
+            )
+            return nsBounds.intersects(screen.frame)
+        }
     }
 
     private enum VisibilityState {
@@ -587,7 +628,7 @@ final class MainWindow: NSPanel {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
                 let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-                self?.updateStackingForFrontmostApp(app?.bundleIdentifier)
+                self?.updateStackingForFrontmostApp(app)
                 self?.updateFullscreenStateAndApply(animated: true)
                 self?.scheduleFullscreenRecheck()
             }

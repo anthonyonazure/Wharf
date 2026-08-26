@@ -124,7 +124,7 @@ The core contract. If this section is shaky, nothing else matters.
 ## E. Drag, drop and reorder
 
 - **E1.** Drag a tile to a new position. It moves, and the new order survives a quit and relaunch.
-- **E2.** Press a tile, move it four to eight pixels, and release. The tile returns to its original place and, critically, the app does **not** launch and no window is raised. This is the other half of R1: the drag threshold must be low enough that a real drag works and high enough that a click is never eaten.
+- **E2.** Press a tile, move it about fifteen pixels, and release it back near where it started. The tile is treated as a drag: it does **not** launch and no window is raised. This is the other half of R1. R1 proves that movement under the threshold still counts as a click, E2 proves that movement over it still counts as a drag, and between them there must be no gap where a press does nothing at all. (Corrected 2026-08-26: this test originally said four to eight pixels, which contradicted R1. Measured threshold is ten.)
 - **E3.** Drag an app from Finder onto the dock. It is added as a tile at the drop position.
 - **E4.** Drag a tile off the dock. It is removed and there is a way to undo it.
 - **E5.** Drag a file onto an app tile. The app opens that file.

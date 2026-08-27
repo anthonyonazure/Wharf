@@ -34,9 +34,19 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
     private var dismissAnimationTask: Task<Void, Never>?
 
     private init() {
-        let window = NSWindow(
+        // Wharf: an NSPanel with `.nonactivatingPanel`, matching the dock
+        // window itself and every other overlay here.
+        //
+        // As a plain NSWindow this could take key status and bring Wharf
+        // forward. That matters because a tile click is frontmost-tracked:
+        // clicking a tile acts on whichever app was in front, and if merely
+        // hovering a tile long enough to open its preview made Wharf the
+        // front app, the click that followed was reasoned about against the
+        // wrong app. Symptom: hover a tile, pause, click, and nothing
+        // happens until the second or third click.
+        let window = NonActivatingPreviewPanel(
             contentRect: .zero,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -754,4 +764,12 @@ private struct WindowPreviewListRow: View {
         ])
         return actions
     }
+}
+
+/// A preview panel that never takes key or main status, so showing one cannot
+/// move Wharf to the front and cannot take keyboard focus from the app the
+/// user is actually working in.
+final class NonActivatingPreviewPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }

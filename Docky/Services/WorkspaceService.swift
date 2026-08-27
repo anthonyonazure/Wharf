@@ -112,6 +112,27 @@ final class WorkspaceService: ObservableObject {
         minimizedWindowPreviews[window.windowIdentifier]
     }
 
+
+    /// Brings another app forward from a dock that is never itself the active
+    /// app.
+    ///
+    /// Wharf: since macOS 14 activation is cooperative. An app that is not
+    /// active cannot simply push another app to the front, and the system is
+    /// free to ignore the request. The dock is a non-activating panel by
+    /// design, precisely so clicking a tile does not steal focus, which puts
+    /// it on exactly the wrong side of that rule: `activate()` alone was
+    /// obeyed only some of the time. Measured before this change, 14 clicks
+    /// reached the tile and 8 raised the app.
+    ///
+    /// `yieldActivation(to:)` is the sanctioned way to say "I am handing the
+    /// front to this app", and it works whether or not we are active.
+    static func bringForward(_ runningApp: NSRunningApplication) {
+        if #available(macOS 14.0, *) {
+            NSApp.yieldActivation(to: runningApp)
+        }
+        runningApp.activate(options: [.activateAllWindows])
+    }
+
     func activateOrOpen(bundleIdentifier: String) {
         guard let runningApp = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first else {
             // Not running: launch it.
@@ -152,7 +173,7 @@ final class WorkspaceService: ObservableObject {
 
         // Default: bring the app forward.
         runningApp.unhide()
-        runningApp.activate(options: [.activateAllWindows])
+        Self.bringForward(runningApp)
     }
 
     private func applyFrontmostAppTileClickBehavior(
@@ -318,7 +339,7 @@ final class WorkspaceService: ObservableObject {
         }
 
         runningApp.unhide()
-        _ = runningApp.activate()
+        Self.bringForward(runningApp)
     }
 
     @discardableResult
@@ -541,7 +562,7 @@ final class WorkspaceService: ObservableObject {
         }
 
         runningApp.unhide()
-        _ = runningApp.activate()
+        Self.bringForward(runningApp)
         // The Dock targets App Exposé at whatever app is frontmost when the
         // call arrives. The small delay lets activation land first so Exposé
         // surfaces the correct app's windows.

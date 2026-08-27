@@ -122,3 +122,68 @@ whose 20-second timer must land inside the target minute.
   accurate; its second invented 13 findings citing symbols that do not exist and
   line numbers past end of file. Verify every finding against the real file before
   acting on it.
+
+---
+
+## Checkpoint 2026-08-27: the dock click
+
+Everything below was measured on Anthony's live three-display desk, not reasoned about.
+
+### Fixed and verified
+
+- **Signing.** `DEVELOPMENT_TEAM` was upstream Docky's, so builds fell back to ad-hoc
+  and macOS pinned permission grants to the binary's hash, losing them on every
+  rebuild. Team is now the certificate's real OU (`4P54C2K45P`). Grants survive.
+- **Idle CPU: 21.6% of a core to about 0.3%.** One tile pulsed with a `repeatForever`
+  animation, and a SwiftUI animation that never ends redraws every dock at the display
+  refresh rate forever. The flag that started it was set at launch for every app that
+  already had a badge, and only cleared on activation, which for System Settings never
+  happens. Three fixes: seed the badge map on first scan, expire attention after six
+  seconds, bound the pulse.
+- **Two accessibility pollers** that ran every two seconds forever now batch, back off,
+  and stop while the screen is locked. Real but not the CPU cause.
+- **Hover preview** was a plain NSWindow and could bring Wharf forward, which broke the
+  frontmost-tracked tile click. Now a non-activating panel.
+- **Activation** used `NSRunningApplication.activate()`, which macOS 14+ may ignore when
+  the caller is never the active app. Now yields activation first. Of clicks that
+  reached the handler, raises went from 8/14 to 11/13.
+
+### Still broken: the click
+
+Two layers, both pointing at the container's reorder `DragGesture`.
+
+1. **The mouse-up is sometimes never delivered.** Nineteen HID-posted presses produced
+   seventeen releases. Nothing built on press-and-release survives this. Prime suspect:
+   the drag gesture entering an event-tracking loop that consumes the release.
+2. **The tap gesture drops about half of the releases that do arrive**, losing an
+   arbitration with that same drag. Traced: every click reached the dock window, the
+   correct tile was identified every time, the handler ran half the time.
+
+Investigate the reorder gesture first. It is one cause, not two.
+
+### Approaches already tried and reverted, with the reason
+
+- Raising the reorder threshold (4 to 10): no effect on delivery.
+- A zero-distance drag gesture on the tile: loses the same arbitration.
+- Taking the click from `TilePressService`'s AppKit monitor, identified by hover:
+  delivery rose to ~3/4, but hover lags the pointer, so clicking while moving acted on
+  the icon just passed. A wrong app is worse than no app.
+- The same, narrowed to only the 5-to-10 point band: inherits the hover problem.
+- Hit-testing the press against the container's published tile frames: **this is the
+  right answer.** The frames arrive correctly (33 per dock window, window coordinates,
+  origin top-left) and the press converts cleanly, but matching was not stable across
+  runs. Finish this.
+
+### Traps in measuring this
+
+- **`cliclick` loses events against this app.** Post at the HID tap point with CGEvent
+  instead. `clicker.swift` and `movingclick.swift` in the session scratchpad do it.
+  The repo already said this for keyboard input; it applies to the mouse too.
+- **Tile coordinates drift** whenever dock contents change, and clicking a tile edge is
+  unreliable. Re-derive the centre from a fresh screenshot every run.
+- **Never test on the Finder tile**: it opens a folder popover on hover that eats the
+  next click.
+- **Take tile identity from the app's own hover log, never from the icon.** The test
+  dock had two Firefox tiles that render identically, one pinned and one a folder child.
+- Verify the instrument before trusting a result. Most of 2026-08-27 was spent acting on
+  numbers from a rig that was wrong in four separate ways.

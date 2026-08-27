@@ -31,7 +31,16 @@ final class DockBadgeService: ObservableObject {
     /// etc.) arrive at unpredictable times and the Dock itself updates
     /// asynchronously, so polling is the pragmatic approach. The read is
     /// cheap (a few AX attribute copies per dock item).
-    private let pollInterval: TimeInterval = 2
+    // Wharf: this walked the system Dock's whole accessibility tree on the
+    // main thread every two seconds. Roughly two cross-process calls per dock
+    // item, forever, to read numbers that change a few times an hour. The walk
+    // now runs off the main thread and slows down while nothing is changing.
+    private let minimumInterval: TimeInterval = 2
+    private let maximumInterval: TimeInterval = 15
+    private var currentInterval: TimeInterval = 2
+    private let walkQueue = DispatchQueue(label: "wharf.dock-badge.walk", qos: .utility)
+    private var isWalking = false
+    private var cancellables: Set<AnyCancellable> = []
 
     private var timer: Timer?
     /// Caches AXURL path -> bundle id so we don't rebuild a `Bundle` for
@@ -47,11 +56,37 @@ final class DockBadgeService: ObservableObject {
     func start() {
         guard timer == nil else { return }
         refresh()
-        let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+        scheduleNext()
+
+        // A badge that matters almost always arrives with an app doing
+        // something, so treat any launch, quit or switch as a reason to look
+        // again promptly instead of waiting out a stretched interval.
+        let center = NSWorkspace.shared.notificationCenter
+        for note in [NSWorkspace.didLaunchApplicationNotification,
+                     NSWorkspace.didTerminateApplicationNotification,
+                     NSWorkspace.didActivateApplicationNotification] {
+            center.publisher(for: note)
+                .sink { [weak self] _ in self?.quicken() }
+                .store(in: &cancellables)
         }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+    }
+
+    private func scheduleNext() {
+        timer?.invalidate()
+        let next = Timer(timeInterval: currentInterval, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refresh()
+                self?.scheduleNext()
+            }
+        }
+        RunLoop.main.add(next, forMode: .common)
+        timer = next
+    }
+
+    private func quicken() {
+        guard currentInterval != minimumInterval else { return }
+        currentInterval = minimumInterval
+        scheduleNext()
     }
 
     func stop() {
@@ -66,16 +101,50 @@ final class DockBadgeService: ObservableObject {
             if !badgesByBundleID.isEmpty { badgesByBundleID = [:] }
             return
         }
+        guard !Self.screenIsLocked() else { return }
+        guard !isWalking else { return }
         guard let dock = dockApplicationElement() else { return }
+        isWalking = true
 
+        // The walk is nothing but accessibility reads, and every one of them
+        // is a blocking trip into the Dock's process. Off the main thread it
+        // cannot stutter the tiles it is feeding.
+        walkQueue.async { [weak self] in
+            guard let self else { return }
+            var scanned: [String: String] = [:]
+            for item in self.dockItems(in: dock) {
+                guard let badge = self.trimmedBadge(from: item),
+                      let url = self.copyAttribute(item, kAXURLAttribute) as? URL else { continue }
+                scanned[url.path] = badge
+            }
+            Task { @MainActor in
+                self.isWalking = false
+                self.apply(scannedByPath: scanned)
+            }
+        }
+    }
+
+    /// True while the screen is locked. Nothing is drawn then, so nothing
+    /// needs to be read.
+    private static func screenIsLocked() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        if let locked = session["CGSSessionScreenIsLocked"] as? Bool, locked { return true }
+        return false
+    }
+
+    private func apply(scannedByPath: [String: String]) {
         var newBadges: [String: String] = [:]
-        for item in dockItems(in: dock) {
-            guard let badge = trimmedBadge(from: item),
-                  let bundleID = bundleIdentifier(for: item) else { continue }
+        for (path, badge) in scannedByPath {
+            guard let bundleID = bundleIdentifier(forPath: path) else { continue }
             newBadges[bundleID] = badge
         }
 
+        if newBadges == badgesByBundleID {
+            currentInterval = min(currentInterval * 1.5, maximumInterval)
+        }
+
         if newBadges != badgesByBundleID {
+            currentInterval = minimumInterval
             // Wharf: a badge that appears or grows on an app you are not
             // looking at is the closest public signal to "this app wants your
             // attention". macOS exposes no API for another process calling
@@ -118,10 +187,9 @@ final class DockBadgeService: ObservableObject {
         return []
     }
 
-    private func bundleIdentifier(for item: AXUIElement) -> String? {
-        guard let url = copyAttribute(item, kAXURLAttribute) as? URL else { return nil }
-        let path = url.path
+    private func bundleIdentifier(forPath path: String) -> String? {
         if let cached = bundleIDByPath[path] { return cached.isEmpty ? nil : cached }
+        let url = URL(fileURLWithPath: path)
         let bundleID = Bundle(url: url)?.bundleIdentifier
         bundleIDByPath[path] = bundleID ?? ""  // cache misses too, to avoid re-probing
         return bundleID

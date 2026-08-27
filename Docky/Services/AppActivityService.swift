@@ -43,6 +43,30 @@ final class AppActivityService: ObservableObject {
     /// single slow answer doesn't flag a healthy app.
     private let unresponsiveThreshold: TimeInterval = 3
 
+    // MARK: - Poll pacing
+    //
+    // Wharf: this poll used to ask every running app, every two seconds,
+    // forever. Each question is a synchronous trip into another process, so a
+    // desk with thirty apps open paid fifteen cross-process calls a second to
+    // learn nothing, and woke every one of those apps to do it. Measured at
+    // 21.6% of a core with nobody touching the machine.
+    //
+    // Two changes, both standard: ask a few apps per tick instead of all of
+    // them, and slow down while the answer keeps coming back the same.
+
+    /// How many apps to probe per tick. A hang is still caught, just over a
+    /// few ticks rather than one, which is well inside human patience for a
+    /// "not responding" label appearing.
+    private let probeBatchSize = 5
+
+    /// Where the last batch stopped, so probing walks the app list round robin
+    /// instead of restarting at the top and never reaching the tail.
+    private var probeCursor = 0
+
+    private let minimumInterval: TimeInterval = 2
+    private let maximumInterval: TimeInterval = 12
+    private var currentInterval: TimeInterval = 2
+
     private init() {}
 
     func start() {
@@ -50,7 +74,10 @@ final class AppActivityService: ObservableObject {
 
         center.publisher(for: NSWorkspace.willLaunchApplicationNotification)
             .compactMap(Self.bundleID)
-            .sink { [weak self] id in self?.launching.insert(id) }
+            .sink { [weak self] id in
+                self?.launching.insert(id)
+                self?.quickenPolling()
+            }
             .store(in: &cancellables)
 
         // `didLaunch` fires when the process exists; an app is still bouncing
@@ -58,7 +85,10 @@ final class AppActivityService: ObservableObject {
         // that never goes away for apps that never set the flag.
         center.publisher(for: NSWorkspace.didLaunchApplicationNotification)
             .compactMap(Self.bundleID)
-            .sink { [weak self] id in self?.scheduleLaunchClear(for: id) }
+            .sink { [weak self] id in
+                self?.scheduleLaunchClear(for: id)
+                self?.quickenPolling()
+            }
             .store(in: &cancellables)
 
         center.publisher(for: NSWorkspace.didTerminateApplicationNotification)
@@ -67,6 +97,7 @@ final class AppActivityService: ObservableObject {
                 self?.launching.remove(id)
                 self?.attentionRequested.remove(id)
                 self?.unresponsive.remove(id)
+                self?.quickenPolling()
             }
             .store(in: &cancellables)
 
@@ -74,7 +105,10 @@ final class AppActivityService: ObservableObject {
         // this that has a real notification.
         center.publisher(for: NSWorkspace.didActivateApplicationNotification)
             .compactMap(Self.bundleID)
-            .sink { [weak self] id in self?.attentionRequested.remove(id) }
+            .sink { [weak self] id in
+                self?.attentionRequested.remove(id)
+                self?.quickenPolling()
+            }
             .store(in: &cancellables)
 
         startUnresponsivePolling()
@@ -105,11 +139,46 @@ final class AppActivityService: ObservableObject {
     // MARK: - Unresponsive
 
     private func startUnresponsivePolling() {
-        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshUnresponsive() }
+        scheduleNextPoll()
+    }
+
+    /// Reschedules itself each time rather than repeating, so the interval can
+    /// stretch while nothing is changing and snap back the moment it does.
+    private func scheduleNextPoll() {
+        pollTimer?.invalidate()
+        let timer = Timer(timeInterval: currentInterval, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshUnresponsive()
+                self?.scheduleNextPoll()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
+    }
+
+    /// Called when something happened that could change an app's state, so the
+    /// next answer matters again.
+    private func quickenPolling() {
+        guard currentInterval != minimumInterval else { return }
+        currentInterval = minimumInterval
+        scheduleNextPoll()
+    }
+
+    private func slowPollingIfSettled(changed: Bool) {
+        if changed {
+            currentInterval = minimumInterval
+        } else {
+            currentInterval = min(currentInterval * 1.5, maximumInterval)
+        }
+    }
+
+    /// True while the screen is locked or the session is not on the console.
+    /// Nothing is drawn then, so nothing needs to be asked.
+    private static func screenIsLocked() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        if let locked = session["CGSSessionScreenIsLocked"] as? Bool, locked { return true }
+        if let onConsole = session["kCGSSessionOnConsoleKey"] as? Bool, !onConsole { return true }
+        return false
     }
 
     private func refreshUnresponsive() {
@@ -121,7 +190,9 @@ final class AppActivityService: ObservableObject {
         // up to three seconds per beachballing app, every two seconds — the
         // dock would hang precisely when an app hangs, which is when the user
         // most needs it to work.
-        let candidates: [(bundleID: String, pid: pid_t, finishedLaunching: Bool)] =
+        guard !Self.screenIsLocked() else { return }
+
+        let running: [(bundleID: String, pid: pid_t, finishedLaunching: Bool)] =
             NSWorkspace.shared.runningApplications
                 .filter { $0.activationPolicy == .regular && !$0.isTerminated }
                 .compactMap { app in
@@ -129,17 +200,28 @@ final class AppActivityService: ObservableObject {
                     return (bundleID, app.processIdentifier, app.isFinishedLaunching)
                 }
 
+        guard !running.isEmpty else { return }
         guard !isProbing else { return }
         isProbing = true
 
+        // Probe a slice, starting where the last tick stopped. Everything
+        // outside the slice keeps whatever answer it last gave, so a hung app
+        // stays marked hung until its turn comes round again.
+        if probeCursor >= running.count { probeCursor = 0 }
+        let start = probeCursor
+        let count = min(probeBatchSize, running.count)
+        let batch = (0..<count).map { running[(start + $0) % running.count] }
+        probeCursor = (start + count) % running.count
+
+        let carriedOver = unresponsive.subtracting(batch.map(\.bundleID))
         let currentlyLaunching = launching
         let threshold = unresponsiveThreshold
 
         probeQueue.async { [weak self] in
-            var hung: Set<String> = []
+            var hung: Set<String> = carriedOver
             var stillLaunching: Set<String> = []
 
-            for candidate in candidates {
+            for candidate in batch {
                 if Self.isUnresponsive(pid: candidate.pid, threshold: threshold) {
                     hung.insert(candidate.bundleID)
                 }
@@ -154,8 +236,12 @@ final class AppActivityService: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.isProbing = false
-                if self.launching != stillLaunching { self.launching = stillLaunching }
-                if self.unresponsive != hung { self.unresponsive = hung }
+                let launchingOutsideBatch = self.launching.subtracting(batch.map(\.bundleID))
+                let mergedLaunching = stillLaunching.union(launchingOutsideBatch)
+                var changed = false
+                if self.launching != mergedLaunching { self.launching = mergedLaunching; changed = true }
+                if self.unresponsive != hung { self.unresponsive = hung; changed = true }
+                self.slowPollingIfSettled(changed: changed)
             }
         }
     }

@@ -54,11 +54,6 @@ struct TileView: View {
     @ObservedObject private var dockBadges = DockBadgeService.shared
 
     private static let finderBundleIdentifier = "com.apple.finder"
-    /// How far the pointer may travel between press and release and still count
-    /// as a click. Matches the reorder drag's own threshold in
-    /// `TileContainerView.reorderGesture`, so there is no gap between them where
-    /// a press is neither a click nor a drag and simply does nothing.
-    private static let clickSlopSquared: CGFloat = 100
     private static let folderPopoverRetapGuardInterval: TimeInterval = 0.25
 
     init(
@@ -622,7 +617,13 @@ struct TileView: View {
             .scaleEffect(wantsAttention ? 1.12 : 1)
             .animation(
                 wantsAttention
-                    ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true)
+                    // Wharf: bounded, not `repeatForever`. The system Dock
+                    // bounces a fixed number of times and stops. An endless
+                    // pulse keeps SwiftUI redrawing every dock at the display
+                    // refresh rate for as long as the flag is set, and the
+                    // flag was set permanently, so the app burned 21% of a
+                    // core sitting idle.
+                    ? .easeInOut(duration: 0.45).repeatCount(8, autoreverses: true)
                     : .easeInOut(duration: 0.15),
                 value: wantsAttention
             )
@@ -668,26 +669,7 @@ struct TileView: View {
             }
             .contentShape(Rectangle())
             .onHover(perform: updateHoverState)
-            // Wharf: not `onTapGesture`. SwiftUI's tap cancels once the pointer
-            // moves about five points between press and release, which is
-            // inside ordinary hand jitter, so a click that drifted did nothing
-            // at all. Measured on a real desk: 0 points landed every time, 5
-            // points landed never, and 2 to 4 points was a coin flip.
-            //
-            // A zero-distance drag sees the press and the release and reports
-            // how far the pointer travelled, so the decision is ours: anything
-            // that stayed inside the reorder threshold was a click, however
-            // shaky the hand holding the mouse. `simultaneousGesture` keeps the
-            // parent's reorder drag alive alongside it.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onEnded { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        guard (dx * dx + dy * dy) < Self.clickSlopSquared else { return }
-                        handleTap()
-                    }
-            )
+            .onTapGesture(perform: handleTap)
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .global)
             } action: { newFrame in

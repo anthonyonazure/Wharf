@@ -5,7 +5,7 @@
 
 import Combine
 import CoreGraphics
-import Foundation
+import AppKit
 
 enum DockDividerPositionClass {
     case left

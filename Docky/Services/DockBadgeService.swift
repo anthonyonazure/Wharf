@@ -41,6 +41,7 @@ final class DockBadgeService: ObservableObject {
     private let walkQueue = DispatchQueue(label: "wharf.dock-badge.walk", qos: .utility)
     private var isWalking = false
     private var cancellables: Set<AnyCancellable> = []
+    private var hasSeededBadges = false
 
     private var timer: Timer?
     /// Caches AXURL path -> bundle id so we don't rebuild a `Bundle` for
@@ -141,6 +142,16 @@ final class DockBadgeService: ObservableObject {
 
         if newBadges == badgesByBundleID {
             currentInterval = min(currentInterval * 1.5, maximumInterval)
+        }
+
+        // Wharf: the first scan is a seed, not news. Every app that already
+        // had a badge when the dock launched looked like a badge that had just
+        // appeared, so a months-old "1" on System Settings was reported as an
+        // app demanding attention on every launch.
+        guard hasSeededBadges else {
+            hasSeededBadges = true
+            badgesByBundleID = newBadges
+            return
         }
 
         if newBadges != badgesByBundleID {

@@ -30,6 +30,11 @@ final class AppActivityService: ObservableObject {
     @Published private(set) var unresponsive: Set<String> = []
 
     private var cancellables: Set<AnyCancellable> = []
+
+    /// How long a tile keeps asking for attention before it gives up, matching
+    /// roughly how long the system Dock bounces.
+    private let attentionDuration: TimeInterval = 6
+    private var attentionExpiry: [String: DispatchWorkItem] = [:]
     private var pollTimer: Timer?
     private let probeQueue = DispatchQueue(label: "wharf.app-activity.probe", qos: .utility)
 
@@ -126,6 +131,19 @@ final class AppActivityService: ObservableObject {
     func noteAttentionRequested(bundleIdentifier: String) {
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier != bundleIdentifier else { return }
         attentionRequested.insert(bundleIdentifier)
+
+        // Wharf: attention is a moment, not a state. The system Dock bounces
+        // for a few seconds and stops, and it has to: an app whose badge has
+        // sat there since this morning is not asking for anything. Left
+        // permanent, the flag also kept a tile animating forever, which is
+        // paid for in CPU on every display.
+        attentionExpiry[bundleIdentifier]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.attentionRequested.remove(bundleIdentifier)
+            self?.attentionExpiry[bundleIdentifier] = nil
+        }
+        attentionExpiry[bundleIdentifier] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + attentionDuration, execute: work)
     }
 
     private func scheduleLaunchClear(for bundleID: String) {

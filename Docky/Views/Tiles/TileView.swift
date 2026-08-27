@@ -669,15 +669,7 @@ struct TileView: View {
             }
             .contentShape(Rectangle())
             .onHover(perform: updateHoverState)
-            // Wharf: not `onTapGesture`. It loses an arbitration with the
-            // container's reorder drag and drops about half of all clicks.
-            // `TilePressService` sees every press AppKit delivers, and knows
-            // which tile and which dock window it belongs to.
-            .onReceive(TilePressService.shared.taps) { tap in
-                guard tap.tileID == tile.id,
-                      tap.windowNumber == dock.window?.windowNumber else { return }
-                handleTap()
-            }
+            .onTapGesture(perform: handleTap)
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .global)
             } action: { newFrame in

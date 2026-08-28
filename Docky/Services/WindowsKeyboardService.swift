@@ -22,10 +22,54 @@ final class WindowsKeyboardService {
     private var runLoopSource: CFRunLoopSource?
     private var cancellables: Set<AnyCancellable> = []
 
+    /// The tap's own thread and runloop.
+    ///
+    /// Wharf: this used to run on the main runloop, which put every keystroke
+    /// on the system behind whatever the dock's UI happened to be doing. A
+    /// head-inserted tap has a deadline: take too long and macOS stops waiting
+    /// and drops the event. Typing "Thanks for the update." while the dock was
+    /// busy produced "Ks for the ute.p" — characters lost, one arriving late
+    /// and out of order. Measured: 8 of 8 sentences typed cleanly with the tap
+    /// off, and half of them mangled with it on.
+    ///
+    /// A dedicated thread means the input path no longer waits on drawing.
+    private var tapThread: Thread?
+    private var tapRunLoop: CFRunLoop?
+
+    /// Everything the callback needs, behind a lock, so it never reaches into
+    /// main-actor state from the tap thread.
+    private let stateLock = NSLock()
+    private var _snipEnabled = false
+    private var _excludedBundleIDs: Set<String> = []
+
     /// Frontmost bundle ID, cached. The exclusion check runs on every
     /// keystroke, and asking NSWorkspace each time would put a cross-process
     /// lookup in the input path.
-    private var frontmostBundleID: String?
+    private var _frontmostBundleID: String?
+
+    /// Written from the main thread, read from the tap thread.
+    private var frontmostBundleID: String? {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _frontmostBundleID }
+        set { stateLock.lock(); _frontmostBundleID = newValue; stateLock.unlock() }
+    }
+
+    private var snipEnabled: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _snipEnabled }
+        set { stateLock.lock(); _snipEnabled = newValue; stateLock.unlock() }
+    }
+
+    private var excludedBundleIDs: Set<String> {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _excludedBundleIDs }
+        set { stateLock.lock(); _excludedBundleIDs = newValue; stateLock.unlock() }
+    }
+
+    /// Pulls the preferences the callback depends on into the snapshot. Called
+    /// on the main thread whenever they change.
+    @MainActor
+    private func refreshSnapshot() {
+        snipEnabled = DockyPreferences.shared.windowsKeyboardSnipShortcut
+        excludedBundleIDs = Set(DockyPreferences.shared.windowsKeyboardExcludedBundleIDs)
+    }
 
     /// Guards against autorepeat launching a second region capture while the
     /// first crosshair is still up.
@@ -110,6 +154,7 @@ final class WindowsKeyboardService {
     }
 
     private func syncTapState() {
+        MainActor.assumeIsolated { refreshSnapshot() }
         guard DockyPreferences.shared.windowsKeyboardMode else {
             writeStatus("OFF: windowsKeyboardMode preference is false")
             removeTap()
@@ -181,22 +226,44 @@ final class WindowsKeyboardService {
         }
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-
         eventTap = tap
         runLoopSource = source
+
+        // Onto its own thread, not the main runloop. Keystrokes must not wait
+        // behind the dock's drawing; see the note on `tapThread`.
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            let runLoop = CFRunLoopGetCurrent()
+            self?.tapRunLoop = runLoop
+            CFRunLoopAddSource(runLoop, source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            ready.signal()
+            // A source alone does not keep a runloop alive; the port does.
+            while !Thread.current.isCancelled {
+                CFRunLoopRunInMode(.defaultMode, 1.0, false)
+            }
+        }
+        thread.name = "wharf.windows-keyboard.tap"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        tapThread = thread
+        _ = ready.wait(timeout: .now() + 2)
         writeStatus("ACTIVE: event tap installed; Control translates to Command, terminals excluded.")
     }
 
     private func removeTap() {
         if let eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
-            if let runLoopSource {
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+            if let runLoopSource, let tapRunLoop {
+                CFRunLoopRemoveSource(tapRunLoop, runLoopSource, .commonModes)
+                CFRunLoopWakeUp(tapRunLoop)
             }
             CFMachPortInvalidate(eventTap)
         }
+        tapThread?.cancel()
+        if let tapRunLoop { CFRunLoopWakeUp(tapRunLoop) }
+        tapThread = nil
+        tapRunLoop = nil
         eventTap = nil
         runLoopSource = nil
     }
@@ -230,7 +297,7 @@ final class WindowsKeyboardService {
             isSnipInFlight = false
         }
 
-        if DockyPreferences.shared.windowsKeyboardSnipShortcut,
+        if snipEnabled,
            shouldTranslateControl(),
            keyCode == Int64(kVK_ANSI_S),
            flags.contains(.maskCommand),
@@ -272,8 +339,10 @@ final class WindowsKeyboardService {
     /// Ctrl+C there is SIGINT; rewriting it would remove the ability to
     /// interrupt a running process.
     private func shouldTranslateControl() -> Bool {
-        guard let frontmostBundleID else { return true }
-        return !DockyPreferences.shared.windowsKeyboardExcludedBundleIDs.contains(frontmostBundleID)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let bundleID = _frontmostBundleID else { return true }
+        return !_excludedBundleIDs.contains(bundleID)
     }
 
     // MARK: - Snip

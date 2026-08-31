@@ -71,6 +71,23 @@ final class SystemDockVisibilityService {
     }
 
     func hide() {
+        // Wharf: hiding the system Dock and not coming back is how a Mac ends
+        // up with no dock at all.
+        //
+        // The hide is a change to the system's own preferences, so it outlives
+        // this process. Restoring it is this process's job, and after a restart
+        // that job never runs unless the app launches. Anthony rebooted, Wharf
+        // was not set to open at login, and he was left with nothing: no Wharf
+        // and a system Dock that had been told to stay hidden.
+        //
+        // So the two go together. Taking the user's Dock away is a promise to
+        // give it back, and the only way to keep that promise across a restart
+        // is to be there after one.
+        if !DockyPreferences.shared.opensAtLogin {
+            NSLog("[Wharf] Hiding the system Dock, so enabling Open at Login: otherwise a restart leaves this Mac with no dock at all.")
+            DockyPreferences.shared.opensAtLogin = true
+        }
+
         let snapshot = defaults.dictionary(forKey: Self.snapshotKey) ?? captureSnapshot()
         writeActiveState(snapshot: snapshot)
         startWatchdogIfNeeded()

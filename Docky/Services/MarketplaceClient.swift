@@ -99,11 +99,10 @@ final class MarketplaceClient {
             stagedBundle = destination
         }
 
-        // Strip quarantine + other xattrs. URLSession-downloaded files
-        // inherit `com.apple.quarantine`; under hardened runtime that
-        // causes Bundle.load() to fail with a misleading code-signing
-        // error even though the signature itself is valid.
-        Self.clearExtendedAttributes(at: stagedBundle)
+        // Wharf security fix (audit run-1): do NOT strip com.apple.quarantine
+        // from a downloaded bundle. With library validation re-enabled, an
+        // untrusted bundle must fail to load; preserving quarantine keeps
+        // Gatekeeper's provenance check in place as a second layer.
         return stagedBundle
     }
 
@@ -111,14 +110,6 @@ final class MarketplaceClient {
         let data = try Data(contentsOf: file, options: .mappedIfSafe)
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func clearExtendedAttributes(at url: URL) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-        process.arguments = ["-cr", url.path]
-        try? process.run()
-        process.waitUntilExit()
     }
 
     private func unzip(_ archive: URL, into directory: URL) throws {

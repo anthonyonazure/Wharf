@@ -103,19 +103,11 @@ final class ExternalWidgetLoader {
             try FileManager.default.removeItem(at: destination)
         }
         try FileManager.default.copyItem(at: sourceURL, to: destination)
-        // Defensive: clear quarantine xattrs that may have followed the
-        // bundle through Finder drag-from-Safari or other download paths.
-        Self.clearExtendedAttributes(at: destination)
+        // Wharf security fix (audit run-1): do NOT strip com.apple.quarantine
+        // here. Preserving it keeps Gatekeeper's provenance check on any
+        // bundle that arrived through a download path.
         log.info("Installed widget bundle to \(destination.path, privacy: .public)")
         return destination
-    }
-
-    private static func clearExtendedAttributes(at url: URL) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-        process.arguments = ["-cr", url.path]
-        try? process.run()
-        process.waitUntilExit()
     }
 
     /// Removes a `*.dockywidget` bundle from disk. The in-memory plugin

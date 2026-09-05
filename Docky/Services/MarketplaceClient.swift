@@ -2,10 +2,14 @@
 //  MarketplaceClient.swift
 //  Docky
 //
-//  Talks to getdocky.com/api/widgets — the marketplace manifest that
-//  lists community-submitted widget bundles available for install. The
-//  manifest itself is sourced from github.com/josejuanqm/docky-widgets;
-//  the website proxies it so Docky has a single, stable URL to call.
+//  Client for a widget marketplace manifest listing community-submitted
+//  bundles available for install.
+//
+//  Wharf currently has no manifest of its own, so `manifestURL` is nil and
+//  the Widget Store reports itself unavailable. This previously called
+//  upstream Docky's getdocky.com endpoint, which is not this fork's to
+//  trust: it chose which bundles users were offered and supplied the hash
+//  they were checked against (audit run-1).
 //
 
 import CryptoKit
@@ -29,7 +33,14 @@ struct MarketplaceWidget: Decodable, Identifiable, Equatable {
 final class MarketplaceClient {
     static let shared = MarketplaceClient()
 
-    private static let manifestURL = URL(string: "https://getdocky.com/api/widgets")!
+    /// Marketplace manifest. Nil until Wharf has one of its own.
+    ///
+    /// This pointed at upstream Docky's getdocky.com endpoint, a domain this
+    /// fork does not control. That endpoint chooses which bundles a user is
+    /// offered and also supplies the sha256 they are checked against, so the
+    /// hash is not an integrity guarantee against a hostile or lapsed host
+    /// (audit run-1).
+    private static let manifestURL: URL? = nil
 
     private let session: URLSession
     private var cached: [MarketplaceWidget]?
@@ -45,7 +56,10 @@ final class MarketplaceClient {
     /// for the lifetime of the process so flipping panes doesn't refetch.
     func fetch(forceRefresh: Bool = false) async throws -> [MarketplaceWidget] {
         if !forceRefresh, let cached { return cached }
-        let (data, response) = try await session.data(from: Self.manifestURL)
+        guard let manifestURL = Self.manifestURL else {
+            throw MarketplaceError.notConfigured
+        }
+        let (data, response) = try await session.data(from: manifestURL)
         try Self.validateHTTP(response)
         let widgets = try JSONDecoder().decode([MarketplaceWidget].self, from: data)
         cached = widgets
@@ -148,6 +162,7 @@ enum MarketplaceError: LocalizedError {
     case unzipFailed(Int)
     case bundleMissing
     case sha256Mismatch(expected: String, actual: String)
+    case notConfigured
 
     var errorDescription: String? {
         switch self {
@@ -159,6 +174,8 @@ enum MarketplaceError: LocalizedError {
             "The downloaded archive doesn't contain a .dockywidget bundle."
         case .sha256Mismatch(let expected, let actual):
             "Download SHA-256 mismatch.\nExpected: \(expected)\nGot: \(actual)"
+        case .notConfigured:
+            "The Widget Store isn't available. Wharf doesn't have its own widget catalog yet, and it no longer uses the upstream Docky one."
         }
     }
 }

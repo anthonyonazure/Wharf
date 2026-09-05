@@ -46,7 +46,7 @@ struct UpdatesSettingsView: View {
                         .disabled(!appUpdateService.automaticallyChecksForUpdates)
                     }
 
-                    Text("Wharf can periodically check getdocky.com for new signed releases. Sparkle stores these update preferences directly in your user defaults.")
+                    Text("Automatic updates are off. Wharf does not have its own update feed yet, and it no longer checks upstream Docky's. Sparkle stores these preferences directly in your user defaults.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

@@ -2,12 +2,13 @@
 //  WidgetsSettingsView.swift
 //  Docky
 //
-//  Widget Store pane: browse the marketplace (community-submitted
-//  widgets fetched from getdocky.com/api/widgets), install
-//  `*.dockywidget` bundles from disk, and manage what's already
-//  installed. Loading external widget bundles is a Pro feature; users
-//  on the free tier see a Pro notice instead of the marketplace and
-//  installed lists.
+//  Widget Store pane: browse the marketplace, install `*.dockywidget`
+//  bundles from disk, and manage what's already installed.
+//
+//  Two corrections from audit run-1. There is no Pro gate anywhere in this
+//  fork, despite what this comment used to claim, so nothing here is tier
+//  restricted. And the marketplace has no manifest to call, so it reports
+//  itself unavailable rather than querying upstream Docky.
 //
 
 import AppKit

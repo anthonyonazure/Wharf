@@ -3450,9 +3450,10 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
             return
         }
 
-        var overridesByBundleIdentifier = Dictionary(uniqueKeysWithValues: appIconOverrides.map {
-            ($0.bundleIdentifier, $0)
-        })
+        var overridesByBundleIdentifier = DataIntegrityReporter.makeDictionary(
+            appIconOverrides.map { ($0.bundleIdentifier, $0) },
+            site: "DockyPreferences.appIconOverrides"
+        )
         overridesByBundleIdentifier[bundleIdentifier] = AppIconOverride(
             bundleIdentifier: bundleIdentifier,
             iconPath: iconPath,
@@ -3499,9 +3500,10 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
             return
         }
 
-        var overridesByState = Dictionary(uniqueKeysWithValues: trashIconOverrides.map {
-            ($0.state, $0)
-        })
+        var overridesByState = DataIntegrityReporter.makeDictionary(
+            trashIconOverrides.map { ($0.state, $0) },
+            site: "DockyPreferences.trashIconOverrides"
+        )
         overridesByState[state] = TrashIconOverride(
             state: state,
             iconPath: iconPath,
@@ -4215,9 +4217,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.showsWindowSwitcherFocusPreview = storedShowsWindowSwitcherFocusPreview ?? DefaultValues.showsWindowSwitcherFocusPreview
         self.windowSwitcherPreviewMode = storedWindowSwitcherPreviewMode.flatMap(WindowSwitcherPreviewMode.init(rawValue:)) ?? DefaultValues.windowSwitcherPreviewMode
         self.windowSwitcherLayout = storedWindowSwitcherLayout.flatMap(WindowSwitcherLayout.init(rawValue:)) ?? DefaultValues.windowSwitcherLayout
-        self.switcherMinimizeKeyCode = storedSwitcherMinimizeKeyCode.map(UInt16.init) ?? DefaultValues.switcherMinimizeKeyCode
-        self.switcherCloseKeyCode = storedSwitcherCloseKeyCode.map(UInt16.init) ?? DefaultValues.switcherCloseKeyCode
-        self.switcherZoomKeyCode = storedSwitcherZoomKeyCode.map(UInt16.init) ?? DefaultValues.switcherZoomKeyCode
+        self.switcherMinimizeKeyCode = storedSwitcherMinimizeKeyCode.flatMap { UInt16(exactly: $0) } ?? DefaultValues.switcherMinimizeKeyCode
+        self.switcherCloseKeyCode = storedSwitcherCloseKeyCode.flatMap { UInt16(exactly: $0) } ?? DefaultValues.switcherCloseKeyCode
+        self.switcherZoomKeyCode = storedSwitcherZoomKeyCode.flatMap { UInt16(exactly: $0) } ?? DefaultValues.switcherZoomKeyCode
         self.pinnedAppBundleIdentifiers = initialPinnedAppBundleIdentifiers
         self.pinnedItems = initialPinnedItems
         self.widgetPlacements = Self.decodeWidgetPlacements(from: storedWidgetPlacements) ?? DefaultValues.widgetPlacements

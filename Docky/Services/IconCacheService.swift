@@ -10,6 +10,7 @@
 
 import AppKit
 import UniformTypeIdentifiers
+import ImageIO
 
 final class IconCacheService {
     static let shared = IconCacheService()
@@ -17,6 +18,7 @@ final class IconCacheService {
     private let cache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 256
+        cache.totalCostLimit = 64 * 1024 * 1024
         return cache
     }()
 
@@ -108,10 +110,20 @@ final class IconCacheService {
     func image(forImageFileURL url: URL) -> NSImage? {
         let key = "image:\(url.path)" as NSString
         if let cached = cache.object(forKey: key) { return cached }
-        guard let image = NSImage(contentsOf: url) else {
+        // Downsample to a bounded thumbnail so a pixel-bomb image cannot stall
+        // the main thread or hold gigabytes (run-2 finding). 512px covers the
+        // largest place a preview image is shown.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 512
+        ]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return nil
         }
-        cache.setObject(image, forKey: key)
+        let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        cache.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height)
         return image
     }
 

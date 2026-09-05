@@ -823,7 +823,14 @@ final class WindowRegistry: ObservableObject {
 
         var seen = Set<WindowID>()
         var result: [AppWindow] = []
-        for element in elements where role(of: element) == kAXWindowRole as String {
+        // Bound total enumeration time: a malicious AX server can stall each
+        // per-window read to just under the 1s per-message timeout, and there
+        // are up to 256 of them. Cap the aggregate so one app cannot freeze
+        // the dock for minutes (run-2 finding).
+        let enumerationDeadline = DispatchTime.now() + .milliseconds(750)
+        for element in elements {
+            if DispatchTime.now() > enumerationDeadline { break }
+            guard role(of: element) == kAXWindowRole as String else { continue }
             let id = WindowID(element: element)
             guard !seen.contains(id) else { continue }
             seen.insert(id)

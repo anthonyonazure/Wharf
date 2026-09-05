@@ -461,9 +461,11 @@ struct WeatherSnapshot: Equatable {
         forecast: [WeatherForecastDay] = []
     ) {
         self.locationName = locationName
-        self.temperature = temperature
-        self.highTemperature = highTemperature
-        self.lowTemperature = lowTemperature
+        // Clamp network-decoded temperatures to a sane finite range so no
+        // downstream Int(_:) conversion can trap on an out-of-range value.
+        self.temperature = temperature.isFinite ? min(max(temperature, -999), 999) : 0
+        self.highTemperature = highTemperature.flatMap { $0.isFinite ? min(max($0, -999), 999) : nil }
+        self.lowTemperature = lowTemperature.flatMap { $0.isFinite ? min(max($0, -999), 999) : nil }
         self.symbolName = symbolName
         self.conditionDescription = conditionDescription
         self.forecast = forecast

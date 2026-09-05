@@ -196,7 +196,7 @@ final class TileStore: ObservableObject {
         systemOtherTiles = others.enumerated().compactMap { index, entry in
             Self.parse(entry: entry, fallbackID: Self.fallbackTileID(for: entry, at: index, section: "persistent-others"))
         }
-        systemOtherTilesByID = Dictionary(uniqueKeysWithValues: systemOtherTiles.map { ($0.id, $0) })
+        systemOtherTilesByID = DataIntegrityReporter.makeDictionary(systemOtherTiles.map { ($0.id, $0) }, site: "TileStore.systemOtherTiles")
         if syncPreferencesFromSystemDock {
             refreshTrailingPreferencesIfNeeded()
         }
@@ -267,7 +267,7 @@ final class TileStore: ObservableObject {
             return
         }
 
-        let tilesByID = Dictionary(uniqueKeysWithValues: pinnedTiles.map { ($0.id, $0) })
+        let tilesByID = DataIntegrityReporter.makeDictionary(pinnedTiles.map { ($0.id, $0) }, site: "TileStore.pinnedReorder")
         let reorderedTiles = ids.compactMap { tilesByID[$0] }
         guard reorderedTiles.count == pinnedTiles.count else {
             TileStore.logger.warning("setPinnedTileOrder: reorderedTiles count mismatch: \(reorderedTiles.count) vs \(self.pinnedTiles.count)")
@@ -278,7 +278,7 @@ final class TileStore: ObservableObject {
         let idsSet = Set(ids)
         let filteredItems = preferences.pinnedItems.filter { idsSet.contains(Self.pinnedTileID(for: $0)) }
 
-        let itemsByID = Dictionary(uniqueKeysWithValues: filteredItems.map { (Self.pinnedTileID(for: $0), $0) })
+        let itemsByID = DataIntegrityReporter.makeDictionary(filteredItems.map { (Self.pinnedTileID(for: $0), $0) }, site: "TileStore.pinnedItemsReorder")
         let reorderedItems = ids.compactMap { itemsByID[$0] }
 
         TileStore.logger.info("setPinnedTileOrder: applying reorder, reorderedItems count=\(reorderedItems.count)")
@@ -951,7 +951,7 @@ final class TileStore: ObservableObject {
             return
         }
 
-        let itemsByID = Dictionary(uniqueKeysWithValues: preferences.trailingItems.map { (Self.trailingTileID(for: $0), $0) })
+        let itemsByID = DataIntegrityReporter.makeDictionary(preferences.trailingItems.map { (Self.trailingTileID(for: $0), $0) }, site: "TileStore.trailingReorder")
         let reorderedItems = ids.compactMap { itemsByID[$0] }
         guard reorderedItems.count == preferences.trailingItems.count else {
             return

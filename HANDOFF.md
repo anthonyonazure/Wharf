@@ -148,7 +148,7 @@ Everything below was measured on Anthony's live three-display desk, not reasoned
   the caller is never the active app. Now yields activation first. Of clicks that
   reached the handler, raises went from 8/14 to 11/13.
 
-### Still broken: the click
+### Fixed 2026-09-07: the click (needs a human pass)
 
 Two layers, both pointing at the container's reorder `DragGesture`.
 
@@ -159,7 +159,15 @@ Two layers, both pointing at the container's reorder `DragGesture`.
    arbitration with that same drag. Traced: every click reached the dock window, the
    correct tile was identified every time, the handler ran half the time.
 
-Investigate the reorder gesture first. It is one cause, not two.
+Both were the reorder gesture. Fixed by removing it, and the tap, from every
+tile that is a single click target: `TilePressService` now drives press, drag
+and release from one AppKit monitor and resolves the tile by hit-testing the
+press against the container's published frames, keyed by the hosting view (see
+implementation-notes.md #4 for why the earlier hit-test attempt was unstable).
+Builds and is installed. Not yet click-tested end to end: the synthetic-click
+rig cannot run while someone is using the mouse. Next step is a human pass over
+app tiles, folder tiles, reorder drag, drag-to-trash, and the widget tiles that
+deliberately kept their SwiftUI gestures.
 
 ### Approaches already tried and reverted, with the reason
 

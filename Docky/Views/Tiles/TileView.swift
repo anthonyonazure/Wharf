@@ -670,7 +670,18 @@ struct TileView: View {
             }
             .contentShape(Rectangle())
             .onHover(perform: updateHoverState)
-            .onTapGesture(perform: handleTap)
+            // Wharf: for tiles the click router owns, the tap is masked
+            // off and the action comes from TilePressService's AppKit
+            // monitor instead. A tap nested inside the container's
+            // reorder drag lost about half of its clicks to SwiftUI's
+            // gesture arbitration. Widget tiles keep the tap, because the
+            // controls inside them must still be able to claim it.
+            .gesture(
+                TapGesture().onEnded { handleTap() },
+                including: routesClicksThroughRouter ? .subviews : .all
+            )
+            .onAppear { registerClickWithRouter() }
+            .onChange(of: tile.id) { _ in registerClickWithRouter() }
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .global)
             } action: { newFrame in
@@ -695,6 +706,9 @@ struct TileView: View {
                 isContextMenuPresented = false
                 WindowPreviewWindowController.shared.dismiss(sourceTileID: tile.id)
                 TilePressService.shared.clearHover(tileID: tile.id)
+                if let surface = dock.window?.dockHostingView {
+                    TileClickRouter.shared.unregisterClick(tileID: tile.id, in: surface)
+                }
             }
             .onChange(of: isFolderPopoverPresented) { isPresented in
                 updateTooltipPresentation()
@@ -1503,6 +1517,17 @@ struct TileView: View {
         case .flexibleSpacer: return "flexibleSpacer"
         case .divider: return "divider"
         }
+    }
+
+    /// Whether this tile's click comes from the AppKit monitor rather
+    /// than from a SwiftUI tap.
+    private var routesClicksThroughRouter: Bool {
+        TileClickRouter.routesClicks(tile)
+    }
+
+    private func registerClickWithRouter() {
+        guard routesClicksThroughRouter, let surface = dock.window?.dockHostingView else { return }
+        TileClickRouter.shared.registerClick(tileID: tile.id, in: surface) { handleTap() }
     }
 
     private func handleTap() {

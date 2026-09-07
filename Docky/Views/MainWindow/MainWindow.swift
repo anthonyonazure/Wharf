@@ -58,6 +58,11 @@ final class MainWindowContainerView: NSView {
         ])
 
         contentView = hosting
+        // Wharf: the tile click router hit-tests presses in this view's
+        // own coordinates, so it needs the hosting view rather than the
+        // window — SwiftUI's global origin starts here, inside the
+        // content insets, not at the window edge.
+        (window as? MainWindow)?.dockHostingView = hosting
         applyContentInsets()
     }
 
@@ -319,6 +324,11 @@ final class MainWindow: NSPanel {
     /// Per-dock state (layout metrics, magnification). Wharf runs one dock per
     /// display, so these cannot be process-wide.
     let dockContext = DockContext()
+
+    /// The `NSHostingView` holding this dock's SwiftUI tree. Weak: the
+    /// view hierarchy owns it. `TilePressService` uses it to convert a
+    /// press into the coordinate space the tile frames were measured in.
+    weak var dockHostingView: NSView?
 
     /// Links the context back to this window so views can act on their own
     /// dock rather than on whichever dock happens to be first in the app's

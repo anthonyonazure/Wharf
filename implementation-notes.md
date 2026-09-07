@@ -205,3 +205,35 @@ underneath ordinary windows, where they were still drawn but no longer took
 clicks. `updateStackingForFrontmostApp` now takes the running application and
 only yields when that process actually has a window overlapping this dock's own
 screen.
+
+### 4. The click: taken off SwiftUI gestures entirely
+
+The tile's activation was an `onTapGesture` nested inside the container's
+reorder `DragGesture`. SwiftUI has to arbitrate between the two on every
+press, and the measurements in HANDOFF.md show it losing: about half of the
+releases that arrived lost the arbitration, and the drag's own event-tracking
+loop swallowed two of nineteen releases outright. Raising the drag threshold,
+zero-distance drags and hover-identified presses were all tried and all failed
+for reasons recorded there.
+
+Tiles whose whole surface is one target (apps, folders, launchpad, start menu,
+trash, minimized windows) now carry no gesture at all. `TilePressService`
+reads the press, the drag and the release from one AppKit event monitor, where
+nothing competes for them, resolves the tile by hit-testing the press against
+the frames the container publishes, and calls the tile's action on release.
+The reorder drag for those tiles is driven from the same monitor.
+
+Widget and smart-stack tiles keep their SwiftUI gestures. They contain their
+own controls (transport buttons, join-meeting, a text field); SwiftUI stops a
+tap at the control that handled it and an AppKit monitor cannot know that
+happened, so routing those would fire the tile's action on top of every button
+press inside them.
+
+Why the earlier attempt at frame hit-testing matched "correctly in one run and
+not the next": SwiftUI's `.global` space starts at the top-left of the
+`NSHostingView`, which `MainWindowContainerView` insets from the window edge by
+a user-adjustable amount. A press converted against the window is off by
+whatever the content insets happen to be. `TileClickRouter` is therefore keyed
+by the hosting view and the press is converted against that view, which needs
+no assumption about chrome. The same key stops three docks publishing the same
+tile IDs over each other.

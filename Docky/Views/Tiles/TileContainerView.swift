@@ -45,7 +45,10 @@ struct TileContainerView: View {
                 guard DockyPreferences.shared.collapsesToButton else { return }
                 withAnimation(.easeOut(duration: 0.18)) { isPointerInside = hovering }
             }
-            .onPreferenceChange(TileFramePreferenceKey.self) { tileFrames = $0 }
+            .onPreferenceChange(TileFramePreferenceKey.self) { frames in
+                tileFrames = frames
+                publishFramesToClickRouter(frames)
+            }
             .onAppear { layout.setTileCanvasFrame(proxy.frame(in: .global)) }
             .onChange(of: proxy.frame(in: .global)) { frame in
                 layout.setTileCanvasFrame(frame)
@@ -275,13 +278,21 @@ struct TileContainerView: View {
                     )
                 }
             }
-            // simultaneousGesture (not gesture) so the parent reorder drag
-            // shares events with TileView's inner onTapGesture instead of
-            // competing for them. With `.gesture()`, the parent claims
-            // mouse-down and starves the inner tap even when the drag
-            // never recognizes. For non-draggable tiles we mask the
-            // gesture off so only subview gestures run.
-            .simultaneousGesture(reorderGesture(for: tile), including: isTileDraggable(tile) ? .all : .subviews)
+            // Tiles whose whole surface is one click target carry no
+            // gesture at all: their click and their reorder both come
+            // from the AppKit monitor in TilePressService, because the
+            // tap-inside-drag pair this used to be lost about half the
+            // clicks to SwiftUI's gesture arbitration.
+            //
+            // Widget tiles still use it. They hold their own controls,
+            // which SwiftUI must be allowed to claim, so simultaneous
+            // (not `.gesture()`) remains right for them: `.gesture()`
+            // would let the parent claim mouse-down and starve them.
+            .simultaneousGesture(
+                reorderGesture(for: tile),
+                including: TileClickRouter.routesClicks(tile) ? .subviews
+                    : (isTileDraggable(tile) ? .all : .subviews)
+            )
             .transition(tileTransition)
     }
 
@@ -1401,6 +1412,40 @@ struct TileContainerView: View {
         isTrailingReorderable(tileID: tile.id) || store.makeTrailingItem(from: tile) != nil
     }
 
+    /// The tile a router callback names. The router deals in IDs so it
+    /// never holds a tile value across a rebuild.
+    private func tile(withID id: String) -> Tile? {
+        displayTiles.first { $0.id == id }
+    }
+
+    /// Hands this dock's tile geometry and reorder entry points to the
+    /// click router, so the AppKit monitor can resolve a press to a tile.
+    /// Keyed by the hosting view the frames were measured in: SwiftUI's
+    /// global origin is that view's top-left, inside the window's content
+    /// insets, and with one dock per display three windows publish the
+    /// same tile IDs.
+    private func publishFramesToClickRouter(_ frames: [String: CGRect]) {
+        guard let surface = dock.window?.dockHostingView else { return }
+        TileClickRouter.shared.setFrames(frames, in: surface)
+        TileClickRouter.shared.setDragCallbacks(
+            TileClickRouter.DragCallbacks(
+                isDraggable: { tileID in
+                    guard let tile = tile(withID: tileID) else { return false }
+                    return TileClickRouter.routesClicks(tile) && isTileDraggable(tile)
+                },
+                update: { tileID, location, translation in
+                    guard let tile = tile(withID: tileID) else { return }
+                    updateDrag(for: tile, location: location, translation: translation)
+                },
+                end: { tileID, location, translation in
+                    guard let tile = tile(withID: tileID) else { return }
+                    endDrag(for: tile, location: location, translation: translation)
+                }
+            ),
+            in: surface
+        )
+    }
+
     private func reorderGesture(for tile: Tile) -> some Gesture {
         // Non-zero minimum so a pure click (no motion) never claims the
         // gesture. On Sequoia, minimumDistance: 0 caused mouse-down to
@@ -1411,14 +1456,14 @@ struct TileContainerView: View {
         // 10 matches AppKit's own drag slop.
         DragGesture(minimumDistance: 10, coordinateSpace: .global)
             .onChanged { value in
-                updateDrag(for: tile, value: value)
+                updateDrag(for: tile, location: value.location, translation: value.translation)
             }
             .onEnded { value in
-                endDrag(for: tile, value: value)
+                endDrag(for: tile, location: value.location, translation: value.translation)
             }
     }
 
-    private func updateDrag(for tile: Tile, value: DragGesture.Value) {
+    private func updateDrag(for tile: Tile, location: CGPoint, translation: CGSize) {
         guard isTileDraggable(tile) else {
             return
         }
@@ -1442,12 +1487,12 @@ struct TileContainerView: View {
             return
         }
 
-        draggedTileOffset = projected(size: value.translation)
-        draggedPickupCandidateTileID = dragPickupCandidateTileID(at: value.location)
+        draggedTileOffset = projected(size: translation)
+        draggedPickupCandidateTileID = dragPickupCandidateTileID(at: location)
 
         if draggedBundleIdentifier != nil,
            let groupTargetTileID = appFolderDropTargetTileID(
-                at: value.location,
+                at: location,
                 selectedTileIDs: draggedSelectionTileIDs,
                 selectedBundleIdentifiers: draggedSelectionBundleIdentifiers
              ) {
@@ -1464,7 +1509,7 @@ struct TileContainerView: View {
             return
         }
 
-        if let trashTargetTileID = trashDropTargetTileID(at: value.location, sourceTileID: tile.id) {
+        if let trashTargetTileID = trashDropTargetTileID(at: location, sourceTileID: tile.id) {
             if draggedTrashTargetTileID != trashTargetTileID {
                 Self.logger.debug(
                     "Drag trash target tile=\(tileLogDescription(tile), privacy: .public) targetTileID=\(trashTargetTileID, privacy: .public)"
@@ -1486,7 +1531,7 @@ struct TileContainerView: View {
         draggedAppFolderTargetTileID = nil
         draggedTrashTargetTileID = nil
         updatePreviewDestination(
-            at: projected(point: value.location),
+            at: projected(point: location),
             sourceTileID: tile.id,
             isTileDrag: true,
             isPinnedSource: isPinnedReorderable(tileID: tile.id),
@@ -1496,12 +1541,12 @@ struct TileContainerView: View {
         )
     }
 
-    private func endDrag(for tile: Tile, value: DragGesture.Value) {
-        let translationMagnitude = sqrt(value.translation.width * value.translation.width + value.translation.height * value.translation.height)
+    private func endDrag(for tile: Tile, location: CGPoint, translation: CGSize) {
+        let translationMagnitude = sqrt(translation.width * translation.width + translation.height * translation.height)
         Self.logger.info(
-            "endDrag tile=\(tileLogDescription(tile), privacy: .public) translation=(\(value.translation.width, privacy: .public),\(value.translation.height, privacy: .public)) magnitude=\(translationMagnitude, privacy: .public) draggedTileID=\(self.draggedTileID ?? "nil", privacy: .public)"
+            "endDrag tile=\(tileLogDescription(tile), privacy: .public) translation=(\(translation.width, privacy: .public),\(translation.height, privacy: .public)) magnitude=\(translationMagnitude, privacy: .public) draggedTileID=\(self.draggedTileID ?? "nil", privacy: .public)"
         )
-        updateDrag(for: tile, value: value)
+        updateDrag(for: tile, location: location, translation: translation)
 
         guard draggedTileID == tile.id else {
             Self.logger.info(

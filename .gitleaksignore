@@ -1,0 +1,15 @@
+# Verified false positives only. Each entry names one finding in one historical commit.
+#
+# Commit b4f24a6 ("feat(updates): add sparkle app update support") added
+# INFOPLIST_KEY_SUPublicEDKey to both build configurations of project.pbxproj and
+# repeated the same value in docs/ota-updates.md. That value is Sparkle's EdDSA
+# (Ed25519) PUBLIC key: 44 base64 characters decoding to exactly 32 bytes, which is
+# the size of an Ed25519 public key. Sparkle ships it inside every app bundle so the
+# app can verify update signatures; it is meant to be public and cannot sign anything.
+# The matching private key never entered the repository (docs/ota-updates.md says it
+# lives in the maintainer's login keychain). Both the pbxproj lines and the docs file
+# were later removed, so these findings exist only in history, which is not rewritten.
+# gitleaks' generic-api-key rule matched on the key-shaped name and entropy alone.
+b4f24a69d248f28869e1ffdb8d30e6841c4393e3:Docky.xcodeproj/project.pbxproj:generic-api-key:324
+b4f24a69d248f28869e1ffdb8d30e6841c4393e3:Docky.xcodeproj/project.pbxproj:generic-api-key:391
+b4f24a69d248f28869e1ffdb8d30e6841c4393e3:docs/ota-updates.md:generic-api-key:8

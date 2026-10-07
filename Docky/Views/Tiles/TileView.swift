@@ -1533,8 +1533,50 @@ struct TileView: View {
         TileClickRouter.shared.registerClick(tileID: tile.id, in: surface) { handleTap() }
     }
 
+    /// Wharf: an app tile stands for every window the app has, so a click
+    /// cannot know which one was meant. With two or more windows it opens
+    /// the window picker (the hover preview, kept up) and lets the person
+    /// choose; with one or none the click acts on the app as before.
+    /// Returns true when the picker took the click.
+    private func presentWindowPickerIfAmbiguous() -> Bool {
+        guard case .app(let app) = tile.content,
+              !app.bundleIdentifier.isEmpty,
+              app.displayedWidget == nil,
+              !(app.bundleIdentifier == "com.apple.finder"
+                && preferences.opensStartMenuFromFinderTile
+                && preferences.enablesStartMenuOverlay),
+              PermissionsService.shared.accessibility == .granted
+        else {
+            Self.logger.info("picker skipped: not an eligible app tile or accessibility not granted")
+            return false
+        }
+
+        let windows = WorkspaceService.shared.appWindows(bundleIdentifier: app.bundleIdentifier)
+        Self.logger.info("picker check bundle=\(app.bundleIdentifier, privacy: .public) windows=\(windows.count, privacy: .public)")
+        guard windows.count >= 2 else { return false }
+
+        // A user who chose a frontmost-click behavior (hide, cycle,
+        // minimize all) keeps it for the app that is already in front.
+        let isFrontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == app.bundleIdentifier
+        if isFrontmost, preferences.appTileFrontmostClickBehavior != .none { return false }
+
+        windowPreviewDelayTask?.cancel()
+        windowPreviewDelayTask = nil
+        isTooltipPresented = false
+        return WindowPreviewWindowController.shared.present(
+            forBundleIdentifiers: [app.bundleIdentifier],
+            sourceTileID: tile.id,
+            sourceFrame: globalTileFrame,
+            preferredEdge: inwardPopoverEdge
+        )
+    }
+
     private func handleTap() {
         Self.logger.info("handleTap tileID=\(tile.id, privacy: .public) contentKind=\(tileContentKindDescription, privacy: .public)")
+        if presentWindowPickerIfAmbiguous() {
+            Self.logger.info("handleTap opened window picker tileID=\(tile.id, privacy: .public)")
+            return
+        }
         // Tap-to-act always supersedes the hover preview.
         windowPreviewDelayTask?.cancel()
         windowPreviewDelayTask = nil

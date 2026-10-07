@@ -57,12 +57,15 @@ final class MainWindowContainerView: NSView {
             topConstraint, bottomConstraint, leadingConstraint, trailingConstraint
         ])
 
-        contentView = hosting
         // Wharf: the tile click router hit-tests presses in this view's
         // own coordinates, so it needs the hosting view rather than the
         // window — SwiftUI's global origin starts here, inside the
-        // content insets, not at the window edge.
+        // content insets, not at the window edge. Published BEFORE the
+        // view is installed: tiles register their click handlers in
+        // onAppear, which can fire during the assignment below, and a
+        // registration made while this was still nil was silently lost.
         (window as? MainWindow)?.dockHostingView = hosting
+        contentView = hosting
         applyContentInsets()
     }
 

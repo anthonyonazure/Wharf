@@ -686,6 +686,9 @@ struct TileView: View {
                 proxy.frame(in: .global)
             } action: { newFrame in
                 globalTileFrame = newFrame
+                // Safety net: re-register once layout is known, in case the
+                // onAppear registration ran before the dock surface existed.
+                registerClickWithRouter()
             }
             .onChange(of: isHovering) { isHovering in
                 TilePressService.shared.registerHover(tileID: tile.id, isHovering: isHovering)

@@ -255,6 +255,8 @@ private struct DockEditorGalleryItem: Equatable, Identifiable {
             String(localized: "Save window arrangements and switch between them.")
         case .clock:
             String(localized: "Date and time. The date brightens as your next event approaches.")
+        case .audio:
+            String(localized: "Volume, mute and output device in one click.")
         case .calendar:
             String(localized: "Shows the current date and month at a glance.")
         case .calendarDate:
@@ -296,6 +298,8 @@ private struct DockEditorGalleryItem: Equatable, Identifiable {
                 "square.grid.3x3.topleft.filled"
             case .clock:
                 "clock"
+            case .audio:
+                "speaker.wave.2.fill"
             case .calendar, .calendarDate:
                 "calendar"
             case .reminders:

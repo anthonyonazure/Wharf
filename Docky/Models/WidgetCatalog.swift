@@ -14,6 +14,7 @@ enum WidgetOwnerBundleIdentifiers {
     static let genericNowPlaying = "gt.quintero.Wharf.now-playing"
     static let search = "gt.quintero.Wharf.search"
     static let photoFrame = "gt.quintero.Wharf.photo-frame"
+    static let audio = "gt.quintero.Wharf.audio"
 }
 
 struct WidgetRegistration: Equatable, Identifiable {
@@ -114,6 +115,14 @@ enum WidgetCatalog {
         includesInSmartStack: false
     )
 
+    static let audio = WidgetRegistration(
+        kind: .audio,
+        ownerBundleIdentifier: WidgetOwnerBundleIdentifiers.audio,
+        defaultSpan: .two,
+        includesInPalette: true,
+        includesInSmartStack: false
+    )
+
     static let builtInRegistrations: [WidgetRegistration] = [
         calendar,
         calendarDate,
@@ -124,6 +133,7 @@ enum WidgetCatalog {
         genericNowPlaying,
         search,
         photoFrame,
+        audio,
     ]
 
     /// All available widget registrations, built-ins plus any external

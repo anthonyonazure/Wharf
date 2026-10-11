@@ -2204,7 +2204,7 @@ struct TileView: View {
     private func widgetContextActions(for widget: WidgetTile) -> [ContextAction] {
         switch widget.kind {
         // Wharf: the layouts switcher owns its own menu on click.
-        case .layouts, .clock:
+        case .layouts, .clock, .audio:
             return []
         case .calendar:
             var actions: [ContextAction] = []
@@ -2580,7 +2580,7 @@ struct TileView: View {
     }
     private func handleWidgetTap(_ widget: WidgetTile) {
         switch widget.kind {
-        case .layouts:
+        case .layouts, .audio:
             // The widget view presents its own popover; nothing to do here.
             break
         case .clock:

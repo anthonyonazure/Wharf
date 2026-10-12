@@ -29,7 +29,7 @@ unsigned code.
 | --- | --- | --- |
 | 2026-09 | Run 1: URL scheme, widget loader, files, scripting, private APIs | One critical (a web page could install code through the widget loader), fixed by re-enabling library validation and removing quarantine stripping. Update feed removed because it pointed at a domain this fork does not own. |
 | 2026-09 | Run 2: tile rendering, preference parsing, accessibility writes, capture | One high and several medium denial-of-service issues (a duplicate or out-of-range value in the Dock or Wharf preferences crashed the app on every launch). Fixed 2026-09-05. |
-| 2026-10 | Run 3: the Audio widget and click-handling changes since run 2 | See the section below. |
+| 2026-10 | Run 3: the Audio widget, click handling and test support added since run 2 | No high or medium issues. Four low issues fixed the same day: a NaN or out-of-range audio volume could crash the dock, the test-mode switch could be set in a shipped build, a swallowed mouse release could turn a drag in another app into a tile drag, and every click redrew every tile. |
 
 ## Known limitations
 
@@ -40,6 +40,13 @@ unsigned code.
 - There is no auto-update channel. You update by building or downloading a new
   release.
 - Wharf depends on private macOS interfaces that Apple can change in any release.
+
+- The window picker groups windows by the bundle identifier an app claims, so an
+  unsigned app can pose as another app's windows in that app's picker. This was
+  already true of hover previews and is open.
+- The Audio widget lists every output device the system reports, including
+  virtual ones another program creates. It cannot do more than any program can
+  already do to the default output.
 
 ## Automated checks
 

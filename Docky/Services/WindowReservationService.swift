@@ -29,10 +29,6 @@ final class WindowReservationService {
     private var registrySubscription: AnyCancellable?
     private var windowCooldowns: [WindowID: Date] = [:]
     private let cooldownInterval: TimeInterval = 0.25
-    private let matchTolerance: CGFloat = 1
-    private let edgeTolerance: CGFloat = 2
-
-    private enum DockSide { case top, bottom, left, right }
 
     private init() {}
 
@@ -109,7 +105,7 @@ final class WindowReservationService {
         primaryScreenHeight: CGFloat
     ) {
         let visibleFrame = dockyScreen.visibleFrame
-        guard let dockySide = side(of: dockyFrame, on: visibleFrame) else { return }
+        guard WindowReservationGeometry.side(of: dockyFrame, on: visibleFrame) != nil else { return }
 
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let now = Date()
@@ -121,44 +117,24 @@ final class WindowReservationService {
             // WindowRegistry returns AX-space frames (flipped Y, origin at the
             // top-left of the primary display). Convert to NSScreen space
             // before any geometry comparison.
-            let nsFrame = flipY(axFrame, primaryHeight: primaryScreenHeight)
+            let nsFrame = WindowReservationGeometry.flipY(axFrame, primaryHeight: primaryScreenHeight)
 
             // Only act on windows on the same screen as Docky.
             guard let windowScreen = screenContaining(nsFrame), windowScreen == dockyScreen else { continue }
 
-            // Tile/maximize signature: window intersects Docky AND is anchored
-            // to ≥2 edges of the visible frame. This catches full maximize (4
-            // flush edges), half tiles (3), and quarter tiles (2) without
-            // resizing free-floating windows that happen to overlap Docky.
-            guard nsFrame.intersects(dockyFrame) else { continue }
-            guard flushEdgeCount(of: nsFrame, against: visibleFrame) >= 2 else { continue }
-
-            // Push the window off Docky's strip.
-            let nsTarget = pushAway(nsFrame, from: dockyFrame, on: dockySide)
-            // Don't issue redundant resizes.
-            guard !rectsMatch(nsFrame, nsTarget) else { continue }
-            // Don't shrink a window that has nothing left in the relevant axis.
-            guard nsTarget.width > 0, nsTarget.height > 0 else { continue }
+            guard let nsTarget = WindowReservationGeometry.reservedFrame(
+                for: nsFrame,
+                dockFrame: dockyFrame,
+                visibleFrame: visibleFrame
+            ) else { continue }
 
             // AX setters take flipped-Y coordinates; convert before applying.
-            let axTarget = flipY(nsTarget, primaryHeight: primaryScreenHeight)
+            let axTarget = WindowReservationGeometry.flipY(nsTarget, primaryHeight: primaryScreenHeight)
             let succeeded = registry.resize(window, to: axTarget)
             if succeeded {
                 windowCooldowns[window.id] = now.addingTimeInterval(cooldownInterval)
             }
         }
-    }
-
-    /// Flips a rect between AX (top-left origin, Y grows down) and NSScreen
-    /// (bottom-left origin, Y grows up) coordinate spaces. The transform is
-    /// its own inverse.
-    private func flipY(_ rect: CGRect, primaryHeight: CGFloat) -> CGRect {
-        CGRect(
-            x: rect.minX,
-            y: primaryHeight - rect.maxY,
-            width: rect.width,
-            height: rect.height
-        )
     }
 
     private func screenContaining(_ frame: CGRect) -> NSScreen? {
@@ -174,12 +150,55 @@ final class WindowReservationService {
         }
         return best?.screen
     }
+}
+
+/// Pure geometry behind window reservation, in NSScreen space unless noted.
+enum WindowReservationGeometry {
+    enum DockSide { case top, bottom, left, right }
+
+    static let matchTolerance: CGFloat = 1
+    static let edgeTolerance: CGFloat = 2
+
+    /// Flips a rect between AX (top-left origin, Y grows down) and NSScreen
+    /// (bottom-left origin, Y grows up) coordinate spaces. The transform is
+    /// its own inverse.
+    static func flipY(_ rect: CGRect, primaryHeight: CGFloat) -> CGRect {
+        CGRect(
+            x: rect.minX,
+            y: primaryHeight - rect.maxY,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    /// Where `window` should end up so it no longer overlaps the dock strip,
+    /// or nil when it should be left alone: Docky is not anchored to an edge,
+    /// the window does not touch the dock, it is not a tile/maximize shape,
+    /// it already clears the strip, or nothing would be left of it.
+    static func reservedFrame(for window: CGRect, dockFrame: CGRect, visibleFrame: CGRect) -> CGRect? {
+        guard let dockSide = side(of: dockFrame, on: visibleFrame) else { return nil }
+
+        // Tile/maximize signature: window intersects Docky AND is anchored
+        // to >=2 edges of the visible frame. This catches full maximize (4
+        // flush edges), half tiles (3), and quarter tiles (2) without
+        // resizing free-floating windows that happen to overlap Docky.
+        guard window.intersects(dockFrame) else { return nil }
+        guard flushEdgeCount(of: window, against: visibleFrame) >= 2 else { return nil }
+
+        // Push the window off Docky's strip.
+        let target = pushAway(window, from: dockFrame, on: dockSide)
+        // Don't issue redundant resizes.
+        guard !rectsMatch(window, target) else { return nil }
+        // Don't shrink a window that has nothing left in the relevant axis.
+        guard target.width > 0, target.height > 0 else { return nil }
+        return target
+    }
 
     /// Identifies which edge of the visible frame Docky is flush against.
     /// Returns nil when Docky isn't anchored to any edge (corner-floating or
     /// inset by more than the edge tolerance), in which case there's no clean
     /// reservation strip to subtract.
-    private func side(of dock: CGRect, on visible: CGRect) -> DockSide? {
+    static func side(of dock: CGRect, on visible: CGRect) -> DockSide? {
         if abs(dock.minX - visible.minX) < edgeTolerance, dock.maxX < visible.maxX - edgeTolerance {
             return .left
         }
@@ -199,7 +218,7 @@ final class WindowReservationService {
     /// tile and maximize states leave windows snapped to visible-frame edges,
     /// so this is a cheap classifier for "the user committed this window to a
     /// system-managed slot."
-    private func flushEdgeCount(of frame: CGRect, against visible: CGRect) -> Int {
+    static func flushEdgeCount(of frame: CGRect, against visible: CGRect) -> Int {
         var count = 0
         if abs(frame.minX - visible.minX) < edgeTolerance { count += 1 }
         if abs(frame.maxX - visible.maxX) < edgeTolerance { count += 1 }
@@ -211,7 +230,7 @@ final class WindowReservationService {
     /// Shrinks `frame` so it no longer overlaps Docky, by advancing the side
     /// of the frame that touches Docky's strip. Other edges are preserved so
     /// half/quarter tiles keep their cross-axis anchoring.
-    private func pushAway(_ frame: CGRect, from dock: CGRect, on side: DockSide) -> CGRect {
+    static func pushAway(_ frame: CGRect, from dock: CGRect, on side: DockSide) -> CGRect {
         var result = frame
         switch side {
         case .left:
@@ -232,7 +251,7 @@ final class WindowReservationService {
         return result
     }
 
-    private func rectsMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+    static func rectsMatch(_ a: CGRect, _ b: CGRect) -> Bool {
         abs(a.minX - b.minX) < matchTolerance
             && abs(a.minY - b.minY) < matchTolerance
             && abs(a.width - b.width) < matchTolerance

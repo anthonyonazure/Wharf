@@ -36,8 +36,18 @@ final class DockMagnificationService {
     @ObservationIgnored private var rampTarget: CGFloat = 0
     @ObservationIgnored private var rampStart: CFTimeInterval = 0
     @ObservationIgnored private var rampTimer: Timer?
+    @ObservationIgnored private let clock: () -> CFTimeInterval
+    @ObservationIgnored private let drivesRampWithTimer: Bool
 
-    init() {}
+    /// `clock` and `drivesRampWithTimer` are injectable so tests can step the
+    /// ramp by hand against a fake clock instead of waiting on a real timer.
+    init(clock: @escaping () -> CFTimeInterval = { CACurrentMediaTime() }, drivesRampWithTimer: Bool = true) {
+        self.clock = clock
+        self.drivesRampWithTimer = drivesRampWithTimer
+    }
+
+    /// True while a ramp timer is installed.
+    var isRamping: Bool { rampTimer != nil }
 
     /// Pointer has entered the dock hit region and we now have a live axis
     /// coordinate to track. Called from `.onContinuousHover` with
@@ -73,12 +83,12 @@ final class DockMagnificationService {
         if rampTarget == target { return }
         rampSource = strength
         rampTarget = target
-        rampStart = CACurrentMediaTime()
+        rampStart = clock()
         startTimerIfNeeded()
     }
 
     private func startTimerIfNeeded() {
-        guard rampTimer == nil else { return }
+        guard drivesRampWithTimer, rampTimer == nil else { return }
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -86,8 +96,8 @@ final class DockMagnificationService {
         rampTimer = timer
     }
 
-    private func tick() {
-        let elapsed = CACurrentMediaTime() - rampStart
+    func tick() {
+        let elapsed = clock() - rampStart
         let t = min(1, max(0, elapsed / Self.rampDuration))
         let eased = 1 - pow(1 - t, 2)
         let next = rampSource + (rampTarget - rampSource) * CGFloat(eased)

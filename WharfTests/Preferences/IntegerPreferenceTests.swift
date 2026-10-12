@@ -51,9 +51,7 @@ final class IntegerPreferenceTests: DockyPreferencesTestCase {
         for hostile in [0, -1, -300, 6, 99, Int.max, Int.min] {
             defaults.set(hostile, forKey: PrefKeys.dockRowCount)
             let loaded = makePrefs().dockRowCount
-            XCTExpectFailure("BUG: dockRowCount loads \(hostile) unclamped; the setter bounds it to 1...5 but init does not") {
-                XCTAssertTrue((1...5).contains(loaded), "loaded \(loaded)")
-            }
+            XCTAssertTrue((1...5).contains(loaded), "loaded \(loaded)")
         }
     }
 

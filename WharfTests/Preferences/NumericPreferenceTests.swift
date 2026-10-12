@@ -242,8 +242,9 @@ final class NumericPreferenceTests: DockyPreferencesTestCase {
         }
     }
 
-    /// A stored NaN should never reach a timer or a layout calculation. These
-    /// keys clamp with `max(stored, bound)`, which returns NaN for a NaN `stored`.
+    /// A stored NaN should never reach a timer or a layout calculation. `max`
+    /// and `min` return NaN for a NaN first argument, so these keys fall back
+    /// to their default before clamping.
     func testStoredNaNCannotReachTheLaunchpadLayoutMath() {
         // The Launchpad grid does `Int(iconSize / ...)`, which traps on NaN.
         for key in [PrefKeys.launchpadBaseIconSize, PrefKeys.launchpadColumnSpacing] {
@@ -258,9 +259,8 @@ final class NumericPreferenceTests: DockyPreferencesTestCase {
         for spec in clampedSpecs where nanLeakingNames.contains(spec.name) {
             defaults.set(Double.nan, forKey: spec.key)
             let loaded = spec.read(makePrefs())
-            XCTExpectFailure("BUG: \(spec.name) loads a stored NaN unclamped (max(nan, bound) returns nan)") {
-                XCTAssertFalse(loaded.isNaN, spec.name)
-            }
+            XCTAssertFalse(loaded.isNaN, spec.name)
+            XCTAssertEqual(loaded, spec.defaultValue, accuracy: 1e-9, spec.name)
         }
     }
 

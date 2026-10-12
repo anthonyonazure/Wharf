@@ -25,6 +25,12 @@ final class AppearanceOverrideTests: DockyPreferencesTestCase {
         }
     }
 
+    private let dockSettingsKeys: Set<String> = [
+        DockSettingsService.Keys.tileSize,
+        DockSettingsService.Keys.largeSize,
+        DockSettingsService.Keys.magnification,
+    ]
+
     // MARK: Fixture integrity
 
     func testMutationNamesAndKeysAreUnique() {
@@ -34,7 +40,9 @@ final class AppearanceOverrideTests: DockyPreferencesTestCase {
     }
 
     func testEveryAppearanceKeyHasAFixture() {
-        let covered = Set(PreferenceMutations.all.map(\.key))
+        // The three DockSettingsService keys are owned by that singleton, which
+        // reads the real system Dock, so they have no fixture here.
+        let covered = Set(PreferenceMutations.all.map(\.key)).union(dockSettingsKeys)
         XCTAssertEqual(DockyPreferences.appearanceKeys.subtracting(covered), [])
     }
 
@@ -112,22 +120,20 @@ final class AppearanceOverrideTests: DockyPreferencesTestCase {
         for mutation in PreferenceMutations.behavior {
             mutation.mutate(prefs)
         }
-        // windowAxisSizing marks itself; see the relaunch test below for why that is a bug.
+        // windowAxisSizing is a behavior setting that also takes part in the override layer.
         XCTAssertEqual(prefs.userOverriddenAppearanceKeys.subtracting([PrefKeys.windowAxisSizing]), [])
     }
 
     /// `windowAxisSizing` marks itself overridden so a theme cannot replace the
-    /// user's choice, but its key is missing from `appearanceKeys`. On the next
-    /// launch the stored flag list is intersected with `appearanceKeys`, so the
-    /// flag is dropped and an active theme's `behavior.windowAxisSizing` wins.
+    /// user's choice. On the next launch the stored flag list is intersected
+    /// with `appearanceKeys`, so the key must be listed there or the flag is
+    /// dropped and an active theme's `behavior.windowAxisSizing` wins.
     func testWindowAxisSizingOverrideSurvivesRelaunch() {
         let prefs = makePrefs()
         prefs.windowAxisSizing = .fullAxis
         XCTAssertTrue(prefs.isAppearanceOverridden(PrefKeys.windowAxisSizing))
         let reloaded = reload()
-        XCTExpectFailure("BUG: windowAxisSizing is marked as an override but is not in appearanceKeys, so the flag is dropped on relaunch") {
-            XCTAssertTrue(reloaded.isAppearanceOverridden(PrefKeys.windowAxisSizing))
-        }
+        XCTAssertTrue(reloaded.isAppearanceOverridden(PrefKeys.windowAxisSizing))
     }
 
     func testOverrideFlagsPersistAndReload() {
@@ -146,9 +152,6 @@ final class AppearanceOverrideTests: DockyPreferencesTestCase {
             let prefs = makePrefs()
             mutation.mutate(prefs)
             clear(prefs)
-            if mutation.name.hasPrefix("windowCornerRadius") {
-                continue // covered by the known-gap test below
-            }
             XCTAssertFalse(prefs.isAppearanceOverridden(mutation.key), mutation.name)
         }
     }
@@ -158,9 +161,7 @@ final class AppearanceOverrideTests: DockyPreferencesTestCase {
             let prefs = makePrefs()
             mutation.mutate(prefs)
             mutation.clear?(prefs)
-            XCTExpectFailure("BUG: \(mutation.name) setter marks the override even when the value goes back to nil") {
-                XCTAssertFalse(prefs.isAppearanceOverridden(mutation.key), mutation.name)
-            }
+            XCTAssertFalse(prefs.isAppearanceOverridden(mutation.key), mutation.name)
         }
     }
 
@@ -204,6 +205,23 @@ final class AppearanceOverrideTests: DockyPreferencesTestCase {
         XCTAssertTrue(prefs.isAppearanceOverridden(PrefKeys.tileVerticalPadding))
         XCTAssertTrue(prefs.isAppearanceOverridden(PrefKeys.windowClipShape))
         XCTAssertFalse(prefs.isAppearanceOverridden(PrefKeys.tileSpacing))
+    }
+
+    /// DockSettingsService persists these on every write, including the import
+    /// of the system Dock, so their presence is not evidence of a user choice.
+    func testMigrationDoesNotSeedOverridesFromDockSettingsKeys() {
+        for key in dockSettingsKeys {
+            defaults.set(40.0, forKey: key)
+        }
+        XCTAssertEqual(makePrefs().userOverriddenAppearanceKeys, [])
+    }
+
+    func testDockSettingsOverrideFlagsSurviveRelaunch() {
+        let prefs = makePrefs()
+        for key in dockSettingsKeys {
+            prefs.markAppearanceOverride(key)
+        }
+        XCTAssertEqual(reload().userOverriddenAppearanceKeys, dockSettingsKeys)
     }
 
     func testMigrationIgnoresNonAppearanceKeys() {
@@ -387,8 +405,7 @@ final class AppearanceOverrideTests: DockyPreferencesTestCase {
         let leftBehind = PreferenceMutations.appearance
             .filter { $0.read(prefs) != baseline[$0.name] }
             .map(\.name)
-        XCTExpectFailure("BUG: resetToDefaults skips appearance preferences: \(leftBehind.prefix(6).joined(separator: ", ")) ...") {
-            XCTAssertEqual(leftBehind, [])
-        }
+        XCTAssertEqual(leftBehind, [])
+        XCTAssertEqual(prefs.userOverriddenAppearanceKeys, [])
     }
 }

@@ -79,9 +79,7 @@ final class ProfileServiceTests: LayoutTestCase {
 
         let stored = defaults.data(forKey: ProfileService.Keys.profiles) ?? Data()
         let text = String(decoding: stored, as: UTF8.self)
-        XCTExpectFailure("an undecodable trigger discards every profile and overwrites storage with a fresh Default") {
-            XCTAssertTrue(text.contains("\"home\""), "the unaffected profile should survive")
-        }
+        XCTAssertTrue(text.contains("\"home\""), "the unaffected profile should survive")
     }
 
     func testStoredActiveIDOfAnUnknownProfileFallsBackToTheFirst() throws {
@@ -392,9 +390,7 @@ final class ProfileServiceTests: LayoutTestCase {
         let second = stack.service.createProfile(name: "Second")
         stack.service.deleteProfile(id: first)
         let reloaded = ProfileService(defaults: stack.profileDefaults, preferences: { stack.prefs })
-        XCTExpectFailure("deleting the active profile switches profile but never persists the shortened list, so it returns on relaunch") {
-            XCTAssertEqual(reloaded.profiles.map(\.id), [second.id])
-        }
+        XCTAssertEqual(reloaded.profiles.map(\.id), [second.id])
     }
 
     func testDeletingAnUnknownProfileDoesNothing() {

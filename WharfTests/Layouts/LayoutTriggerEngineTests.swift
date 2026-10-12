@@ -223,9 +223,7 @@ final class LayoutTriggerEngineTests: LayoutTestCase {
             harness.tick(at: tick)
             tick = tick.addingTimeInterval(LayoutTriggerEngine.checkInterval)
         }
-        XCTExpectFailure("the repeated 01:30 on the fall-back day fires the rule a second time") {
-            XCTAssertEqual(harness.fireCount, 1)
-        }
+        XCTAssertEqual(harness.fireCount, 1)
     }
 
     func testRuleForTheSkippedSpringForwardMinuteNeverFires() {

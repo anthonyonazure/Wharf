@@ -528,8 +528,6 @@ final class WorkspaceLayoutModelTests: LayoutTestCase {
         let other = FakeWindows.make(title: "Scratch")
         let placements = [makePlacement(title: "Gone"), makePlacement(title: "Report")]
         let result = WorkspaceLayoutService.match(placements, to: [report, other])
-        XCTExpectFailure("exact-title placements lose their window to an earlier placement's positional fallback") {
-            XCTAssertEqual(result[1]?.windowIdentifier, report.windowIdentifier)
-        }
+        XCTAssertEqual(result[1]?.windowIdentifier, report.windowIdentifier)
     }
 }

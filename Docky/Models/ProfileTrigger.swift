@@ -63,12 +63,30 @@ struct TimeOfDayTrigger: Codable, Equatable, Identifiable {
         self.weekdays = weekdays
     }
 
-    func matches(date: Date, calendar: Calendar = .current) -> Bool {
-        let weekday = calendar.component(.weekday, from: date)
-        guard weekdays.contains(weekday) else { return false }
+    /// Decoding goes through the same clamping as the initializer, so a stored
+    /// out-of-range minute cannot wrap into a window the user never set.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(String.self, forKey: .id)
+        let start = try container.decode(Int.self, forKey: .startMinuteOfDay)
+        let end = try container.decode(Int.self, forKey: .endMinuteOfDay)
+        let weekdays = try container.decode(Set<Int>.self, forKey: .weekdays)
+        self.init(id: id, startMinuteOfDay: start, endMinuteOfDay: end, weekdays: weekdays)
+    }
 
+    func matches(date: Date, calendar: Calendar = .current) -> Bool {
         let components = calendar.dateComponents([.hour, .minute], from: date)
         let minuteOfDay = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+
+        // The after-midnight tail of a wraparound window belongs to the day
+        // the window started on, so that is the weekday that must be listed.
+        let isWrapTail = endMinuteOfDay < startMinuteOfDay && minuteOfDay < endMinuteOfDay
+        var weekdayDate = date
+        if isWrapTail, let previous = calendar.date(byAdding: .day, value: -1, to: date) {
+            weekdayDate = previous
+        }
+        let weekday = calendar.component(.weekday, from: weekdayDate)
+        guard weekdays.contains(weekday) else { return false }
 
         if startMinuteOfDay == endMinuteOfDay {
             return false

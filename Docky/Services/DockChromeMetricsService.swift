@@ -24,7 +24,7 @@ final class DockChromeMetricsService: ObservableObject {
     init() {}
 
     func setAlongAxisGrowth(_ value: CGFloat) {
-        guard abs(alongAxisGrowth - value) > 0.0001 else { return }
+        guard value.isFinite, abs(alongAxisGrowth - value) > 0.0001 else { return }
         alongAxisGrowth = value
     }
 }

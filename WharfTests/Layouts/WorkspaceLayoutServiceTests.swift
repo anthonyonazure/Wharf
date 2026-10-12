@@ -162,9 +162,7 @@ final class WorkspaceLayoutServiceTests: LayoutTestCase {
         let originalID = service.layouts[0].id
         desk.windows = [FakeWindows.make(title: "Second")]
         service.capture(name: "Work")
-        XCTExpectFailure("re-capturing gives the layout a new id, orphaning any rule bound to the old one") {
-            XCTAssertEqual(service.layouts[0].id, originalID)
-        }
+        XCTAssertEqual(service.layouts[0].id, originalID)
     }
 
     func testEachNewLayoutGetsItsOwnID() {
@@ -389,9 +387,7 @@ final class WorkspaceLayoutServiceTests: LayoutTestCase {
         desk.windows = [FakeWindows.make(bundle: "com.a", title: "A")]
         let placement = makePlacement(bundle: "com.a", title: "A", frame: CGRect(x: 100, y: 100, width: 0, height: 0), display: nil)
         service.restore(makeLayout(placements: [placement]))
-        XCTExpectFailure("a persisted zero-size placement is applied, collapsing the window to nothing") {
-            XCTAssertTrue(desk.resizeLog.allSatisfy { $0.frame.width > 0 && $0.frame.height > 0 })
-        }
+        XCTAssertTrue(desk.resizeLog.allSatisfy { $0.frame.width > 0 && $0.frame.height > 0 })
     }
 
     func testRestoreMatchesAcrossManyWindows() {
@@ -495,9 +491,7 @@ final class WorkspaceLayoutServiceTests: LayoutTestCase {
         let afterFirst = service.undoSnapshot
         desk.windows = []
         service.restore(layout)
-        XCTExpectFailure("an empty desk leaves the previous restore's snapshot in place, so undo goes back two restores") {
-            XCTAssertNotEqual(service.undoSnapshot, afterFirst)
-        }
+        XCTAssertNotEqual(service.undoSnapshot, afterFirst)
     }
 
     // MARK: - Launching missing apps

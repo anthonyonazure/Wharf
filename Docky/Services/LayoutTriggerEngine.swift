@@ -159,6 +159,18 @@ final class LayoutTriggerEngine: ObservableObject {
     /// for the same meeting. Keyed by rule id to the event identifier.
     private var handledEventByRule: [String: String] = [:]
 
+    /// The calendar day and minute-of-day each time-of-day rule last fired
+    /// for. On the fall-back DST day the same wall-clock minute happens twice,
+    /// more than the refractory period apart; this keeps "once per day".
+    private var lastFiredSlot: [String: TimeOfDaySlot] = [:]
+
+    private struct TimeOfDaySlot: Equatable {
+        var year: Int?
+        var month: Int?
+        var day: Int?
+        var minuteOfDay: Int
+    }
+
     private var cancellables: Set<AnyCancellable> = []
     private var timer: Timer?
     static let defaultsKey = "wharf.layoutRules"
@@ -241,7 +253,12 @@ final class LayoutTriggerEngine: ObservableObject {
                 guard LayoutTrigger.timeOfDayMatches(
                     hour: hour, minute: minute, weekdays: weekdays, now: now, calendar: calendar
                 ) else { continue }
-                fire(rule)
+                let day = calendar.dateComponents([.year, .month, .day], from: now)
+                let slot = TimeOfDaySlot(
+                    year: day.year, month: day.month, day: day.day, minuteOfDay: hour * 60 + minute
+                )
+                guard lastFiredSlot[rule.id] != slot else { continue }
+                if fire(rule) { lastFiredSlot[rule.id] = slot }
 
             case let .beforeCalendarEvent(minutesBefore):
                 guard let event = LayoutTrigger.calendarEventDue(
@@ -273,22 +290,24 @@ final class LayoutTriggerEngine: ObservableObject {
         }
     }
 
-    private func fire(_ rule: LayoutRule, bypassRefractory: Bool = false) {
+    @discardableResult
+    private func fire(_ rule: LayoutRule, bypassRefractory: Bool = false) -> Bool {
         if !bypassRefractory,
            let last = lastFired[rule.id],
-           environment.now().timeIntervalSince(last) < refractoryPeriod { return }
+           environment.now().timeIntervalSince(last) < refractoryPeriod { return false }
         let layouts = environment.layouts()
         let resolved = rule.layoutID.flatMap { id in layouts.first { $0.id == id } }
             ?? layouts.first { $0.name == rule.layoutName }
-        guard let layout = resolved else { return }
+        guard let layout = resolved else { return false }
 
         lastFired[rule.id] = environment.now()
 
         guard rule.launchesMissingApps else {
             environment.restore(layout)
-            return
+            return true
         }
         environment.launchAndRestore(layout)
+        return true
     }
 
     // MARK: - Persistence

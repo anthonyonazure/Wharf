@@ -36,10 +36,15 @@ struct DisplayOverride: Codable, Equatable {
 final class PerDisplaySettings {
     static let shared = PerDisplaySettings()
 
-    private let defaultsKey = "wharf.perDisplayOverrides"
+    static let defaultsKey = "wharf.perDisplayOverrides"
+
+    private let defaults: UserDefaults
+    private var defaultsKey: String { Self.defaultsKey }
     private var overrides: [String: DisplayOverride] = [:]
 
-    private init() {
+    /// `defaults` is injectable so tests can use a throwaway suite.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         load()
     }
 
@@ -101,13 +106,13 @@ final class PerDisplaySettings {
     // MARK: - Persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+        guard let data = defaults.data(forKey: defaultsKey),
               let decoded = try? JSONDecoder().decode([String: DisplayOverride].self, from: data) else { return }
         overrides = decoded
     }
 
     private func save() {
         guard let data = try? JSONEncoder().encode(overrides) else { return }
-        UserDefaults.standard.set(data, forKey: defaultsKey)
+        defaults.set(data, forKey: defaultsKey)
     }
 }

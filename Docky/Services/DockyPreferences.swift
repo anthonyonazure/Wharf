@@ -2491,7 +2491,8 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     /// (only the live blur remains, no tint on top).
     var launchpadOverlayTransparency: CGFloat {
         didSet {
-            let clampedValue = min(max(launchpadOverlayTransparency, 0), 1)
+            // Bound first: max(nan, 0) is nan, and the re-assignment below would then recurse forever.
+            let clampedValue = min(max(0, launchpadOverlayTransparency), 1)
             guard clampedValue != oldValue else {
                 if launchpadOverlayTransparency != clampedValue {
                     launchpadOverlayTransparency = clampedValue
@@ -2557,7 +2558,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     var launchpadBaseIconSize: CGFloat {
         didSet {
             let clampedValue = min(
-                max(launchpadBaseIconSize, DefaultValues.launchpadBaseIconSizeMin),
+                max(DefaultValues.launchpadBaseIconSizeMin, launchpadBaseIconSize),
                 DefaultValues.launchpadBaseIconSizeMax
             )
             guard clampedValue != oldValue else {
@@ -2582,7 +2583,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     var launchpadColumnSpacing: CGFloat {
         didSet {
             let clampedValue = min(
-                max(launchpadColumnSpacing, DefaultValues.launchpadSpacingMin),
+                max(DefaultValues.launchpadSpacingMin, launchpadColumnSpacing),
                 DefaultValues.launchpadSpacingMax
             )
             guard clampedValue != oldValue else {
@@ -2814,12 +2815,12 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    private var isSyncingOpenAtLoginPreference = false
+    var isSyncingOpenAtLoginPreference = false
 
     /// When `true`, tile-store didSet observers skip the push to
     /// `ProfileService`. Used by `applyProfile(_:)` so loading a profile
     /// doesn't immediately overwrite it with the values just loaded.
-    private(set) var isApplyingProfile = false
+    var isApplyingProfile = false
 
     /// Where tile-store edits are mirrored. Nil means the shared service;
     /// tests point it at a service built over a throwaway suite.
@@ -3430,7 +3431,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    private static func existingFileURL(at path: String?) -> URL? {
+    static func existingFileURL(at path: String?) -> URL? {
         guard let path, !path.isEmpty else { return nil }
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         return URL(fileURLWithPath: path)
@@ -3647,7 +3648,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         NSColor.windowBackgroundColor.blended(withFraction: 0.18, of: .black) ?? .windowBackgroundColor
     }
 
-    private enum Keys {
+    enum Keys {
         static let tileVerticalPadding = "docky.tileVerticalPadding"
         static let tileSpacing = "docky.tileSpacing"
         static let tileClipShape = "docky.tileClipShape"
@@ -3787,7 +3788,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let appearanceOverrideMigrationVersion = "docky.appearanceOverrideMigrationVersion"
     }
 
-    private enum DefaultValues {
+    enum DefaultValues {
         static let tileVerticalPadding: CGFloat = 8
         static let tileSpacing: CGFloat = 0
         static let tileClipShape: DockClipShape = .rounded
@@ -4195,16 +4196,18 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.launchpadGridColumnCount = max(storedLaunchpadGridColumnCount ?? DefaultValues.launchpadGridColumnCount, 1)
         self.launchpadGridRowCount = max(storedLaunchpadGridRowCount ?? DefaultValues.launchpadGridRowCount, 1)
         self.launchpadBaseIconSize = min(
+            // Bound first so a stored NaN becomes the minimum: `Int(nan)` in the
+            // Launchpad layout would otherwise trap when the overlay opens.
             max(
-                storedLaunchpadBaseIconSize.map { CGFloat($0) } ?? DefaultValues.launchpadBaseIconSize,
-                DefaultValues.launchpadBaseIconSizeMin
+                DefaultValues.launchpadBaseIconSizeMin,
+                storedLaunchpadBaseIconSize.map { CGFloat($0) } ?? DefaultValues.launchpadBaseIconSize
             ),
             DefaultValues.launchpadBaseIconSizeMax
         )
         self.launchpadColumnSpacing = min(
             max(
-                storedLaunchpadColumnSpacing.map { CGFloat($0) } ?? DefaultValues.launchpadColumnSpacing,
-                DefaultValues.launchpadSpacingMin
+                DefaultValues.launchpadSpacingMin,
+                storedLaunchpadColumnSpacing.map { CGFloat($0) } ?? DefaultValues.launchpadColumnSpacing
             ),
             DefaultValues.launchpadSpacingMax
         )
@@ -4696,7 +4699,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         defaults.set(data, forKey: Keys.launchpadShortcut)
     }
 
-    private static func decodeColor(from data: Data?) -> DockColor? {
+    static func decodeColor(from data: Data?) -> DockColor? {
         guard let data else {
             return nil
         }
@@ -4704,7 +4707,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode(DockColor.self, from: data)
     }
 
-    private static func decodeWidgetPlacements(from data: Data?) -> [WidgetPlacement]? {
+    static func decodeWidgetPlacements(from data: Data?) -> [WidgetPlacement]? {
         guard let data else {
             return nil
         }
@@ -4712,7 +4715,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode([WidgetPlacement].self, from: data)
     }
 
-    private static func decodeAppWidgetDisplays(from data: Data?) -> [AppWidgetDisplay]? {
+    static func decodeAppWidgetDisplays(from data: Data?) -> [AppWidgetDisplay]? {
         guard let data else {
             return nil
         }
@@ -4720,7 +4723,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode([AppWidgetDisplay].self, from: data)
     }
 
-    private static func decodeAppIconOverrides(from data: Data?) -> [AppIconOverride]? {
+    static func decodeAppIconOverrides(from data: Data?) -> [AppIconOverride]? {
         guard let data else {
             return nil
         }
@@ -4728,7 +4731,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode([AppIconOverride].self, from: data)
     }
 
-    private static func decodeTrashIconOverrides(from data: Data?) -> [TrashIconOverride]? {
+    static func decodeTrashIconOverrides(from data: Data?) -> [TrashIconOverride]? {
         guard let data else {
             return nil
         }
@@ -4736,7 +4739,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode([TrashIconOverride].self, from: data)
     }
 
-    private static func decodeFolderIconOverrides(from data: Data?) -> [FolderIconOverride]? {
+    static func decodeFolderIconOverrides(from data: Data?) -> [FolderIconOverride]? {
         guard let data else {
             return nil
         }
@@ -4744,7 +4747,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode([FolderIconOverride].self, from: data)
     }
 
-    private static func decodeKeyboardShortcut(from data: Data?) -> KeyboardShortcut? {
+    static func decodeKeyboardShortcut(from data: Data?) -> KeyboardShortcut? {
         guard let data else {
             return nil
         }
@@ -4752,7 +4755,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode(KeyboardShortcut.self, from: data)
     }
 
-    private static func decodePinnedItems(from data: Data?) -> [PinnedTileItem]? {
+    static func decodePinnedItems(from data: Data?) -> [PinnedTileItem]? {
         guard let data else {
             return nil
         }
@@ -4760,7 +4763,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode([PinnedTileItem].self, from: data)
     }
 
-    private static func decodeTrailingItems(from data: Data?) -> [TrailingTileItem]? {
+    static func decodeTrailingItems(from data: Data?) -> [TrailingTileItem]? {
         guard let data else {
             return nil
         }
@@ -4768,7 +4771,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return try? JSONDecoder().decode([TrailingTileItem].self, from: data)
     }
 
-    private static func normalizedBundleIdentifiers(_ bundleIdentifiers: [String]) -> [String] {
+    static func normalizedBundleIdentifiers(_ bundleIdentifiers: [String]) -> [String] {
         Array(Set(bundleIdentifiers.filter { !$0.isEmpty })).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }

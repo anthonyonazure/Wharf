@@ -277,7 +277,7 @@ final class WidgetSettingsTests: DockyPreferencesTestCase {
     func testManifestWithManyFieldsAndDuplicateIds() {
         let fieldsJSON = (0..<2_000).map { _ in "{\"id\":\"dup\",\"type\":\"text\"}" }.joined(separator: ",")
         let fields = parse("{\"fields\":[\(fieldsJSON)]}")
-        XCTAssertEqual(fields.count, 2_000, "parser preserves duplicates; the UI keys by index")
+        XCTAssertEqual(fields.count, 1, "duplicate ids collapse to the first field")
     }
 
     func testManifestHugeNumberDefaultDoesNotTrap() {

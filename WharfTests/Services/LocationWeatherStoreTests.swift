@@ -260,7 +260,6 @@ final class ConfiguredWeatherModelTests: XCTestCase {
     }
 
     func testCancellationLeavesTheModelAbleToRefresh() {
-        expectKnownBug("Latent: a CancellationError (or Task cancellation) returns before isLoading is reset, so the model would refuse every later refresh. Unreachable today because refresh() never cancels while loading.")
         let recorder = FetchRecorder(); let clock = Clock()
         recorder.enqueue(.failure(CancellationError()))
         let model = makeModel(recorder: recorder, clock: clock)
@@ -317,7 +316,6 @@ final class LocationWeatherStoreTests: XCTestCase {
     func testNegativeZeroAndPositiveZeroCoalesce() {
         // -0.001 and 0.001 are the same place to within a kilometre, but
         // "%.2f" renders them as "-0.00" and "0.00".
-        expectKnownBug("Low severity: sub-0.005 negative coordinates format as '-0.00' and miss the shared model of their positive twin.")
         let store = LocationWeatherStore()
         let a = store.model(for: ConfiguredWeatherLocation(latitude: -0.001, longitude: 10, name: nil))
         let b = store.model(for: ConfiguredWeatherLocation(latitude: 0.001, longitude: 10, name: nil))

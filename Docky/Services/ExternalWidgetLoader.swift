@@ -107,7 +107,26 @@ final class ExternalWidgetLoader {
         let directory = widgetsDirectory
         ensureDirectoryExists(directory)
 
-        let destination = directory.appendingPathComponent(sourceURL.lastPathComponent)
+        // The source must be a real `*.dockywidget` package directory. The
+        // name comes from the last path component, so reject '.', '..' and
+        // anything with a separator before it can steer the destination.
+        let name = sourceURL.lastPathComponent
+        guard !name.isEmpty, name != ".", name != "..",
+              !name.contains("/"),
+              sourceURL.pathExtension == Self.bundleExtension else {
+            throw InstallError.notAWidgetBundle
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw InstallError.notAWidgetBundle
+        }
+
+        // Require a direct child of the (symlink-resolved) widgets directory.
+        let destination = directory.appendingPathComponent(name)
+        guard Self.isDirectChild(destination, of: directory) else {
+            throw InstallError.destinationOutsideWidgetsDirectory
+        }
         if FileManager.default.fileExists(atPath: destination.path) {
             try FileManager.default.removeItem(at: destination)
         }
@@ -119,10 +138,30 @@ final class ExternalWidgetLoader {
         return destination
     }
 
+    enum InstallError: Error {
+        case notAWidgetBundle
+        case destinationOutsideWidgetsDirectory
+    }
+
+    /// True when `url`, with `.`/`..` collapsed, sits exactly one level under
+    /// `directory`. The parent is symlink-resolved; the entry itself is not,
+    /// so a symlinked bundle inside the directory can still be removed.
+    private static func isDirectChild(_ url: URL, of directory: URL) -> Bool {
+        let standardized = url.standardizedFileURL
+        guard standardized.lastPathComponent != "..", standardized.lastPathComponent != "." else { return false }
+        let parent = standardized.deletingLastPathComponent().resolvingSymlinksInPath().path
+        let root = directory.standardizedFileURL.resolvingSymlinksInPath().path
+        return parent == root
+    }
+
     /// Removes a `*.dockywidget` bundle from disk. The in-memory plugin
     /// stays registered until the next launch (Bundle.load() is
     /// one-way); the UI surfaces this with a restart-required notice.
+    /// Only direct children of the widgets directory may be removed.
     func uninstallBundle(at url: URL) throws {
+        guard Self.isDirectChild(url, of: widgetsDirectory) else {
+            throw InstallError.destinationOutsideWidgetsDirectory
+        }
         try FileManager.default.removeItem(at: url)
         log.info("Removed widget bundle at \(url.path, privacy: .public)")
     }

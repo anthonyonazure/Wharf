@@ -25,8 +25,7 @@ final class AudioControlPureTests: XCTestCase {
     }
 
     func testNaNVolumeIsNotWrittenToTheDevice() {
-        expectKnownBug("clampedVolume(.nan) returns NaN, because min/max propagate the first operand when the comparison is false. setVolume would then hand NaN to CoreAudio. Unreachable from the slider, so low severity.")
-        XCTAssertFalse(AudioControlService.clampedVolume(.nan).isNaN)
+        XCTAssertEqual(AudioControlService.clampedVolume(.nan), 0)
     }
 
     func testClampIsIdempotent() {
@@ -424,7 +423,6 @@ final class MediaPlaybackPureTests: XCTestCase {
     }
 
     func testCRLFLyricsAreSplitIntoLines() {
-        expectKnownBug("parseLRC splits with split(separator: \"\\n\"), but Swift treats \"\\r\\n\" as ONE Character, so a CRLF file is never split: every timestamp lands on a single 'line' and all of them show the last lyric (with a trailing CRLF). Medium severity for synced lyrics from Windows-authored files.")
         let lines = parse("[00:01.00] one\r\n[00:02.00] two\r\n")
         XCTAssertEqual(lines.map(\.text), ["one", "two"])
     }
@@ -877,7 +875,6 @@ final class SystemStatusPureTests: XCTestCase {
     }
 
     func testCPUUsageAcrossAThirtyTwoBitCounterWrap() {
-        expectKnownBug("The ticks are 32-bit counters widened to UInt64. After a wrap, current < previous, `&-` yields about 2^64 and the result is a bogus 100% (two counters wrapping in one interval would trap on `+`). The delta needs to be computed modulo 2^32.")
         let previous = cpu(4_294_967_290, 100, 100)
         let current = cpu(10, 116, 116) // user advanced 16, system 16, idle 16
         let percent = SystemStatusService.cpuUsagePercent(from: previous, to: current)

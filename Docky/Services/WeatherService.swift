@@ -201,6 +201,13 @@ final class WeatherService: NSObject, ObservableObject {
     /// The forecast request for a coordinate. Split out of `fetchSnapshot` so
     /// the query can be checked without touching the network.
     static func forecastURL(latitude: Double, longitude: Double, units: WeatherUnits) -> URL? {
+        // Refuse NaN, infinity and out-of-range coordinates locally rather
+        // than sending them to the remote API.
+        guard latitude.isFinite, longitude.isFinite,
+              (-90.0...90.0).contains(latitude),
+              (-180.0...180.0).contains(longitude) else {
+            return nil
+        }
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")
         components?.queryItems = [
             URLQueryItem(name: "latitude", value: String(latitude)),

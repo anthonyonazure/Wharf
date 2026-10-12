@@ -130,10 +130,15 @@ final class SystemStatusService: ObservableObject {
     }
 
     static func cpuUsagePercent(from previous: CPUSample, to current: CPUSample) -> Double {
-        let userDelta = current.user &- previous.user
-        let systemDelta = current.system &- previous.system
-        let idleDelta = current.idle &- previous.idle
-        let niceDelta = current.nice &- previous.nice
+        // The kernel counters are 32-bit and wrap. Subtract modulo 2^32 and
+        // only then widen, so a wrap yields the small true delta.
+        func delta(_ current: UInt64, _ previous: UInt64) -> UInt64 {
+            UInt64(UInt32(truncatingIfNeeded: current) &- UInt32(truncatingIfNeeded: previous))
+        }
+        let userDelta = delta(current.user, previous.user)
+        let systemDelta = delta(current.system, previous.system)
+        let idleDelta = delta(current.idle, previous.idle)
+        let niceDelta = delta(current.nice, previous.nice)
         let totalDelta = userDelta + systemDelta + idleDelta + niceDelta
 
         guard totalDelta > 0 else {

@@ -345,13 +345,11 @@ final class ExternalWidgetSettingsManifestTests: XCTestCase {
     }
 
     func testOneNonObjectEntryKeepsTheOtherFields() {
-        expectKnownBug("`as? [[String: Any]]` is all or nothing, so a single non-object element (a string, null, a number) discards every field, although the per-field parser is clearly meant to skip bad entries and keep the rest.")
         let fields = parse(#"{"fields": [{"id": "a", "type": "text"}, "oops", null, {"id": "b", "type": "text"}]}"#)
         XCTAssertEqual(fields.map(\.id), ["a", "b"])
     }
 
     func testOneNonObjectOptionKeepsTheOtherOptions() {
-        expectKnownBug("Same all-or-nothing cast for select options: one stray element makes options nil.")
         let fields = parse(#"{"fields": [{"id": "m", "type": "select", "options": [{"value": "a"}, "stray", {"value": "b"}]}]}"#)
         XCTAssertEqual(fields.first?.options?.map(\.value), ["a", "b"])
     }
@@ -436,7 +434,6 @@ final class ExternalWidgetSettingsManifestTests: XCTestCase {
     }
 
     func testDuplicateFieldIdsAreCollapsed() {
-        expectKnownBug("Duplicate field ids pass through unchanged. They are the Identifiable id and the settings dictionary key, so the second field shadows the first in the UI and storage.")
         let fields = parse("""
         {"fields": [{"id": "dup", "type": "text"}, {"id": "dup", "type": "toggle"}, {"id": "dup", "type": "number"}]}
         """)
@@ -491,7 +488,6 @@ final class ExternalWidgetSettingsManifestTests: XCTestCase {
     }
 
     func testOversizeManifestIsRejected() throws {
-        expectKnownBug("The settings manifest is read and parsed with no size limit, so a hostile bundle can make launch read and parse an arbitrarily large file. 5 MB here stands in for 'far larger than any real manifest'.")
         let dir = try makeScratchDirectory("manifest")
         let filler = String(repeating: "{\"id\": \"f\", \"type\": \"text\"},", count: 200_000)
         let json = "{\"fields\": [\(filler){\"id\": \"last\", \"type\": \"text\"}]}"
@@ -670,7 +666,6 @@ final class ExternalWidgetLoaderTests: XCTestCase {
     }
 
     func testInstallRefusesNamesThatAreNotPlainBundleNames() throws {
-        expectKnownBug("installBundle trusts sourceURL.lastPathComponent. A source URL ending in '..' makes the destination the Widgets directory's parent, which is then removed before the copy. No extension or component validation exists.")
         let root = try makeScratchDirectory("traversal")
         let widgets = root.appendingPathComponent("App Support/Wharf/Widgets", isDirectory: true)
         let loader = ExternalWidgetLoader(widgetsDirectory: widgets)
@@ -683,16 +678,16 @@ final class ExternalWidgetLoaderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: precious.path), "nothing outside Widgets may be touched")
     }
 
-    func testInstallAcceptsAnyExtensionToday() throws {
-        // Current behavior: nothing checks that the source is a .dockywidget,
-        // so a stray file is copied in (it is never loaded, since the scan
-        // filters by extension).
+    func testInstallRejectsSourcesThatAreNotBundleDirectories() throws {
         let (loader, _) = try makeLoader()
         let source = try makeScratchDirectory("src")
         let file = source.appendingPathComponent("readme.txt")
         try Data("hi".utf8).write(to: file)
-        let installed = try loader.installBundle(from: file)
-        XCTAssertEqual(installed.lastPathComponent, "readme.txt")
+        XCTAssertThrowsError(try loader.installBundle(from: file))
+        // Right extension but a plain file, not a package directory.
+        let fakeFile = source.appendingPathComponent("Flat.dockywidget")
+        try Data("hi".utf8).write(to: fakeFile)
+        XCTAssertThrowsError(try loader.installBundle(from: fakeFile))
         XCTAssertTrue(loader.installedBundleURLs().isEmpty)
     }
 
@@ -711,7 +706,6 @@ final class ExternalWidgetLoaderTests: XCTestCase {
     }
 
     func testUninstallStaysInsideTheWidgetsDirectory() throws {
-        expectKnownBug("uninstallBundle removes whatever URL it is handed, with no check that it sits inside the Widgets directory.")
         let (loader, _) = try makeLoader()
         let outside = try makeScratchDirectory("outside")
         let victim = outside.appendingPathComponent("important.txt")

@@ -133,7 +133,8 @@ final class RecentFilesService: ObservableObject {
             if let url = value as? URL { return url }
             if let nsURL = value as? NSURL { return nsURL as URL }
         }
-        if let path = pathValue as? String {
+        // An empty path would become the process working directory.
+        if let path = pathValue as? String, !path.isEmpty {
             return URL(fileURLWithPath: path)
         }
         return nil

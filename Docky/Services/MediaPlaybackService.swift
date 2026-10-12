@@ -359,7 +359,9 @@ final class MediaPlaybackService: ObservableObject {
         }
 
         var result: [SyncedLyricsLine] = []
-        for rawLine in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+        // "\r\n" is a single Character in Swift, so split on isNewline
+        // rather than on "\n" to handle CRLF files.
+        for rawLine in raw.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = String(rawLine)
             let nsLine = line as NSString
             let matches = pattern.matches(in: line, range: NSRange(location: 0, length: nsLine.length))

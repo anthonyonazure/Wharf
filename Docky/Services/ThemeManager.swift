@@ -117,8 +117,19 @@ import Observation
         guard let relativePath, !relativePath.isEmpty else { return nil }
         guard let activeBundleURL else { return nil }
         let url = activeBundleURL.appending(path: relativePath, directoryHint: .notDirectory)
+        guard Self.isContained(url, in: activeBundleURL) else { return nil }
         guard fileManager.fileExists(atPath: url.path) else { return nil }
         return url
+    }
+
+    /// True when `url`, after collapsing `..` and resolving symlinks, lies
+    /// strictly inside `root`. Keeps a hostile theme.json from pointing at
+    /// files outside its own folder.
+    private static func isContained(_ url: URL, in root: URL) -> Bool {
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let prefix = resolvedRoot.hasSuffix("/") ? resolvedRoot : resolvedRoot + "/"
+        return resolved.hasPrefix(prefix)
     }
 
     /// Looks for a theme-supplied app icon at
@@ -135,7 +146,7 @@ import Observation
                 path: "\(bundleIdentifier).\(ext)",
                 directoryHint: .notDirectory
             )
-            if fileManager.fileExists(atPath: url.path) {
+            if Self.isContained(url, in: assetsDir), fileManager.fileExists(atPath: url.path) {
                 return url
             }
         }

@@ -80,6 +80,15 @@ Turn it on in **Settings → Behavior → Placement → Display → All Displays
 
 In **Settings → Behavior → Windows Keyboard**. Needs Accessibility permission.
 
+### 1c. Focus follows mouse (Unix-style)
+
+- [ ] Whichever window the pointer is over gets keyboard focus, no click needed
+- [ ] Per-display opt-in, since this habit fights anyone used to macOS's
+      click-to-focus on the same desk
+
+Classic X11/Unix window-manager behavior: focus tracks the pointer instead of
+the last click. Not started.
+
 ### 2. Taskbar mode
 
 - [x] Per-window cards rather than per-app icons

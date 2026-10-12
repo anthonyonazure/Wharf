@@ -69,7 +69,7 @@ final class DockEditorService {
         }
 
         restartDock()
-        TileStore.shared.refreshAfterDockyEditedSystemDock()
+        refreshTileStore()
         return true
     }
 
@@ -108,7 +108,7 @@ final class DockEditorService {
         }
 
         restartDock()
-        TileStore.shared.refreshAfterDockyEditedSystemDock()
+        refreshTileStore()
         return true
     }
 
@@ -156,6 +156,13 @@ final class DockEditorService {
         }
     }
 
+    /// A scratch plist (test seam) must not spin up the process-wide store,
+    /// which would start workspace and media services.
+    private func refreshTileStore() {
+        guard dockPlistURLOverride == nil else { return }
+        TileStore.shared.refreshAfterDockyEditedSystemDock()
+    }
+
     private func restartDock() {
         guard restartsDockAfterWrite else { return }
         NSRunningApplication
@@ -163,17 +170,17 @@ final class DockEditorService {
             .forEach { $0.forceTerminate() }
     }
 
-    private func pinnedAppBundleIdentifier(in entry: [String: Any]) -> String? {
+    func pinnedAppBundleIdentifier(in entry: [String: Any]) -> String? {
         let tileData = entry["tile-data"] as? [String: Any]
         let fileData = tileData?["file-data"] as? [String: Any]
         let urlString = fileData?["_CFURLString"] as? String
         let url = urlString.flatMap(URL.init(string:))
 
         return (tileData?["bundle-identifier"] as? String)
-            ?? url.flatMap { Bundle(url: $0)?.bundleIdentifier }
+            ?? url.flatMap { $0.isFileURL ? Bundle(url: $0)?.bundleIdentifier : nil }
     }
 
-    private func pinnedItemID(in entry: [String: Any], at index: Int) -> String {
+    func pinnedItemID(in entry: [String: Any], at index: Int) -> String {
         if let guid = (entry["GUID"] as? NSNumber)?.stringValue {
             return guid
         }

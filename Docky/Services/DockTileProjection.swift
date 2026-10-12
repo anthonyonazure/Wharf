@@ -28,14 +28,30 @@ enum DockTileProjection {
         windows: [AppWindow]
     ) -> [Tile] {
         let preferences = DockyPreferences.shared
-        let mode = preferences.dockContentMode
-        let filtersToScreen = preferences.showsOnlyCurrentScreenWindows
+        return project(
+            tiles,
+            screen: dock.screen,
+            mode: preferences.dockContentMode,
+            filtersToScreen: preferences.showsOnlyCurrentScreenWindows,
+            grouping: preferences.windowGrouping,
+            windows: windows
+        )
+    }
 
+    /// Pure core of `project(_:dock:windows:)`: every input is explicit so the
+    /// transform can be exercised without the shared preferences or a dock.
+    static func project(
+        _ tiles: [Tile],
+        screen: NSScreen?,
+        mode: DockContentMode,
+        filtersToScreen: Bool,
+        grouping: DockWindowGrouping,
+        windows: [AppWindow]
+    ) -> [Tile] {
         // Nothing to do in the default configuration; skip the work entirely
         // so the common path stays as cheap as upstream's.
         guard mode == .taskbar || filtersToScreen else { return tiles }
 
-        let screen = dock.screen
         let windowsForThisDock = filtersToScreen
             ? windows.filter { isWindow($0, on: screen) }
             : windows
@@ -79,17 +95,22 @@ enum DockTileProjection {
                 continue
             }
 
-            result.append(contentsOf: expand(appTile: appTile, tile: tile, windows: appWindows))
+            result.append(contentsOf: expand(appTile: appTile, tile: tile, windows: appWindows, grouping: grouping))
         }
 
         return result
     }
 
     /// One card per window, one icon per app, or a mix, per the grouping rule.
-    private static func expand(appTile: AppTile, tile: Tile, windows: [AppWindow]) -> [Tile] {
+    private static func expand(
+        appTile: AppTile,
+        tile: Tile,
+        windows: [AppWindow],
+        grouping: DockWindowGrouping
+    ) -> [Tile] {
         guard !windows.isEmpty else { return [tile] }
 
-        switch DockyPreferences.shared.windowGrouping {
+        switch grouping {
         case .always:
             // Classic Dock behavior: the app is one tile no matter how many
             // windows it has.

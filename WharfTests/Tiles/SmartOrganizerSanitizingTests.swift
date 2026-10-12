@@ -152,9 +152,7 @@ final class SmartOrganizerSanitizingTests: XCTestCase {
             apps: apps("a", "b", "c")
         )
         let members = result.first(where: { $0.kind == .appFolder })?.folderBundleIdentifiers ?? []
-        XCTExpectFailure("folder membership is filtered, not de-duplicated, so a repeated id is kept twice") {
-            XCTAssertEqual(members.count, Set(members).count)
-        }
+        XCTAssertEqual(members, ["a", "b"])
     }
 
     func testEveryAppAppearsExactlyOnceForAdversarialSuggestions() {

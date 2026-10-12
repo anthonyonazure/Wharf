@@ -111,11 +111,10 @@ final class TileStoreIdentityTests: XCTestCase {
         }
     }
 
-    func testNormalizedApplicationNameStripsDotAppAnywhereInTheName() {
-        // Current behavior: ".app" is removed wherever it occurs, so
-        // "My.application" collapses. Harmless while both sides of a
-        // comparison are normalized the same way; pinned here on purpose.
-        XCTAssertEqual(TileStore.normalizedApplicationName("My.application"), "mylication")
+    func testNormalizedApplicationNameOnlyStripsATrailingDotApp() {
+        XCTAssertEqual(TileStore.normalizedApplicationName("My.application"), "my.application")
+        XCTAssertEqual(TileStore.normalizedApplicationName("My.app.Thing"), "my.app.thing")
+        XCTAssertEqual(TileStore.normalizedApplicationName("My.application.app"), "my.application")
     }
 
     func testNormalizedApplicationNameIsIdempotent() {
@@ -248,6 +247,15 @@ final class TileStoreIdentityTests: XCTestCase {
         XCTAssertFalse(TileStore.matchesImportedPinnedItem(stack, stack))
     }
 
+    // MARK: - reordered
+
+    func testReorderedSkipsUnknownIDsAndHandsOutSharedIDsInOrder() {
+        let result = TileStore.reordered(["x1", "x2", "y"], by: ["y", "x", "x", "ghost"], site: "test") {
+            String($0.prefix(1))
+        }
+        XCTAssertEqual(result, ["y", "x1", "x2"])
+    }
+
     // MARK: - pinnedItemAdditions (system Dock merge)
 
     func testAdditionsExcludeFinderAndAlreadyPinnedApps() {
@@ -285,17 +293,15 @@ final class TileStoreIdentityTests: XCTestCase {
         // otherwise be appended with the same item id ("app:b"), producing two
         // pinned tiles with one identity.
         let additions = TileStore.pinnedItemAdditions(existing: [], refreshed: [app("b"), app("b")])
-        XCTExpectFailure("pinnedItemAdditions only de-duplicates against existing items, not within the import") {
-            XCTAssertEqual(Set(additions.map(\.id)).count, additions.count)
-        }
+        XCTAssertEqual(additions, [.app(bundleIdentifier: "b")])
+        XCTAssertEqual(Set(additions.map(\.id)).count, additions.count)
     }
 
     func testAdditionsWithSpacersSharingAGuidStayUnique() {
         let refreshed = [Tile(id: "5", content: .spacer), Tile(id: "5", content: .spacer)]
         let additions = TileStore.pinnedItemAdditions(existing: [], refreshed: refreshed)
-        XCTExpectFailure("duplicate spacer GUIDs are imported twice with the same item id") {
-            XCTAssertEqual(Set(additions.map(\.id)).count, additions.count)
-        }
+        XCTAssertEqual(additions.map(\.id), ["5"])
+        XCTAssertEqual(Set(additions.map(\.id)).count, additions.count)
     }
 
     // MARK: - makePinnedTile / makeWidgetTile

@@ -437,12 +437,10 @@ final class DockEditorServiceTests: XCTestCase {
         // Two distinct apps, request names app 1 twice. A correct editor
         // refuses (or preserves both); silently writing [a, a] loses app b
         // from the user's real Dock.
-        try write(apps: [appEntry(guid: 1, bundleID: "a"), appEntry(guid: 2, bundleID: "b")])
-        _ = editor().setPinnedItemOrder(ids: ["1", "1"])
-        let after = try readApps()
-        XCTExpectFailure("setPinnedItemOrder only compares counts, so a repeated id duplicates one app and drops another") {
-            XCTAssertEqual(Set(bundleIDs(after)), ["a", "b"])
-        }
+        let original = try write(apps: [appEntry(guid: 1, bundleID: "a"), appEntry(guid: 2, bundleID: "b")])
+        XCTAssertFalse(editor().setPinnedItemOrder(ids: ["1", "1"]))
+        XCTAssertEqual(try fileBytes(), original)
+        XCTAssertEqual(Set(bundleIDs(try readApps())), ["a", "b"])
     }
 
     func testReorderWithDuplicateGuidsInThePlistDoesNotTrap() throws {
@@ -460,11 +458,8 @@ final class DockEditorServiceTests: XCTestCase {
         try write(apps: [
             appEntry(guid: 5, bundleID: "a"), appEntry(guid: 5, bundleID: "b"), appEntry(guid: 6, bundleID: "c"),
         ])
-        _ = editor().setPinnedItemOrder(ids: ["6", "5", "5"])
-        let after = bundleIDs(try readApps())
-        XCTExpectFailure("entries sharing a GUID are indistinguishable, so first-wins overwrites the second with a copy of the first") {
-            XCTAssertEqual(Set(after), ["a", "b", "c"])
-        }
+        XCTAssertTrue(editor().setPinnedItemOrder(ids: ["6", "5", "5"]))
+        XCTAssertEqual(bundleIDs(try readApps()), ["c", "a", "b"])
     }
 
     func testReorderFirstWinsForDuplicateGuids() throws {

@@ -86,15 +86,23 @@ final class DockEditorService {
             }
 
             // The Dock plist is writable by any process running as the user, so a
-            // duplicate GUID must not trap. First entry wins, matching TileStore.
-            let appsByID = Dictionary(
-                apps.enumerated().map { index, entry in
-                    (pinnedItemID(in: entry, at: index), entry)
-                },
-                uniquingKeysWith: { first, _ in first }
-            )
+            // duplicate GUID must not trap. Entries that share an id are handed
+            // out in plist order, one per requested occurrence, so the request
+            // must be a permutation of the existing ids and every app survives.
+            var remainingByID: [String: [[String: Any]]] = [:]
+            for (index, entry) in apps.enumerated() {
+                remainingByID[pinnedItemID(in: entry, at: index), default: []].append(entry)
+            }
 
-            let orderedApps = ids.compactMap { appsByID[$0] }
+            var orderedApps: [[String: Any]] = []
+            orderedApps.reserveCapacity(apps.count)
+            for id in ids {
+                guard var bucket = remainingByID[id], !bucket.isEmpty else {
+                    return false
+                }
+                orderedApps.append(bucket.removeFirst())
+                remainingByID[id] = bucket
+            }
             guard orderedApps.count == apps.count else {
                 return false
             }

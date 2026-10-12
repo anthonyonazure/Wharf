@@ -274,6 +274,10 @@ final class TileStore: ObservableObject {
         let reorderedItems = Self.reordered(filteredItems, by: ids, site: "TileStore.pinnedItemsReorder") {
             Self.pinnedTileID(for: $0)
         }
+        guard reorderedItems.count == filteredItems.count else {
+            TileStore.logger.warning("setPinnedTileOrder: ids are not a permutation of the pinned items")
+            return
+        }
 
         TileStore.logger.info("setPinnedTileOrder: applying reorder, reorderedItems count=\(reorderedItems.count)")
         pinnedTiles = reorderedTiles
@@ -1738,10 +1742,14 @@ final class TileStore: ObservableObject {
     }
 
     static func normalizedApplicationName(_ name: String) -> String {
-        name
-            .replacingOccurrences(of: ".app", with: "", options: [.caseInsensitive])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        // Only a trailing ".app" is a bundle suffix; "My.application" keeps its
+        // name. Repeated suffixes are stripped so the result is idempotent.
+        var trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let suffixRange = trimmed.range(of: ".app", options: [.caseInsensitive, .backwards, .anchored]) {
+            trimmed = trimmed.replacingCharacters(in: suffixRange, with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     private func bundleIdentifier(of tile: Tile) -> String? {
@@ -2700,17 +2708,43 @@ final class TileStore: ObservableObject {
         return normalized.isEmpty ? "Folder" : normalized
     }
 
-    /// Looks `elements` up by id and returns them in `ids` order. Duplicate
-    /// ids among `elements` resolve to the first element; ids that match
-    /// nothing are skipped, so the caller must compare counts.
+    /// Returns `elements` in `ids` order. Each element is used at most once:
+    /// elements that share an id are handed out in their original order, one
+    /// per occurrence of that id in `ids`. Requested ids that match nothing, or
+    /// that repeat more often than the id exists, are skipped, so a result
+    /// shorter than `elements` means `ids` was not a permutation and the caller
+    /// must refuse it.
     static func reordered<Element>(
         _ elements: [Element],
         by ids: [String],
         site: String,
         id: (Element) -> String
     ) -> [Element] {
-        let elementsByID = DataIntegrityReporter.makeDictionary(elements.map { (id($0), $0) }, site: site)
-        return ids.compactMap { elementsByID[$0] }
+        var remaining: [String: [Element]] = [:]
+        var duplicates: [String] = []
+        for element in elements {
+            let key = id(element)
+            if remaining[key] != nil {
+                duplicates.append(key)
+            }
+            remaining[key, default: []].append(element)
+        }
+        if !duplicates.isEmpty {
+            DataIntegrityReporter.reportDuplicateKeys(site: site, duplicates: duplicates)
+        }
+
+        var consumed: [String: Int] = [:]
+        var result: [Element] = []
+        result.reserveCapacity(elements.count)
+        for requested in ids {
+            let index = consumed[requested, default: 0]
+            guard let bucket = remaining[requested], index < bucket.count else {
+                continue
+            }
+            consumed[requested] = index + 1
+            result.append(bucket[index])
+        }
+        return result
     }
 
     // MARK: - Parsing plist entries
@@ -2733,11 +2767,17 @@ final class TileStore: ObservableObject {
             .filter { item in
                 item.kind != .app || item.bundleIdentifier != finderBundleID
             }
-        return importedItems.filter { importedItem in
-            !existing.contains { existingItem in
-                matchesImportedPinnedItem(existingItem, importedItem)
+        // First wins within the batch as well as against existing items, so a
+        // repeated app or a repeated spacer GUID imports once.
+        var accepted: [PinnedTileItem] = []
+        for importedItem in importedItems {
+            let isKnown = existing.contains { matchesImportedPinnedItem($0, importedItem) }
+                || accepted.contains { matchesImportedPinnedItem($0, importedItem) }
+            if !isKnown {
+                accepted.append(importedItem)
             }
         }
+        return accepted
     }
 
     static func parse(entry: [String: Any], fallbackID: String) -> Tile? {

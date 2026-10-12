@@ -380,7 +380,10 @@ final class PinnedDockSmartOrganizerService {
                 }
                 result.append(.app(bundleIdentifier: bundleIdentifier))
             case .folder(let title, let bundleIdentifiers):
-                let uniqueBundleIdentifiers = bundleIdentifiers.filter { remainingBundleIdentifiers.contains($0) }
+                var seenInFolder: Set<String> = []
+                let uniqueBundleIdentifiers = bundleIdentifiers.filter {
+                    remainingBundleIdentifiers.contains($0) && seenInFolder.insert($0).inserted
+                }
                 guard uniqueBundleIdentifiers.count >= 2 else {
                     for bundleIdentifier in uniqueBundleIdentifiers where remainingBundleIdentifiers.remove(bundleIdentifier) != nil {
                         result.append(.app(bundleIdentifier: bundleIdentifier))

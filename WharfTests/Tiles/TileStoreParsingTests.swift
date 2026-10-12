@@ -599,7 +599,7 @@ final class TileStoreParsingTests: XCTestCase {
         XCTAssertEqual(result.map(\.id), ["a", "b"])
     }
 
-    func testReorderedWithDuplicateElementIDsKeepsFirstAndDoesNotTrap() {
+    func testReorderedWithDuplicateElementIDsHandsThemOutInOrderAndDoesNotTrap() {
         let tiles = [
             Tile(id: "dup", content: .spacer),
             Tile(id: "dup", content: .divider),
@@ -607,6 +607,8 @@ final class TileStoreParsingTests: XCTestCase {
         ]
         let result = TileStore.reordered(tiles, by: ["x", "dup"], site: "t") { $0.id }
         XCTAssertEqual(result, [tiles[2], tiles[0]])
+        let both = TileStore.reordered(tiles, by: ["dup", "x", "dup"], site: "t") { $0.id }
+        XCTAssertEqual(both, [tiles[0], tiles[2], tiles[1]])
     }
 
     func testReorderedWithEmptyInputs() {
@@ -614,11 +616,11 @@ final class TileStoreParsingTests: XCTestCase {
         XCTAssertEqual(TileStore.reordered([Tile(id: "a", content: .spacer)], by: [], site: "t") { $0.id }, [])
     }
 
-    func testReorderedWithRepeatedRequestIDsRepeatsTheElement() {
-        // The helper alone cannot tell a repeat from a permutation; callers
-        // compare counts. This pins down what they receive.
+    func testReorderedWithRepeatedRequestIDsUsesEachElementOnce() {
+        // A repeated request id cannot yield the element twice, so the result
+        // is shorter than the input and callers refuse it on the count check.
         let tiles = ["a", "b"].map { Tile(id: $0, content: .spacer) }
         let result = TileStore.reordered(tiles, by: ["a", "a"], site: "t") { $0.id }
-        XCTAssertEqual(result.map(\.id), ["a", "a"])
+        XCTAssertEqual(result.map(\.id), ["a"])
     }
 }

@@ -312,7 +312,7 @@ final class MarketplaceClientTests: XCTestCase {
         }
     }
 
-    func testZipSymlinkEntryCannotPointStagedBundleAtArbitraryFiles() async throws {
+    func testZipSymlinkEntryIsStagedAsCurrentBehavior() async throws {
         // A symlink entry that targets /etc/passwd is created by the
         // extractor, so the staged bundle can contain a link to an arbitrary
         // file. Recorded as current behavior; nothing here reads through it.

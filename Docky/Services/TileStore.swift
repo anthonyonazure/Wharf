@@ -176,11 +176,7 @@ final class TileStore: ObservableObject {
             rebuildTiles()
             return
         }
-        let apps = (plist["persistent-apps"] as? [[String: Any]]) ?? []
-        let others = (plist["persistent-others"] as? [[String: Any]]) ?? []
-        let refreshedPinnedTiles = apps.enumerated().compactMap { index, entry in
-            Self.parse(entry: entry, fallbackID: Self.fallbackTileID(for: entry, at: index, section: "persistent-apps"))
-        }
+        let refreshedPinnedTiles = Self.parsedTiles(from: plist, section: "persistent-apps")
         dockPinnedTilesByBundleIdentifier = Dictionary(
             refreshedPinnedTiles.compactMap { tile in
                 bundleIdentifier(of: tile).map { ($0, tile) }
@@ -193,9 +189,7 @@ final class TileStore: ObservableObject {
         }
         synchronizeAppWidgetDisplaysWithFolders()
         refreshPinnedTilesFromPreferences()
-        systemOtherTiles = others.enumerated().compactMap { index, entry in
-            Self.parse(entry: entry, fallbackID: Self.fallbackTileID(for: entry, at: index, section: "persistent-others"))
-        }
+        systemOtherTiles = Self.parsedTiles(from: plist, section: "persistent-others")
         systemOtherTilesByID = DataIntegrityReporter.makeDictionary(systemOtherTiles.map { ($0.id, $0) }, site: "TileStore.systemOtherTiles")
         if syncPreferencesFromSystemDock {
             refreshTrailingPreferencesIfNeeded()
@@ -267,8 +261,7 @@ final class TileStore: ObservableObject {
             return
         }
 
-        let tilesByID = DataIntegrityReporter.makeDictionary(pinnedTiles.map { ($0.id, $0) }, site: "TileStore.pinnedReorder")
-        let reorderedTiles = ids.compactMap { tilesByID[$0] }
+        let reorderedTiles = Self.reordered(pinnedTiles, by: ids, site: "TileStore.pinnedReorder") { $0.id }
         guard reorderedTiles.count == pinnedTiles.count else {
             TileStore.logger.warning("setPinnedTileOrder: reorderedTiles count mismatch: \(reorderedTiles.count) vs \(self.pinnedTiles.count)")
             return
@@ -278,8 +271,9 @@ final class TileStore: ObservableObject {
         let idsSet = Set(ids)
         let filteredItems = preferences.pinnedItems.filter { idsSet.contains(Self.pinnedTileID(for: $0)) }
 
-        let itemsByID = DataIntegrityReporter.makeDictionary(filteredItems.map { (Self.pinnedTileID(for: $0), $0) }, site: "TileStore.pinnedItemsReorder")
-        let reorderedItems = ids.compactMap { itemsByID[$0] }
+        let reorderedItems = Self.reordered(filteredItems, by: ids, site: "TileStore.pinnedItemsReorder") {
+            Self.pinnedTileID(for: $0)
+        }
 
         TileStore.logger.info("setPinnedTileOrder: applying reorder, reorderedItems count=\(reorderedItems.count)")
         pinnedTiles = reorderedTiles
@@ -951,8 +945,9 @@ final class TileStore: ObservableObject {
             return
         }
 
-        let itemsByID = DataIntegrityReporter.makeDictionary(preferences.trailingItems.map { (Self.trailingTileID(for: $0), $0) }, site: "TileStore.trailingReorder")
-        let reorderedItems = ids.compactMap { itemsByID[$0] }
+        let reorderedItems = Self.reordered(preferences.trailingItems, by: ids, site: "TileStore.trailingReorder") {
+            Self.trailingTileID(for: $0)
+        }
         guard reorderedItems.count == preferences.trailingItems.count else {
             return
         }
@@ -1654,7 +1649,7 @@ final class TileStore: ObservableObject {
         rebuildTiles()
     }
 
-    private static let finderBundleID = "com.apple.finder"
+    static let finderBundleID = "com.apple.finder"
     private static let appSearchDirectories = [
         URL(fileURLWithPath: "/Applications", isDirectory: true),
         URL(fileURLWithPath: "/System/Applications", isDirectory: true),
@@ -1742,7 +1737,7 @@ final class TileStore: ObservableObject {
         return partialMatches[0].bundleIdentifier
     }
 
-    private static func normalizedApplicationName(_ name: String) -> String {
+    static func normalizedApplicationName(_ name: String) -> String {
         name
             .replacingOccurrences(of: ".app", with: "", options: [.caseInsensitive])
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1778,21 +1773,8 @@ final class TileStore: ObservableObject {
             return
         }
 
-        let importedItems = refreshed
-            .compactMap(Self.pinnedItem(from:))
-            .filter { item in
-                item.kind != .app || item.bundleIdentifier != Self.finderBundleID
-            }
-        guard !importedItems.isEmpty else {
-            return
-        }
-
         let existingItems = preferences.pinnedItems
-        let additions = importedItems.filter { importedItem in
-            !existingItems.contains { existingItem in
-                Self.matchesImportedPinnedItem(existingItem, importedItem)
-            }
-        }
+        let additions = Self.pinnedItemAdditions(existing: existingItems, refreshed: refreshed)
         guard !additions.isEmpty else {
             return
         }
@@ -2258,8 +2240,19 @@ final class TileStore: ObservableObject {
     /// `previewTrailingSectionTiles` (anything in `tiles` past
     /// `divider:trailing` would otherwise be dropped).
     static func applyingThemeLayoutInsertions(to tiles: [Tile]) -> [Tile] {
-        guard let insertions = ThemeManager.shared.activeManifest?.layout?.insertions,
-              !insertions.isEmpty else {
+        applyingThemeLayoutInsertions(
+            to: tiles,
+            insertions: ThemeManager.shared.activeManifest?.layout?.insertions
+        )
+    }
+
+    /// Pure core of `applyingThemeLayoutInsertions(to:)`, split out so the
+    /// insertion rules can be exercised without a live theme manager.
+    static func applyingThemeLayoutInsertions(
+        to tiles: [Tile],
+        insertions: [ThemeLayoutInsertion]?
+    ) -> [Tile] {
+        guard let insertions, !insertions.isEmpty else {
             return tiles
         }
         var result = tiles
@@ -2284,7 +2277,7 @@ final class TileStore: ObservableObject {
     /// `WidgetKind` raw value and materialized via `WidgetCatalog` so
     /// a theme can drop e.g. a Search bar after Finder with the right
     /// owner-bundle wiring without the user having to do anything.
-    private static func themeInsertionContent(_ insertion: ThemeLayoutInsertion) -> TileContent? {
+    static func themeInsertionContent(_ insertion: ThemeLayoutInsertion) -> TileContent? {
         switch insertion.kind {
         case "spacer": return .spacer
         case "flexibleSpacer": return .flexibleSpacer
@@ -2300,7 +2293,7 @@ final class TileStore: ObservableObject {
         }
     }
 
-    private static func themeInsertionAnchorIndex(in tiles: [Tile], anchor: String) -> Int? {
+    static func themeInsertionAnchorIndex(in tiles: [Tile], anchor: String) -> Int? {
         if let exact = tiles.firstIndex(where: { $0.id == anchor }) {
             return exact
         }
@@ -2312,7 +2305,7 @@ final class TileStore: ObservableObject {
         }
     }
 
-    private static func isTrash(_ tile: Tile) -> Bool {
+    static func isTrash(_ tile: Tile) -> Bool {
         if case .trash = tile.content { return true }
         return false
     }
@@ -2545,7 +2538,7 @@ final class TileStore: ObservableObject {
         return survived
     }
 
-    private static func bundleIdentifiers(in tiles: [Tile]) -> Set<String> {
+    static func bundleIdentifiers(in tiles: [Tile]) -> Set<String> {
         var ids: Set<String> = []
         for tile in tiles {
             if case .app(let app) = tile.content, !app.bundleIdentifier.isEmpty {
@@ -2557,7 +2550,7 @@ final class TileStore: ObservableObject {
         return ids
     }
 
-    private static func isFinder(_ tile: Tile) -> Bool {
+    static func isFinder(_ tile: Tile) -> Bool {
         if case .app(let app) = tile.content {
             return app.bundleIdentifier == finderBundleID
         }
@@ -2580,7 +2573,7 @@ final class TileStore: ObservableObject {
         Tile(id: "minimized-window:\(minimizedWindow.windowIdentifier)", content: .minimizedWindow(minimizedWindow))
     }
 
-    nonisolated private static func pinnedItem(from tile: Tile) -> PinnedTileItem? {
+    nonisolated static func pinnedItem(from tile: Tile) -> PinnedTileItem? {
         switch tile.content {
         case .app(let app):
             guard !app.bundleIdentifier.isEmpty else {
@@ -2651,15 +2644,15 @@ final class TileStore: ObservableObject {
         }
     }
 
-    private static func pinnedTileID(for item: PinnedTileItem) -> String {
+    static func pinnedTileID(for item: PinnedTileItem) -> String {
         "pinned:\(item.id)"
     }
 
-    private static func trailingTileID(for item: TrailingTileItem) -> String {
+    static func trailingTileID(for item: TrailingTileItem) -> String {
         "trailing:\(item.id)"
     }
 
-    private static func matchesImportedPinnedItem(_ existing: PinnedTileItem, _ imported: PinnedTileItem) -> Bool {
+    static func matchesImportedPinnedItem(_ existing: PinnedTileItem, _ imported: PinnedTileItem) -> Bool {
         guard existing.kind == imported.kind else {
             return false
         }
@@ -2684,7 +2677,7 @@ final class TileStore: ObservableObject {
         }
     }
 
-    nonisolated private static func trailingItem(from tile: Tile) -> TrailingTileItem? {
+    nonisolated static func trailingItem(from tile: Tile) -> TrailingTileItem? {
         switch tile.content {
         case .folder(let folder):
             return .folder(
@@ -2707,9 +2700,47 @@ final class TileStore: ObservableObject {
         return normalized.isEmpty ? "Folder" : normalized
     }
 
+    /// Looks `elements` up by id and returns them in `ids` order. Duplicate
+    /// ids among `elements` resolve to the first element; ids that match
+    /// nothing are skipped, so the caller must compare counts.
+    static func reordered<Element>(
+        _ elements: [Element],
+        by ids: [String],
+        site: String,
+        id: (Element) -> String
+    ) -> [Element] {
+        let elementsByID = DataIntegrityReporter.makeDictionary(elements.map { (id($0), $0) }, site: site)
+        return ids.compactMap { elementsByID[$0] }
+    }
+
     // MARK: - Parsing plist entries
 
-    private static func parse(entry: [String: Any], fallbackID: String) -> Tile? {
+    /// Parses one section (`persistent-apps` or `persistent-others`) of the
+    /// system Dock plist. A section that is missing or not an array of
+    /// dictionaries reads as empty; entries that do not parse are skipped.
+    static func parsedTiles(from plist: [String: Any], section: String) -> [Tile] {
+        let entries = (plist[section] as? [[String: Any]]) ?? []
+        return entries.enumerated().compactMap { index, entry in
+            parse(entry: entry, fallbackID: fallbackTileID(for: entry, at: index, section: section))
+        }
+    }
+
+    /// Items from the system Dock that are not yet in Wharf's own pinned list.
+    /// Finder is excluded because Wharf always supplies its own.
+    static func pinnedItemAdditions(existing: [PinnedTileItem], refreshed: [Tile]) -> [PinnedTileItem] {
+        let importedItems = refreshed
+            .compactMap(pinnedItem(from:))
+            .filter { item in
+                item.kind != .app || item.bundleIdentifier != finderBundleID
+            }
+        return importedItems.filter { importedItem in
+            !existing.contains { existingItem in
+                matchesImportedPinnedItem(existingItem, importedItem)
+            }
+        }
+    }
+
+    static func parse(entry: [String: Any], fallbackID: String) -> Tile? {
         let tileType = entry["tile-type"] as? String
         let tileData = entry["tile-data"] as? [String: Any] ?? [:]
         let guid = (entry["GUID"] as? NSNumber)?.stringValue ?? fallbackID
@@ -2726,7 +2757,7 @@ final class TileStore: ObservableObject {
         }
     }
 
-    private static func parseAppTile(id: String, data: [String: Any]) -> Tile? {
+    static func parseAppTile(id: String, data: [String: Any]) -> Tile? {
         let label = (data["file-label"] as? String) ?? "Unknown"
         let fileData = data["file-data"] as? [String: Any]
         let urlString = fileData?["_CFURLString"] as? String
@@ -2740,7 +2771,7 @@ final class TileStore: ObservableObject {
         )))
     }
 
-    private static func makePinnedTile(from tile: Tile, item: PinnedTileItem) -> Tile? {
+    static func makePinnedTile(from tile: Tile, item: PinnedTileItem) -> Tile? {
         guard case .app(let app) = tile.content else {
             return nil
         }
@@ -2751,7 +2782,7 @@ final class TileStore: ObservableObject {
         )
     }
 
-    private static func makePinnedTile(bundleIdentifier: String, item: PinnedTileItem) -> Tile? {
+    static func makePinnedTile(bundleIdentifier: String, item: PinnedTileItem) -> Tile? {
         guard let app = makeAppTile(bundleIdentifier: bundleIdentifier) else {
             return nil
         }
@@ -2774,7 +2805,7 @@ final class TileStore: ObservableObject {
         )
     }
 
-    private static func makeWidgetTile(
+    static func makeWidgetTile(
         kind: WidgetKind,
         ownerBundleIdentifier: String,
         span: TileSpan,
@@ -2790,7 +2821,7 @@ final class TileStore: ObservableObject {
         )
     }
 
-    private static func parseFolderTile(id: String, data: [String: Any]) -> Tile? {
+    static func parseFolderTile(id: String, data: [String: Any]) -> Tile? {
         let label = (data["file-label"] as? String) ?? "Folder"
         let fileData = data["file-data"] as? [String: Any]
         guard let urlString = fileData?["_CFURLString"] as? String,
@@ -2811,7 +2842,7 @@ final class TileStore: ObservableObject {
         )
     }
 
-    private static func parseFolderDisplayMode(from rawValue: Any?) -> FolderTileDisplayMode {
+    static func parseFolderDisplayMode(from rawValue: Any?) -> FolderTileDisplayMode {
         guard (rawValue as? NSNumber)?.intValue == 1 else {
             return .contents
         }
@@ -2819,7 +2850,7 @@ final class TileStore: ObservableObject {
         return .folder
     }
 
-    private static func parseFolderContentViewMode(from rawValue: Any?) -> FolderTileContentViewMode {
+    static func parseFolderContentViewMode(from rawValue: Any?) -> FolderTileContentViewMode {
         switch (rawValue as? NSNumber)?.intValue {
         case 3:
             return .list
@@ -2830,12 +2861,14 @@ final class TileStore: ObservableObject {
         }
     }
 
-    private static func inferBundleIdentifier(from url: URL?) -> String? {
-        guard let url else { return nil }
+    static func inferBundleIdentifier(from url: URL?) -> String? {
+        // Bundle(url:) raises an Objective-C exception for a non-file URL, and
+        // this URL comes straight from the user-writable Dock plist.
+        guard let url, url.isFileURL else { return nil }
         return Bundle(url: url)?.bundleIdentifier
     }
 
-    private static func fallbackTileID(for entry: [String: Any], at index: Int, section: String) -> String {
+    static func fallbackTileID(for entry: [String: Any], at index: Int, section: String) -> String {
         let tileType = (entry["tile-type"] as? String) ?? "unknown"
         let tileData = entry["tile-data"] as? [String: Any] ?? [:]
         let fileData = tileData["file-data"] as? [String: Any]

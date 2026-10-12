@@ -66,19 +66,19 @@ final class PinnedDockSmartOrganizerService {
         return organizedItems.isEmpty ? items : organizedItems
     }
 
-    private struct AvailableApp: Equatable {
+    struct AvailableApp: Equatable {
         let bundleIdentifier: String
         let displayName: String
     }
 
-    private struct AvailableWidget: Equatable {
+    struct AvailableWidget: Equatable {
         let kind: WidgetKind
         let ownerBundleIdentifier: String
         let defaultSpan: TileSpan
         let title: String
     }
 
-    private enum SuggestedItem: Equatable {
+    enum SuggestedItem: Equatable {
         case app(String)
         case folder(title: String, bundleIdentifiers: [String])
         case divider
@@ -88,7 +88,7 @@ final class PinnedDockSmartOrganizerService {
         case launchpad
     }
 
-    private func flattenedApps(from items: [PinnedTileItem]) -> [AvailableApp] {
+    func flattenedApps(from items: [PinnedTileItem]) -> [AvailableApp] {
         var seen: Set<String> = []
         var result: [AvailableApp] = []
 
@@ -255,7 +255,7 @@ final class PinnedDockSmartOrganizerService {
     }
     #endif
 
-    private func heuristicSuggestedItems(
+    func heuristicSuggestedItems(
         apps: [AvailableApp],
         availableWidgets: [AvailableWidget],
         existingItems: [PinnedTileItem]
@@ -294,13 +294,13 @@ final class PinnedDockSmartOrganizerService {
         return result
     }
 
-    private struct HeuristicGroup {
+    struct HeuristicGroup {
         let title: String
         let bundleIdentifiers: [String]
         let insertDividerAfter: Bool
     }
 
-    private func groupedAppsByHeuristic(_ apps: [AvailableApp]) -> [HeuristicGroup] {
+    func groupedAppsByHeuristic(_ apps: [AvailableApp]) -> [HeuristicGroup] {
         let buckets: [(title: String, matcher: (AvailableApp) -> Bool)] = [
             ("Browse", { self.matches($0, keywords: ["safari", "chrome", "firefox", "arc", "edge", "browser"]) }),
             ("Build", { self.matches($0, keywords: ["xcode", "code", "cursor", "terminal", "ghostty", "iterm", "docker", "postman", "figma"]) }),
@@ -345,7 +345,7 @@ final class PinnedDockSmartOrganizerService {
         return widgets.first
     }
 
-    private func sanitizedPinnedItems(
+    func sanitizedPinnedItems(
         from suggestedItems: [SuggestedItem],
         apps: [AvailableApp],
         availableWidgets: [AvailableWidget],
@@ -356,9 +356,14 @@ final class PinnedDockSmartOrganizerService {
             site: "PinnedDockSmartOrganizerService.appNamesByBundleIdentifier"
         )
         let availableBundleIdentifiers = Set(apps.map(\.bundleIdentifier))
-        let availableWidgetsByKey = Dictionary(uniqueKeysWithValues: availableWidgets.map {
-            (widgetKey(kind: $0.kind, ownerBundleIdentifier: $0.ownerBundleIdentifier), $0)
-        })
+        // External widget bundles are loaded from disk, so a duplicate
+        // kind/owner pair must not trap. First registration wins.
+        let availableWidgetsByKey = Dictionary(
+            availableWidgets.map {
+                (widgetKey(kind: $0.kind, ownerBundleIdentifier: $0.ownerBundleIdentifier), $0)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
         let hasLaunchpad = existingItems.contains { $0.kind == .launchpad }
 
         var remainingBundleIdentifiers = Set(availableBundleIdentifiers)
@@ -433,7 +438,7 @@ final class PinnedDockSmartOrganizerService {
         return normalizedPinnedItems(result)
     }
 
-    private func normalizedPinnedItems(_ items: [PinnedTileItem]) -> [PinnedTileItem] {
+    func normalizedPinnedItems(_ items: [PinnedTileItem]) -> [PinnedTileItem] {
         var result: [PinnedTileItem] = []
 
         for item in items {
@@ -462,7 +467,7 @@ final class PinnedDockSmartOrganizerService {
         return result
     }
 
-    private func sanitizeFolderTitle(_ value: String, fallback: String) -> String {
+    func sanitizeFolderTitle(_ value: String, fallback: String) -> String {
         let collapsed = value
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: CharacterSet(charactersIn: " \t\n\r\"'`“”‘’.:,;!?-"))

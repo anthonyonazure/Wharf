@@ -1389,7 +1389,8 @@ struct TileView: View {
                 forBundleIdentifiers: bundleIDs,
                 sourceTileID: tile.id,
                 sourceFrame: globalTileFrame,
-                preferredEdge: inwardPopoverEdge
+                preferredEdge: inwardPopoverEdge,
+                sourceWindow: dock.window
             )
         }
     }
@@ -1459,7 +1460,8 @@ struct TileView: View {
                 sourceTileID: tile.id,
                 sourceFrame: sourceFrame,
                 cornerRadius: nonAppTileCornerRadius,
-                renderedSpan: expandableWidgetRenderedSpan
+                renderedSpan: expandableWidgetRenderedSpan,
+                sourceWindow: dock.window
             )
         }
     }
@@ -1567,7 +1569,8 @@ struct TileView: View {
             forBundleIdentifiers: [app.bundleIdentifier],
             sourceTileID: tile.id,
             sourceFrame: globalTileFrame,
-            preferredEdge: inwardPopoverEdge
+            preferredEdge: inwardPopoverEdge,
+            sourceWindow: dock.window
         )
     }
 
@@ -2451,7 +2454,8 @@ struct TileView: View {
             WidgetSettingsPanelController.shared.present(
                 widget: widget,
                 tileID: tile.id,
-                sourceFrame: globalTileFrame
+                sourceFrame: globalTileFrame,
+                sourceWindow: dock.window
             )
         }
     }

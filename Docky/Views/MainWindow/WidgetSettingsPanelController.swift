@@ -25,16 +25,21 @@ final class WidgetSettingsPanelController: NSObject {
     private var globalClickMonitor: Any?
     private var localEventMonitor: Any?
     private weak var heldMainWindow: MainWindow?
+    /// The dock window the current panel was opened from. See the same
+    /// field on WindowPreviewWindowController for why this can't default to
+    /// NSApp's first MainWindow with multiple docks on screen.
+    private weak var currentSourceWindow: MainWindow?
 
     private override init() { super.init() }
 
     /// `sourceFrame` is the tile's frame in MainWindow coordinates (SwiftUI `.global`).
-    func present(widget: WidgetTile, tileID: String, sourceFrame: CGRect) {
+    func present(widget: WidgetTile, tileID: String, sourceFrame: CGRect, sourceWindow: MainWindow?) {
         if currentTileID == tileID {
             dismiss()
             return
         }
         dismiss()
+        currentSourceWindow = sourceWindow
 
         let rootView = WidgetSettingsView(tileID: tileID, widget: widget) { [weak self] in
             self?.dismiss()
@@ -80,6 +85,7 @@ final class WidgetSettingsPanelController: NSObject {
         removeEventMonitors()
         endDockVisibilityHoldIfNeeded()
         currentTileID = nil
+        currentSourceWindow = nil
         if let panel {
             panel.delegate = nil
             panel.orderOut(nil)
@@ -128,7 +134,7 @@ final class WidgetSettingsPanelController: NSObject {
 
     private func beginDockVisibilityHoldIfNeeded() {
         guard heldMainWindow == nil,
-              let mainWindow = NSApp.windows.compactMap({ $0 as? MainWindow }).first else {
+              let mainWindow = currentSourceWindow ?? NSApp.windows.compactMap({ $0 as? MainWindow }).first else {
             return
         }
         mainWindow.beginInteraction()
@@ -182,7 +188,7 @@ final class WidgetSettingsPanelController: NSObject {
     }
 
     private func convertToScreen(_ frame: CGRect) -> CGRect {
-        guard let dockFrame = NSApp.windows.compactMap({ $0 as? MainWindow }).first?.frame else {
+        guard let dockFrame = (currentSourceWindow ?? NSApp.windows.compactMap({ $0 as? MainWindow }).first)?.frame else {
             return frame
         }
         return CGRect(

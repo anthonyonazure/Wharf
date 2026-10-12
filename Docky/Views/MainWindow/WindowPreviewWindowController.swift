@@ -30,6 +30,12 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
     private var isPreviewHovered = false
     private var isHoldingDockVisible = false
     private weak var heldMainWindow: MainWindow?
+    /// The dock window the current preview was opened from. With one dock
+    /// per screen, this is NOT necessarily NSApp's first MainWindow — using
+    /// `.first` there made every preview position itself against whichever
+    /// dock happened to be first in NSApp.windows, so clicking a tile on a
+    /// second monitor's dock still anchored the preview to the first dock.
+    private weak var currentSourceWindow: MainWindow?
     private var pendingDismissTask: Task<Void, Never>?
     private var dismissAnimationTask: Task<Void, Never>?
 
@@ -71,24 +77,32 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
         forBundleIdentifier bundleID: String,
         sourceTileID: String,
         sourceFrame: CGRect,
-        preferredEdge: NSRectEdge
+        preferredEdge: NSRectEdge,
+        sourceWindow: MainWindow?
     ) -> Bool {
         present(
             forBundleIdentifiers: [bundleID],
             sourceTileID: sourceTileID,
             sourceFrame: sourceFrame,
-            preferredEdge: preferredEdge
+            preferredEdge: preferredEdge,
+            sourceWindow: sourceWindow
         )
     }
 
     /// Multi-bundle variant used by app-folder tiles. Aggregates windows
     /// from every contained app into a single preview.
+    ///
+    /// `sourceWindow` must be the dock window the tile actually lives in
+    /// (`DockContext.window` from the tile's environment), not any arbitrary
+    /// MainWindow — it is what `convertToScreen` anchors the preview's
+    /// screen position to.
     @discardableResult
     func present(
         forBundleIdentifiers bundleIDs: [String],
         sourceTileID: String,
         sourceFrame: CGRect,
-        preferredEdge: NSRectEdge
+        preferredEdge: NSRectEdge,
+        sourceWindow: MainWindow?
     ) -> Bool {
         guard let window else { return false }
 
@@ -110,6 +124,7 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
         currentTileID = sourceTileID
         currentBundleIdentifier = bundleIDs.count == 1 ? bundleIDs.first : nil
         activeSourceTileID = sourceTileID
+        currentSourceWindow = sourceWindow
         pendingDismissTask?.cancel()
         pendingDismissTask = nil
         dismissAnimationTask?.cancel()
@@ -167,6 +182,7 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
         currentTileID = nil
         currentBundleIdentifier = nil
         activeSourceTileID = nil
+        currentSourceWindow = nil
 
         // Don't clear WindowPreviewService state yet — the SwiftUI body
         // observes it, and emptying it synchronously would blank the popover
@@ -241,7 +257,7 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
 
     private func beginDockVisibilityHoldIfNeeded() {
         guard !isHoldingDockVisible else { return }
-        guard let mainWindow = NSApp.windows.compactMap({ $0 as? MainWindow }).first else { return }
+        guard let mainWindow = currentSourceWindow ?? NSApp.windows.compactMap({ $0 as? MainWindow }).first else { return }
         mainWindow.beginInteraction()
         heldMainWindow = mainWindow
         isHoldingDockVisible = true
@@ -308,7 +324,11 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
     }
 
     private func convertToScreen(_ frame: CGRect) -> CGRect {
-        guard let dockFrame = NSApp.windows.compactMap({ $0 as? MainWindow }).first?.frame else {
+        // Must be the window the tile actually lives on. Falling back to
+        // "the first MainWindow NSApp happens to list" is what caused the
+        // preview to always anchor to one monitor regardless of which
+        // dock's tile was clicked — see currentSourceWindow's doc comment.
+        guard let dockFrame = (currentSourceWindow ?? NSApp.windows.compactMap({ $0 as? MainWindow }).first)?.frame else {
             return frame
         }
         return CGRect(

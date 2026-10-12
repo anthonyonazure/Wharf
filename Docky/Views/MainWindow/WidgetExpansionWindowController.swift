@@ -21,6 +21,10 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
     private var isPreviewHovered = false
     private var isHoldingDockVisible = false
     private weak var heldMainWindow: MainWindow?
+    /// The dock window the current expansion was opened from. See the same
+    /// field on WindowPreviewWindowController for why this can't default to
+    /// NSApp's first MainWindow with multiple docks on screen.
+    private weak var currentSourceWindow: MainWindow?
     private var pendingDismissTask: Task<Void, Never>?
     private var dismissAnimationTask: Task<Void, Never>?
 
@@ -49,12 +53,14 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
         sourceTileID: String,
         sourceFrame: CGRect,
         cornerRadius: CGFloat,
-        renderedSpan: TileSpan
+        renderedSpan: TileSpan,
+        sourceWindow: MainWindow?
     ) {
         guard let window else { return }
 
         currentTileID = sourceTileID
         activeSourceTileID = sourceTileID
+        currentSourceWindow = sourceWindow
         pendingDismissTask?.cancel()
         pendingDismissTask = nil
         dismissAnimationTask?.cancel()
@@ -132,6 +138,7 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
         endDockVisibilityHoldIfNeeded()
         currentTileID = nil
         activeSourceTileID = nil
+        currentSourceWindow = nil
 
         guard let window, window.isVisible else {
             close()
@@ -187,7 +194,7 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
 
     private func beginDockVisibilityHoldIfNeeded() {
         guard !isHoldingDockVisible else { return }
-        guard let mainWindow = NSApp.windows.compactMap({ $0 as? MainWindow }).first else { return }
+        guard let mainWindow = currentSourceWindow ?? NSApp.windows.compactMap({ $0 as? MainWindow }).first else { return }
 
         mainWindow.beginInteraction()
         heldMainWindow = mainWindow
@@ -244,7 +251,7 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
     }
 
     private func convertToScreen(_ frame: CGRect) -> CGRect {
-        guard let dockFrame = NSApp.windows.compactMap({ $0 as? MainWindow }).first?.frame else {
+        guard let dockFrame = (currentSourceWindow ?? NSApp.windows.compactMap({ $0 as? MainWindow }).first)?.frame else {
             return frame
         }
         return CGRect(

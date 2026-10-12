@@ -61,8 +61,10 @@ final class TilePressService: ObservableObject {
         }
         // Releases and drags that land outside the dock window still have
         // to finish the gesture — dragging a tile off the dock is how you
-        // remove it.
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .leftMouseDragged]) { [weak self] event in
+        // remove it. A press anywhere else also clears a press whose release
+        // was swallowed, so a later drag in another app cannot be read as a
+        // drag of a dock tile.
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .leftMouseDragged]) { [weak self] event in
             self?.handle(event)
         }
     }
@@ -166,11 +168,11 @@ final class TilePressService: ObservableObject {
 
     private func endPress(_ event: NSEvent) {
         guard let current = press else {
-            pressedTileID = nil
+            if pressedTileID != nil { pressedTileID = nil }
             return
         }
         press = nil
-        pressedTileID = nil
+        if pressedTileID != nil { pressedTileID = nil }
 
         let point = location(of: event, in: current.surface) ?? current.lastPoint
         let translation = CGSize(

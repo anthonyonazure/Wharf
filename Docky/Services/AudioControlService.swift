@@ -165,7 +165,10 @@ final class AudioControlService: ObservableObject {
         var value = Float32(0)
         var size = UInt32(MemoryLayout<Float32>.size)
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else { return nil }
-        return value
+        // A driver can report NaN or an out-of-range level. Treat that as "no
+        // usable volume" rather than letting it reach a number conversion.
+        guard value.isFinite else { return nil }
+        return min(max(value, 0), 1)
     }
 
     nonisolated private static func isVolumeSettable(_ device: AudioDeviceID) -> Bool {

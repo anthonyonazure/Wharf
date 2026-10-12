@@ -65,7 +65,8 @@ struct AudioWidgetView: View {
     private var levelText: String {
         if audio.isMuted { return "Muted" }
         guard audio.canSetVolume else { return "Fixed" }
-        return "\(Int((audio.volume * 100).rounded()))%"
+        let level = audio.volume.isFinite ? min(max(audio.volume, 0), 1) : 0
+        return "\(Int((level * 100).rounded()))%"
     }
 
     private var helpText: String {

@@ -20,21 +20,25 @@ final class WindowActionsService {
     /// stable window identifier the registry uses.
     private(set) var sizeLockedWindowIDs: Set<String> = []
     private var lockedSizes: [String: CGSize] = [:]
+    private var lockedProcessIDs: [String: pid_t] = [:]
     private var enforcementTimer: Timer?
     private let windows: () -> [AppWindow]
     private let resize: (AppWindow, CGRect) -> Bool
     private let usesEnforcementTimer: Bool
+    private let isProcessRunning: (pid_t) -> Bool
 
     /// The window source, the resize action and the timer are injectable so
     /// tests can run the size-lock logic without touching real windows.
     init(
         windows: @escaping () -> [AppWindow] = { WindowRegistry.shared.windows },
         resize: @escaping (AppWindow, CGRect) -> Bool = { WindowRegistry.shared.resize($0, to: $1) },
-        usesEnforcementTimer: Bool = true
+        usesEnforcementTimer: Bool = true,
+        isProcessRunning: @escaping (pid_t) -> Bool = { NSRunningApplication(processIdentifier: $0) != nil }
     ) {
         self.windows = windows
         self.resize = resize
         self.usesEnforcementTimer = usesEnforcementTimer
+        self.isProcessRunning = isProcessRunning
     }
 
     // MARK: - Close and quit
@@ -104,6 +108,7 @@ final class WindowActionsService {
         if sizeLockedWindowIDs.contains(id) {
             sizeLockedWindowIDs.remove(id)
             lockedSizes.removeValue(forKey: id)
+            lockedProcessIDs.removeValue(forKey: id)
             if sizeLockedWindowIDs.isEmpty { stopEnforcing() }
             return
         }
@@ -111,6 +116,7 @@ final class WindowActionsService {
         guard let frame = window.frame else { return }
         sizeLockedWindowIDs.insert(id)
         lockedSizes[id] = frame.size
+        lockedProcessIDs[id] = window.processIdentifier
         startEnforcingIfNeeded()
     }
 
@@ -151,12 +157,22 @@ final class WindowActionsService {
             )
         }
 
-        // Drop locks whose window is gone, so the timer eventually stops.
-        let live = Set(windows().map(\.windowIdentifier))
-        let stale = sizeLockedWindowIDs.subtracting(live)
+        // Drop locks whose window is truly gone, so the timer eventually stops.
+        // A window missing from the registry is not necessarily gone: hiding
+        // an app removes all of its windows for a while. So a lock is dropped
+        // when its app still shows other windows (this one was closed) or
+        // when the app process has exited; otherwise it is kept.
+        let current = windows()
+        let live = Set(current.map(\.windowIdentifier))
+        let livePIDs = Set(current.map(\.processIdentifier))
+        let stale = sizeLockedWindowIDs.subtracting(live).filter { id in
+            guard let pid = lockedProcessIDs[id] else { return true }
+            return livePIDs.contains(pid) || !isProcessRunning(pid)
+        }
         for id in stale {
             sizeLockedWindowIDs.remove(id)
             lockedSizes.removeValue(forKey: id)
+            lockedProcessIDs.removeValue(forKey: id)
         }
     }
 

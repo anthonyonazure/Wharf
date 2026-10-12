@@ -21,7 +21,8 @@ final class WindowActionsServiceTests: LayoutTestCase {
                 self.resizes.append((window, frame))
                 return self.resizeSucceeds
             },
-            usesEnforcementTimer: false
+            usesEnforcementTimer: false,
+            isProcessRunning: { _ in true }
         )
     }
 
@@ -210,9 +211,7 @@ final class WindowActionsServiceTests: LayoutTestCase {
         windows = []
         service.enforceLockedSizes()
         windows = [window]
-        XCTExpectFailure("a registry gap while the app is hidden drops the lock") {
-            XCTAssertTrue(service.isSizeLocked(window))
-        }
+        XCTAssertTrue(service.isSizeLocked(window))
     }
 
     func testEnforceHandlesManyLocks() {

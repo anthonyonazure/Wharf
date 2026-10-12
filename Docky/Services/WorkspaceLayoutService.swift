@@ -151,8 +151,11 @@ final class WorkspaceLayoutService: ObservableObject {
 
         guard !placements.isEmpty else { return }
 
+        // Re-capturing keeps the existing id so rules bound by layoutID keep
+        // pointing at this layout.
+        let existingIndex = layouts.firstIndex(where: { $0.name == name })
         let layout = WorkspaceLayout(
-            id: UUID().uuidString,
+            id: existingIndex.map { layouts[$0].id } ?? UUID().uuidString,
             name: name,
             placements: placements,
             bundleIdentifiers: Array(bundles).sorted()
@@ -160,7 +163,7 @@ final class WorkspaceLayoutService: ObservableObject {
 
         // Replacing by name makes re-capturing an existing layout the obvious
         // gesture: save over "work" rather than accumulating "work 2".
-        if let index = layouts.firstIndex(where: { $0.name == name }) {
+        if let index = existingIndex {
             layouts[index] = layout
         } else {
             layouts.append(layout)
@@ -201,16 +204,20 @@ final class WorkspaceLayoutService: ObservableObject {
         isRestoring = true
         defer { isRestoring = false }
 
+        // A persisted placement with a non-positive or non-finite size would
+        // collapse its window, so it is skipped and never claims a window.
+        let applicable = layout.placements.filter(Self.hasUsableSize)
+
         let matches = Self.match(
-            layout.placements,
+            applicable,
             to: environment.windows().filter { !$0.isMinimized }
         )
 
         var moved = 0
-        var missed = 0
+        var missed = layout.placements.count - applicable.count
         let mainDisplay = environment.mainDisplay()
 
-        for (placement, candidate) in zip(layout.placements, matches) {
+        for (placement, candidate) in zip(applicable, matches) {
             guard let match = candidate else {
                 missed += 1
                 continue
@@ -341,7 +348,12 @@ final class WorkspaceLayoutService: ObservableObject {
             )
         }
 
-        guard !placements.isEmpty else { return }
+        // An empty desk is still the state before this restore, so the old
+        // snapshot is cleared rather than left to send undo back two restores.
+        guard !placements.isEmpty else {
+            undoSnapshot = nil
+            return
+        }
         undoSnapshot = WorkspaceLayout(
             id: "undo",
             name: "Before Last Restore",
@@ -429,6 +441,15 @@ final class WorkspaceLayoutService: ObservableObject {
         )
     }
 
+    /// Whether a placement's stored size is something a window can be given.
+    static func hasUsableSize(_ placement: WindowPlacement) -> Bool {
+        // CGRect.width and .height are the normalized magnitudes, so a rect
+        // stored with a negative size still counts as the window it describes.
+        let width = placement.frame.width
+        let height = placement.frame.height
+        return width.isFinite && height.isFinite && width > 0 && height > 0
+    }
+
     /// Picks, for each placement in order, the window it should move, or nil
     /// when the app has no unclaimed window left. Matching is per app: the
     /// first unclaimed window whose title equals the placement's, otherwise
@@ -440,20 +461,28 @@ final class WorkspaceLayoutService: ObservableObject {
         }
 
         var claimed = Set<String>()
-        var result: [AppWindow?] = []
+        var result = [AppWindow?](repeating: nil, count: placements.count)
 
-        for placement in placements {
-            let candidates = (windowsByBundle[placement.bundleIdentifier] ?? [])
-                .filter { !claimed.contains($0.windowIdentifier) }
-
-            guard !candidates.isEmpty else {
-                result.append(nil)
-                continue
+        // Exact-title matches are settled across every placement first, so a
+        // positional fallback can never take a window another placement names.
+        for (index, placement) in placements.enumerated() {
+            let exact = (windowsByBundle[placement.bundleIdentifier] ?? []).first {
+                !claimed.contains($0.windowIdentifier) && $0.windowTitle == placement.windowTitle
             }
+            if let exact {
+                claimed.insert(exact.windowIdentifier)
+                result[index] = exact
+            }
+        }
 
-            let match = candidates.first { $0.windowTitle == placement.windowTitle } ?? candidates[0]
-            claimed.insert(match.windowIdentifier)
-            result.append(match)
+        for (index, placement) in placements.enumerated() where result[index] == nil {
+            let fallback = (windowsByBundle[placement.bundleIdentifier] ?? []).first {
+                !claimed.contains($0.windowIdentifier)
+            }
+            if let fallback {
+                claimed.insert(fallback.windowIdentifier)
+                result[index] = fallback
+            }
         }
 
         return result

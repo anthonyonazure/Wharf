@@ -313,9 +313,7 @@ final class DockGeometryTests: LayoutTestCase {
     func testInfiniteGrowthIsRejectedLikeNaN() {
         let metrics = DockChromeMetricsService()
         metrics.setAlongAxisGrowth(.infinity)
-        XCTExpectFailure("infinity is stored, and the dock would be told to size itself infinitely wide") {
-            XCTAssertTrue(metrics.alongAxisGrowth.isFinite)
-        }
+        XCTAssertTrue(metrics.alongAxisGrowth.isFinite)
     }
 
     // MARK: - Reservation geometry

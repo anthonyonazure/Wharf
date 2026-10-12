@@ -38,8 +38,8 @@ final class DecoderTests: DockyPreferencesTestCase {
             ("deep nesting closed", Data((String(repeating: "[", count: 5_000) + String(repeating: "]", count: 5_000)).utf8)),
             ("1 MB of A", Data(repeating: 0x41, count: 1_000_000)),
         ]
-        var rng = SystemRandomNumberGenerator()
-        cases.append(("random 64 KB", Data((0..<65_536).map { _ in UInt8.random(in: 0...255, using: &rng) })))
+        // Fixed pseudo-random bytes keep the run deterministic.
+        cases.append(("pattern 64 KB", Data((0..<65_536).map { UInt8(truncatingIfNeeded: $0 &* 2_654_435_761) })))
         return cases
     }
 

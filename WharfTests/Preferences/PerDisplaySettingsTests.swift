@@ -14,10 +14,10 @@ final class PerDisplaySettingsTests: DockyPreferencesTestCase {
     /// Display-keyed behavior needs a display that has a persistent UUID. Headless
     /// runners may not, so those tests skip instead of failing.
     private func requireDisplayKey() throws -> String {
-        try XCTUnwrap(
-            PerDisplaySettings.key(for: displayID),
-            "no display UUID available"
-        )
+        guard let key = PerDisplaySettings.key(for: displayID) else {
+            throw XCTSkip("no display UUID available on this machine")
+        }
+        return key
     }
 
     // MARK: DisplayOverride

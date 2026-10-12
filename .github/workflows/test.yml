@@ -1,3 +1,11 @@
+# Builds Wharf and runs its unit tests on every change.
+#
+# The secret scan, dependency checks and workflow audit live in gauntlet.yml,
+# so they are not repeated here.
+#
+# Actions are pinned to full commit hashes, as the gauntlet requires. The unit
+# tests run inside Wharf.app as a host; the app skips its own startup under test
+# (Debug builds only), so the runner's Dock and preferences are never touched.
 name: test
 
 on:
@@ -18,7 +26,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Show toolchain
         run: |
@@ -40,7 +50,7 @@ jobs:
 
       - name: Keep the test results when something fails
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: WharfTests.xcresult
           path: ${{ runner.temp }}/WharfTests.xcresult
@@ -51,7 +61,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Build Release
         run: |
@@ -63,14 +75,3 @@ jobs:
             -destination 'generic/platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             build
-
-  secrets:
-    name: Secret scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

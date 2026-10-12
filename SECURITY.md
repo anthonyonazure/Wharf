@@ -50,5 +50,8 @@ unsigned code.
 
 ## Automated checks
 
-Every change runs the unit test suite, a Release build and a secret scan
-(`.github/workflows/test.yml`). The tests cover the parsers where past crashes lived.
+Every change runs the unit test suite and a Release build
+(`.github/workflows/test.yml`), plus the quality gauntlet
+(`.github/workflows/gauntlet.yml`): static analysis, dependency vulnerabilities,
+licence policy, a software bill of materials, a secret scan and an audit of the
+workflows themselves. The unit tests cover the parsers where past crashes lived.

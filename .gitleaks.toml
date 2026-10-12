@@ -1,5 +1,0 @@
-# Upstream Docky's Sparkle PUBLIC verification key. It is published by design
-# (it only verifies update signatures) and trips the generic-api-key rule.
-[allowlist]
-description = "Sparkle public EdDSA key inherited from upstream"
-regexes = ['''LfZUqraK4HiOj/\+9iztgnWzdQTrC1ccmJPp/Fy/aTPc=''']

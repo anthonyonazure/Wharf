@@ -261,7 +261,6 @@ final class FolderAccessServiceTests: XCTestCase {
     }
 
     func testSymlinkedFolderIsFollowed() throws {
-        expectKnownBug("FileManager.contentsOfDirectory(at:) returns nil for a URL that is itself a symlink to a directory, so a folder tile whose path is a symlink (for example /tmp, or a folder redirected to iCloud) reports .unreadable and renders empty. Resolving symlinks before listing would fix it.")
         let dir = try makeScratchDirectory("folder")
         let real = dir.appendingPathComponent("real", isDirectory: true)
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
@@ -549,7 +548,6 @@ final class RecentFilesServiceTests: XCTestCase {
     }
 
     func testEmptyPathIsNotTurnedIntoTheWorkingDirectory() {
-        expectKnownBug("An empty path attribute becomes URL(fileURLWithPath: \"\"), which resolves to the process working directory, so a malformed Spotlight item would show the current directory in Recents. Low severity.")
         XCTAssertNil(RecentFilesService.resolveURL(urlValue: nil, pathValue: ""))
     }
 

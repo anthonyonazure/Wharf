@@ -9,20 +9,37 @@ enum ExternalWidgetSettingsManifest {
     static let resourceName = "settings"
     static let resourceExtension = "json"
 
+    /// Upper bound on a manifest file. Real manifests are a few KB; this only
+    /// stops a hostile bundle from making launch read and parse a huge file.
+    static let maxManifestBytes = 1_048_576
+
     static func load(from bundle: Bundle) -> [WidgetSettingsField] {
-        guard let url = bundle.url(forResource: resourceName, withExtension: resourceExtension),
-              let data = try? Data(contentsOf: url) else {
+        guard let url = bundle.url(forResource: resourceName, withExtension: resourceExtension) else {
             return []
         }
+        if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+           size > maxManifestBytes {
+            return []
+        }
+        guard let data = try? Data(contentsOf: url) else { return [] }
         return parse(data)
     }
 
     static func parse(_ data: Data) -> [WidgetSettingsField] {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rawFields = root["fields"] as? [[String: Any]] else {
+        guard data.count <= maxManifestBytes,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawFields = root["fields"] as? [Any] else {
             return []
         }
-        return rawFields.compactMap(parseField)
+        // Per-element leniency: skip non-objects, and keep the first field
+        // for any repeated id (ids are the settings key).
+        var seen = Set<String>()
+        var fields: [WidgetSettingsField] = []
+        for case let dict as [String: Any] in rawFields {
+            guard let field = parseField(dict), seen.insert(field.id).inserted else { continue }
+            fields.append(field)
+        }
+        return fields
     }
 
     private static func parseField(_ dict: [String: Any]) -> WidgetSettingsField? {
@@ -36,9 +53,10 @@ enum ExternalWidgetSettingsManifest {
         let defaultValue = parseDefault(dict["default"], type: type)
 
         let options: [WidgetSettingsField.Option]?
-        if type == .select, let rawOptions = dict["options"] as? [[String: Any]] {
-            options = rawOptions.compactMap { option in
-                guard let value = option["value"] as? String else { return nil }
+        if type == .select, let rawOptions = dict["options"] as? [Any] {
+            options = rawOptions.compactMap { rawOption in
+                guard let option = rawOption as? [String: Any],
+                      let value = option["value"] as? String else { return nil }
                 return WidgetSettingsField.Option(
                     value: value,
                     label: (option["label"] as? String) ?? value

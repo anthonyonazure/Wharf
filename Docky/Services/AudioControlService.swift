@@ -128,7 +128,9 @@ final class AudioControlService: ObservableObject {
 
     /// Slider value limited to the 0...1 range CoreAudio accepts.
     nonisolated static func clampedVolume(_ value: Float) -> Float {
-        min(max(value, 0), 1)
+        // NaN would otherwise pass through min/max unchanged.
+        guard !value.isNaN else { return 0 }
+        return min(max(value, 0), 1)
     }
 
     // MARK: - CoreAudio reads

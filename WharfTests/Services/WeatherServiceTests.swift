@@ -484,7 +484,8 @@ final class WeatherServiceTests: XCTestCase {
     func testForecastURLCoordinatesCannotInjectQueryParameters() throws {
         // Coordinates are Doubles, so whatever value arrives, the rendered text
         // is a number and can never carry '&', '#', '/' or whitespace.
-        let extremes: [Double] = [1e308, -1e308, 5e-324, .greatestFiniteMagnitude, -.greatestFiniteMagnitude, .leastNormalMagnitude]
+        // (Out-of-range values are refused outright; see the non-finite test.)
+        let extremes: [Double] = [90, -90, 5e-324, -5e-324, .leastNormalMagnitude, 89.999999999999]
         for value in extremes {
             let url = try XCTUnwrap(WeatherService.forecastURL(latitude: value, longitude: value, units: .metric))
             let parts = try components(url)
@@ -527,11 +528,16 @@ final class WeatherServiceTests: XCTestCase {
     }
 
     func testNonFiniteCoordinatesAreNotSentToTheAPI() throws {
-        expectKnownBug("Low severity: NaN/inf coordinates are rendered as 'nan'/'inf' and sent to the remote API instead of being refused locally.")
-        for value in [Double.nan, .infinity, -.infinity] {
+        for value in [Double.nan, .infinity, -.infinity, 90.0001, -90.0001, 1e308] {
             XCTAssertNil(
                 WeatherService.forecastURL(latitude: value, longitude: 0, units: .metric),
                 "latitude \(value) should not produce a request"
+            )
+        }
+        for value in [Double.nan, .infinity, -.infinity, 180.0001, -180.0001, 1e308] {
+            XCTAssertNil(
+                WeatherService.forecastURL(latitude: 0, longitude: value, units: .metric),
+                "longitude \(value) should not produce a request"
             )
         }
     }

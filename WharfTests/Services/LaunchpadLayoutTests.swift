@@ -238,7 +238,6 @@ final class LaunchpadResolveTests: XCTestCase {
     }
 
     func testEntriesAreUniqueEvenWhenPersistedDataRepeatsAnApp() {
-        expectKnownBug("The LaunchpadFolder contract says the resolver dedupes across folders, preferring the earliest, but resolveEntries does not. Hand-edited or corrupted persisted data shows the same app twice, with duplicate view identities.")
         let items: [LaunchpadLayoutItem] = [
             .app(bundleID: "a"),
             .folder(LaunchpadFolder(id: "f1", name: "One", bundleIDs: ["a", "b"])),
@@ -480,7 +479,6 @@ final class LaunchpadLayoutServiceTests: XCTestCase {
     }
 
     func testCreateFolderWithMissingTargetLeavesLayoutUntouched() {
-        expectKnownBug("createFolder removes the dragged app before checking that the target exists. When the target is missing it returns nil but the dragged app has already been dropped from the in-memory layout.")
         let service = seeded([app("a"), app("b")])
         let before = service.layout
         XCTAssertNil(service.createFolder(merging: "a", intoSlotOf: "ghost", name: "x"))
@@ -488,7 +486,6 @@ final class LaunchpadLayoutServiceTests: XCTestCase {
     }
 
     func testCreateFolderWithTargetInsideFolderLeavesLayoutUntouched() {
-        expectKnownBug("Same ordering bug: a target that lives in a folder (not top level) fails after the dragged app was already removed.")
         let service = seeded([folder("f", ["x", "y"]), app("a")])
         let before = service.layout
         XCTAssertNil(service.createFolder(merging: "a", intoSlotOf: "x", name: "n"))
@@ -510,14 +507,12 @@ final class LaunchpadLayoutServiceTests: XCTestCase {
     }
 
     func testAddAppToMissingFolderKeepsTheApp() {
-        expectKnownBug("addApp removes the app from its current location before looking up the destination folder, so a missing folder id silently deletes the app from the layout.")
         let service = seeded([app("a"), app("b")])
         service.addApp(bundleID: "a", toFolderWithID: "ghost")
         XCTAssertTrue(service.allReferencedBundleIDs.contains("a"))
     }
 
     func testAddAppBackToItsOwnTwoAppFolderKeepsTheFolder() {
-        expectKnownBug("Re-adding a member to its own two-app folder removes it first, which collapses the folder to a plain app, then finds no folder to add to: the folder is destroyed and the app lost.")
         let service = seeded([folder("f", ["a", "b"])])
         service.addApp(bundleID: "a", toFolderWithID: "f")
         XCTAssertEqual(Set(service.folder(withID: "f")?.bundleIDs ?? []), ["a", "b"])
@@ -639,7 +634,6 @@ final class LaunchpadLayoutServiceTests: XCTestCase {
     }
 
     func testAppendNewAppsDeduplicatesItsOwnInput() {
-        expectKnownBug("appendNewApps filters against the layout once, so an id repeated within the input is appended repeatedly.")
         let service = seeded([app("a")])
         service.appendNewApps(["n", "n", "n"])
         XCTAssertEqual(allBundles(service).filter { $0 == "n" }.count, 1)

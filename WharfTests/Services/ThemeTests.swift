@@ -676,7 +676,6 @@ final class ThemeManagerTests: XCTestCase {
     }
 
     func testAssetPathMayNotEscapeTheThemeBundle() throws {
-        expectKnownBug("activeAssetURL appends the manifest string to the bundle URL and checks only that the file exists, so '../' and absolute paths resolve to files outside the theme. A hostile theme can make Wharf read any image-shaped file the user can read.")
         let h = try makeHarness()
         let outside = h.themes.deletingLastPathComponent().appendingPathComponent("outside.png")
         try ImageFixtures.png(width: 4, height: 4).write(to: outside)
@@ -696,9 +695,9 @@ final class ThemeManagerTests: XCTestCase {
         XCTAssertNil(h.manager.activeAssetURL("/etc/hosts"))
     }
 
-    func testAssetSymlinkPointingOutsideIsFollowed() throws {
-        // Current behavior, recorded as a finding alongside the traversal
-        // case above: a symlink inside a theme is followed without checks.
+    func testAssetSymlinkPointingOutsideIsTreatedAsMissing() throws {
+        // A symlink inside a theme that resolves outside it is refused,
+        // like the traversal case above.
         let h = try makeHarness()
         let outside = try makeScratchDirectory("outside").appendingPathComponent("secret.png")
         try ImageFixtures.png(width: 4, height: 4).write(to: outside)
@@ -706,7 +705,7 @@ final class ThemeManagerTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: url.appendingPathComponent("assets/link.png"), withDestinationURL: outside)
         h.manager.refreshInstalled()
         h.manager.setActive("alpha")
-        XCTAssertNotNil(h.manager.activeAssetURL("assets/link.png"))
+        XCTAssertNil(h.manager.activeAssetURL("assets/link.png"))
     }
 
     func testPerAppIconLookupByConvention() throws {
@@ -737,7 +736,6 @@ final class ThemeManagerTests: XCTestCase {
     }
 
     func testPerAppIconBundleIdentifierCannotTraverse() throws {
-        expectKnownBug("activeAppIconURL joins the caller's bundle identifier into a path without sanitizing it, so '../' in an identifier reads outside assets/. Identifiers come from installed apps, so exploitation needs a malicious app.")
         let h = try makeHarness()
         let url = try installTheme(id: "alpha", in: h.themes)
         try ImageFixtures.png(width: 4, height: 4).write(to: url.appendingPathComponent("cover.png"))

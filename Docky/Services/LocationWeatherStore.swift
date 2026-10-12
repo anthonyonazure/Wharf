@@ -113,12 +113,14 @@ final class ConfiguredWeatherModel: ObservableObject {
 
             do {
                 let snapshot = try await self.fetch(self.latitude, self.longitude, self.locationName)
-                guard !Task.isCancelled else { return }
-                self.snapshot = snapshot
-                self.lastRefreshDate = self.now()
-                self.lastErrorDescription = nil
+                if !Task.isCancelled {
+                    self.snapshot = snapshot
+                    self.lastRefreshDate = self.now()
+                    self.lastErrorDescription = nil
+                }
             } catch is CancellationError {
-                return
+                // Fall through so isLoading is reset below; returning here
+                // would leave the model refusing every later refresh.
             } catch {
                 // Keep any previously loaded snapshot visible on a transient failure.
                 self.lastErrorDescription = "Couldn’t load weather."
@@ -153,6 +155,12 @@ final class LocationWeatherStore {
 
     /// Rounded to two decimals (~1 km) so effectively-identical city picks coalesce onto one model.
     static func cacheKey(latitude: Double, longitude: Double) -> String {
-        String(format: "%.2f,%.2f", latitude, longitude)
+        // "%.2f" renders -0.001 as "-0.00"; fold it onto "0.00" so the two
+        // sides of zero share one model.
+        func component(_ value: Double) -> String {
+            let text = String(format: "%.2f", value)
+            return text == "-0.00" ? "0.00" : text
+        }
+        return "\(component(latitude)),\(component(longitude))"
     }
 }

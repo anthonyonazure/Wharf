@@ -140,9 +140,13 @@ final class WidgetSettingsTests: DockyPreferencesTestCase {
         widget.widgetSettings = ["scale": .number(.nan)]
         prefs.pinnedItems.append(widget)
 
-        XCTExpectFailure("BUG: persistPinnedItems deletes the stored list when any widget setting is NaN or infinite") {
-            XCTAssertNotNil(defaults.data(forKey: PrefKeys.pinnedItems))
-        }
+        // The stored list survives, and the unrepresentable number is dropped
+        // rather than blocking the write of every other pinned item.
+        let stored = try? defaults.data(forKey: PrefKeys.pinnedItems)
+            .map { try JSONDecoder().decode([PinnedTileItem].self, from: $0) }
+        XCTAssertEqual(stored?.count, 3)
+        XCTAssertEqual(stored?.last?.widgetSettings, WidgetSettings())
+        XCTAssertEqual(reload().pinnedItems.count, 3)
     }
 
     // MARK: Schema types

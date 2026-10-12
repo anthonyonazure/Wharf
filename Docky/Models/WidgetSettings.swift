@@ -97,4 +97,14 @@ extension Dictionary where Key == String, Value == WidgetSettingValue {
     func double(_ key: String) -> Double? { self[key]?.doubleValue }
     func bool(_ key: String) -> Bool? { self[key]?.boolValue }
     func stringList(_ key: String) -> [String]? { self[key]?.stringListValue }
+
+    /// Drops numbers that JSON cannot represent (NaN, infinities). One such
+    /// value makes the whole encode throw, so callers sanitize before
+    /// persisting; a dropped key falls back to the widget's default.
+    var droppingNonFiniteNumbers: [String: WidgetSettingValue] {
+        filter { _, value in
+            if case .number(let number) = value { return number.isFinite }
+            return true
+        }
+    }
 }

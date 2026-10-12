@@ -1120,6 +1120,22 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         Keys.iconShadowRadius,
         Keys.iconShadowOpacity,
         Keys.showsActivePinnedSeparator,
+        // Behavior keys that also take part in the theme override layer.
+        // Without them the stored flag list is filtered down on load and an
+        // active theme would beat the user's explicit choice after relaunch.
+        Keys.windowAxisSizing,
+        DockSettingsService.Keys.tileSize,
+        DockSettingsService.Keys.largeSize,
+        DockSettingsService.Keys.magnification,
+    ]
+
+    /// `DockSettingsService` writes its size and magnification keys on every
+    /// persist (including the import of the system Dock), so their presence
+    /// says nothing about a user choice and must not seed overrides.
+    private static let migrationIgnoredKeys: Set<String> = [
+        DockSettingsService.Keys.tileSize,
+        DockSettingsService.Keys.largeSize,
+        DockSettingsService.Keys.magnification,
     ]
 
     /// Whether the user has an explicit override for this preference
@@ -1516,7 +1532,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         didSet {
             guard windowCornerRadiusTopLeading != oldValue else { return }
             persistOptionalDouble(windowCornerRadiusTopLeading, forKey: Keys.windowCornerRadiusTopLeading)
-            markAppearanceOverride(Keys.windowCornerRadiusTopLeading)
+            if windowCornerRadiusTopLeading == nil {
+                clearAppearanceOverride(Keys.windowCornerRadiusTopLeading)
+            } else {
+                markAppearanceOverride(Keys.windowCornerRadiusTopLeading)
+            }
         }
     }
 
@@ -1524,7 +1544,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         didSet {
             guard windowCornerRadiusTopTrailing != oldValue else { return }
             persistOptionalDouble(windowCornerRadiusTopTrailing, forKey: Keys.windowCornerRadiusTopTrailing)
-            markAppearanceOverride(Keys.windowCornerRadiusTopTrailing)
+            if windowCornerRadiusTopTrailing == nil {
+                clearAppearanceOverride(Keys.windowCornerRadiusTopTrailing)
+            } else {
+                markAppearanceOverride(Keys.windowCornerRadiusTopTrailing)
+            }
         }
     }
 
@@ -1532,7 +1556,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         didSet {
             guard windowCornerRadiusBottomLeading != oldValue else { return }
             persistOptionalDouble(windowCornerRadiusBottomLeading, forKey: Keys.windowCornerRadiusBottomLeading)
-            markAppearanceOverride(Keys.windowCornerRadiusBottomLeading)
+            if windowCornerRadiusBottomLeading == nil {
+                clearAppearanceOverride(Keys.windowCornerRadiusBottomLeading)
+            } else {
+                markAppearanceOverride(Keys.windowCornerRadiusBottomLeading)
+            }
         }
     }
 
@@ -1540,7 +1568,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         didSet {
             guard windowCornerRadiusBottomTrailing != oldValue else { return }
             persistOptionalDouble(windowCornerRadiusBottomTrailing, forKey: Keys.windowCornerRadiusBottomTrailing)
-            markAppearanceOverride(Keys.windowCornerRadiusBottomTrailing)
+            if windowCornerRadiusBottomTrailing == nil {
+                clearAppearanceOverride(Keys.windowCornerRadiusBottomTrailing)
+            } else {
+                markAppearanceOverride(Keys.windowCornerRadiusBottomTrailing)
+            }
         }
     }
 
@@ -2869,19 +2901,34 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         return themed ?? raw
     }
 
+    /// Same layering as `appearanceOverride`, for numeric layout values: a
+    /// non-finite result (a stored NaN or infinity) falls back to the built-in
+    /// default so it can never reach layout or timer math.
+    private func finiteAppearanceOverride(
+        _ key: String,
+        raw: CGFloat,
+        themed: CGFloat?,
+        fallback: CGFloat
+    ) -> CGFloat {
+        let resolved = appearanceOverride(key, raw: raw, themed: themed)
+        return resolved.isFinite ? resolved : fallback
+    }
+
     var effectiveTileVerticalPadding: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.tileVerticalPadding,
             raw: tileVerticalPadding,
-            themed: ThemeManager.shared.activeManifest?.appearance.tile?.verticalPadding
+            themed: ThemeManager.shared.activeManifest?.appearance.tile?.verticalPadding,
+            fallback: DefaultValues.tileVerticalPadding
         )
     }
 
     var effectiveTileSpacing: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.tileSpacing,
             raw: tileSpacing,
-            themed: ThemeManager.shared.activeManifest?.appearance.tile?.spacing
+            themed: ThemeManager.shared.activeManifest?.appearance.tile?.spacing,
+            fallback: DefaultValues.tileSpacing
         )
     }
 
@@ -3017,11 +3064,12 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var effectiveWindowCornerRadius: CGFloat {
-        appearanceOverride(
+        max(0, finiteAppearanceOverride(
             Keys.windowCornerRadius,
             raw: windowCornerRadius,
-            themed: ThemeManager.shared.activeManifest?.appearance.window?.cornerRadius
-        )
+            themed: ThemeManager.shared.activeManifest?.appearance.window?.cornerRadius,
+            fallback: DefaultValues.windowCornerRadius
+        ))
     }
 
     /// Resolves a single corner's radius. Layered the same as every
@@ -3077,34 +3125,38 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var effectiveWindowContentInsetTop: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.windowContentInsetTop,
             raw: windowContentInsetTop,
-            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.top
+            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.top,
+            fallback: DefaultValues.windowContentInset
         )
     }
 
     var effectiveWindowContentInsetLeading: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.windowContentInsetLeading,
             raw: windowContentInsetLeading,
-            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.leading
+            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.leading,
+            fallback: DefaultValues.windowContentInset
         )
     }
 
     var effectiveWindowContentInsetBottom: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.windowContentInsetBottom,
             raw: windowContentInsetBottom,
-            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.bottom
+            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.bottom,
+            fallback: DefaultValues.windowContentInset
         )
     }
 
     var effectiveWindowContentInsetTrailing: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.windowContentInsetTrailing,
             raw: windowContentInsetTrailing,
-            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.trailing
+            themed: ThemeManager.shared.activeManifest?.appearance.window?.contentInsets?.trailing,
+            fallback: DefaultValues.windowContentInset
         )
     }
 
@@ -3126,10 +3178,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var effectiveWindowTintOpacity: CGFloat {
-        let raw = appearanceOverride(
+        let raw = finiteAppearanceOverride(
             Keys.windowTintOpacity,
             raw: windowTintOpacity,
-            themed: ThemeManager.shared.activeManifest?.appearance.window?.tintOpacity
+            themed: ThemeManager.shared.activeManifest?.appearance.window?.tintOpacity,
+            fallback: DefaultValues.windowTintOpacity
         )
         return min(max(raw, 0), 1)
     }
@@ -3177,10 +3230,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var effectiveWindowBorderWidth: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.windowBorderWidth,
             raw: windowBorderWidth,
-            themed: ThemeManager.shared.activeManifest?.appearance.window?.borderWidth
+            themed: ThemeManager.shared.activeManifest?.appearance.window?.borderWidth,
+            fallback: DefaultValues.windowBorderWidth
         )
     }
 
@@ -3197,18 +3251,20 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var effectiveIconShadowRadius: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.iconShadowRadius,
             raw: iconShadowRadius,
-            themed: ThemeManager.shared.activeManifest?.appearance.iconShadow?.radius
+            themed: ThemeManager.shared.activeManifest?.appearance.iconShadow?.radius,
+            fallback: DefaultValues.iconShadowRadius
         )
     }
 
     var effectiveIconShadowOpacity: CGFloat {
-        let raw = appearanceOverride(
+        let raw = finiteAppearanceOverride(
             Keys.iconShadowOpacity,
             raw: iconShadowOpacity,
-            themed: ThemeManager.shared.activeManifest?.appearance.iconShadow?.opacity
+            themed: ThemeManager.shared.activeManifest?.appearance.iconShadow?.opacity,
+            fallback: DefaultValues.iconShadowOpacity
         )
         return min(max(raw, 0), 1)
     }
@@ -3259,18 +3315,20 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var effectiveActiveIndicatorOffset: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.activeIndicatorOffset,
             raw: activeIndicatorOffset,
-            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.offset
+            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.offset,
+            fallback: DefaultValues.activeIndicatorOffset
         )
     }
 
     var effectiveActiveIndicatorScale: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.activeIndicatorScale,
             raw: activeIndicatorScale,
-            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.scale
+            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.scale,
+            fallback: DefaultValues.activeIndicatorScale
         )
     }
 
@@ -3283,34 +3341,38 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     var effectiveDividerPaddingFraction: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.dividerPaddingFraction,
             raw: dividerPaddingFraction,
-            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.paddingFraction
+            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.paddingFraction,
+            fallback: DefaultValues.dividerPaddingFraction
         )
     }
 
     var effectiveDividerImageScale: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.dividerImageScale,
             raw: dividerImageScale,
-            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.imageScale
+            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.imageScale,
+            fallback: DefaultValues.dividerImageScale
         )
     }
 
     var effectiveDividerOffset: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.dividerOffset,
             raw: dividerOffset,
-            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.offset
+            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.offset,
+            fallback: DefaultValues.dividerOffset
         )
     }
 
     var effectiveDividerOpacity: CGFloat {
-        appearanceOverride(
+        finiteAppearanceOverride(
             Keys.dividerOpacity,
             raw: dividerOpacity,
-            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.opacity
+            themed: ThemeManager.shared.activeManifest?.appearance.indicators?.divider?.opacity,
+            fallback: DefaultValues.dividerOpacity
         )
     }
 
@@ -4115,7 +4177,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.dockContentMode = storedDockContentMode.flatMap(DockContentMode.init(rawValue:)) ?? DefaultValues.dockContentMode
         self.windowGrouping = storedWindowGrouping.flatMap(DockWindowGrouping.init(rawValue:)) ?? DefaultValues.windowGrouping
         self.showsOnlyCurrentScreenWindows = storedShowsOnlyCurrentScreenWindows ?? DefaultValues.showsOnlyCurrentScreenWindows
-        self.dockRowCount = storedDockRowCount ?? DefaultValues.dockRowCount
+        self.dockRowCount = min(max(storedDockRowCount ?? DefaultValues.dockRowCount, 1), 5)
         self.collapsesToButton = storedCollapsesToButton ?? DefaultValues.collapsesToButton
         self.showsMediaProgressOnTiles = storedShowsMediaProgressOnTiles ?? DefaultValues.showsMediaProgressOnTiles
         self.dockStaysBehindBundleIDs = storedDockStaysBehindBundleIDs ?? DefaultValues.dockStaysBehindBundleIDs
@@ -4130,10 +4192,10 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
             .flatMap(FolderBadgePreviewStyle.init(rawValue:))
             ?? DefaultValues.folderBadgePreviewStyle
         self.opensAtLogin = storedOpensAtLogin ?? LaunchAtLoginService.shared.isEnabled
-        self.autohideWindowDelay = max(storedAutohideWindowDelay ?? DefaultValues.autohideWindowDelay, 0)
-        self.autohideAnimationDuration = min(max(storedAutohideAnimationDuration ?? DefaultValues.autohideAnimationDuration, 0), 1)
-        self.fullscreenRevealDelay = max(storedFullscreenRevealDelay ?? DefaultValues.fullscreenRevealDelay, 0)
-        self.windowPreviewHoverDelay = max(storedWindowPreviewHoverDelay ?? DefaultValues.windowPreviewHoverDelay, 0)
+        self.autohideWindowDelay = max(Self.nanSafe(storedAutohideWindowDelay, default: DefaultValues.autohideWindowDelay), 0)
+        self.autohideAnimationDuration = min(max(Self.nanSafe(storedAutohideAnimationDuration, default: DefaultValues.autohideAnimationDuration), 0), 1)
+        self.fullscreenRevealDelay = max(Self.nanSafe(storedFullscreenRevealDelay, default: DefaultValues.fullscreenRevealDelay), 0)
+        self.windowPreviewHoverDelay = max(Self.nanSafe(storedWindowPreviewHoverDelay, default: DefaultValues.windowPreviewHoverDelay), 0)
         self.windowPreviewLayout = storedWindowPreviewLayout.flatMap(WindowSwitcherLayout.init(rawValue:)) ?? DefaultValues.windowPreviewLayout
         self.maximizedWindowBehavior = (storedMaximizedWindowBehavior.flatMap(MaximizedWindowBehavior.init(rawValue:)) ?? DefaultValues.maximizedWindowBehavior)
         self.hidesSystemDock = storedHidesSystemDock ?? DefaultValues.hidesSystemDock
@@ -4143,7 +4205,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.widgetHoverPreviewSpans = storedWidgetHoverPreviewSpans
             .map { Set($0.compactMap(TileSpan.init(rawValue:))) }
             ?? DefaultValues.widgetHoverPreviewSpans
-        self.widgetHoverPreviewDelay = max(storedWidgetHoverPreviewDelay ?? DefaultValues.widgetHoverPreviewDelay, 0)
+        self.widgetHoverPreviewDelay = max(Self.nanSafe(storedWidgetHoverPreviewDelay, default: DefaultValues.widgetHoverPreviewDelay), 0)
         self.showsActivePinnedSeparator = storedShowsActivePinnedSeparator ?? DefaultValues.showsActivePinnedSeparator
         self.showsRunningApps = storedShowsRunningApps ?? DefaultValues.showsRunningApps
         self.showsMinimizedWindows = storedShowsMinimizedWindows ?? DefaultValues.showsMinimizedWindows
@@ -4165,16 +4227,16 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.mirrorsLeftDividerOnRight = storedMirrorsLeftDividerOnRight ?? DefaultValues.mirrorsLeftDividerOnRight
         self.activeIndicatorOffset = storedActiveIndicatorOffset.map { CGFloat($0) } ?? DefaultValues.activeIndicatorOffset
         self.activeIndicatorScale = max(0.25, storedActiveIndicatorScale.map { CGFloat($0) } ?? DefaultValues.activeIndicatorScale)
-        self.dividerPaddingFraction = min(max(storedDividerPaddingFraction.map { CGFloat($0) } ?? DefaultValues.dividerPaddingFraction, 0), 0.5)
+        self.dividerPaddingFraction = min(max(Self.nanSafe(storedDividerPaddingFraction.map { CGFloat($0) }, default: DefaultValues.dividerPaddingFraction), 0), 0.5)
         self.dividerImageScale = max(0.25, storedDividerImageScale.map { CGFloat($0) } ?? DefaultValues.dividerImageScale)
         self.dividerOffset = storedDividerOffset.map { CGFloat($0) } ?? DefaultValues.dividerOffset
-        self.dividerOpacity = min(max(storedDividerOpacity.map { CGFloat($0) } ?? DefaultValues.dividerOpacity, 0), 1)
+        self.dividerOpacity = min(max(Self.nanSafe(storedDividerOpacity.map { CGFloat($0) }, default: DefaultValues.dividerOpacity), 0), 1)
         self.dividerColor = Self.decodeColor(from: storedDividerColor) ?? DefaultValues.dividerColor
         self.windowBorderColor = Self.decodeColor(from: storedWindowBorderColor) ?? DefaultValues.windowBorderColor
         self.windowBorderWidth = max(0, storedWindowBorderWidth.map { CGFloat($0) } ?? DefaultValues.windowBorderWidth)
         self.iconShadowColor = Self.decodeColor(from: storedIconShadowColor) ?? DefaultValues.iconShadowColor
         self.iconShadowRadius = max(0, storedIconShadowRadius.map { CGFloat($0) } ?? DefaultValues.iconShadowRadius)
-        self.iconShadowOpacity = min(max(storedIconShadowOpacity.map { CGFloat($0) } ?? DefaultValues.iconShadowOpacity, 0), 1)
+        self.iconShadowOpacity = min(max(Self.nanSafe(storedIconShadowOpacity.map { CGFloat($0) }, default: DefaultValues.iconShadowOpacity), 0), 1)
         self.appIconOverrides = Self.decodeAppIconOverrides(from: storedAppIconOverrides) ?? DefaultValues.appIconOverrides
         self.trashIconOverrides = Self.decodeTrashIconOverrides(from: storedTrashIconOverrides) ?? DefaultValues.trashIconOverrides
         self.folderIconOverrides = Self.decodeFolderIconOverrides(from: storedFolderIconOverrides) ?? DefaultValues.folderIconOverrides
@@ -4190,7 +4252,10 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.enablesStartMenuOverlay = storedEnablesStartMenuOverlay ?? DefaultValues.enablesStartMenuOverlay
         self.opensStartMenuFromFinderTile = storedOpensStartMenuFromFinderTile ?? DefaultValues.opensStartMenuFromFinderTile
         self.launchpadOverlayTransparency = min(max(
-            storedLaunchpadOverlayTransparency.map { CGFloat($0) } ?? DefaultValues.launchpadOverlayTransparency,
+            Self.nanSafe(
+                storedLaunchpadOverlayTransparency.map { CGFloat($0) },
+                default: DefaultValues.launchpadOverlayTransparency
+            ),
             0
         ), 1)
         self.launchpadGridColumnCount = max(storedLaunchpadGridColumnCount ?? DefaultValues.launchpadGridColumnCount, 1)
@@ -4253,7 +4318,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
             // override. Better to over-respect existing customizations
             // than to let a theme silently replace them.
             var seeded = self.userOverriddenAppearanceKeys
-            for key in Self.appearanceKeys {
+            for key in Self.appearanceKeys where !Self.migrationIgnoredKeys.contains(key) {
                 if defaults.object(forKey: key) != nil {
                     seeded.insert(key)
                 }
@@ -4262,6 +4327,13 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
             persistUserOverriddenAppearanceKeys()
             defaults.set(1, forKey: Keys.appearanceOverrideMigrationVersion)
         }
+    }
+
+    /// A stored NaN would slip through `max`/`min` clamps unchanged (the
+    /// comparison is false), so non-numbers fall back to the default first.
+    private static func nanSafe<T: BinaryFloatingPoint>(_ value: T?, default fallback: T) -> T {
+        guard let value, !value.isNaN else { return fallback }
+        return value
     }
 
     func applySystemDockVisibilityPreference() {
@@ -4452,6 +4524,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     func resetToDefaults() {
+        // Full wipe: covers every appearance preference (hover and active
+        // backgrounds, widget chrome, per-corner radii, insets, shadow, ...).
+        resetAppearanceToDefaults()
         tileVerticalPadding = DefaultValues.tileVerticalPadding
         tileSpacing = DefaultValues.tileSpacing
         tileClipShape = DefaultValues.tileClipShape
@@ -4542,6 +4617,10 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         switcherZoomKeyCode = DefaultValues.switcherZoomKeyCode
         appWidgetDisplays = DefaultValues.appWidgetDisplays
         hasSeenDockEditorHint = DefaultValues.hasSeenDockEditorHint
+
+        // Same rationale as the other resets: setters above may have re-marked
+        // a key, and a full reset hands every key back to the theme layer.
+        clearAllAppearanceOverrides()
     }
 
     private func syncSystemDockPositionIfNeeded() {
@@ -4575,10 +4654,14 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     private func persistPinnedItems(_ items: [PinnedTileItem]) {
-        guard let data = try? encoder.encode(items) else {
-            defaults.removeObject(forKey: Keys.pinnedItems)
-            return
+        let sanitized = items.map { item -> PinnedTileItem in
+            guard let settings = item.widgetSettings else { return item }
+            var copy = item
+            copy.widgetSettings = settings.droppingNonFiniteNumbers
+            return copy
         }
+        // An encode failure must never delete the stored list: keep what is there.
+        guard let data = try? encoder.encode(sanitized) else { return }
 
         defaults.set(data, forKey: Keys.pinnedItems)
     }
@@ -4602,10 +4685,14 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     }
 
     private func persistTrailingItems(_ items: [TrailingTileItem]) {
-        guard let data = try? encoder.encode(items) else {
-            defaults.removeObject(forKey: Keys.trailingItems)
-            return
+        let sanitized = items.map { item -> TrailingTileItem in
+            guard let settings = item.widgetSettings else { return item }
+            var copy = item
+            copy.widgetSettings = settings.droppingNonFiniteNumbers
+            return copy
         }
+        // An encode failure must never delete the stored list: keep what is there.
+        guard let data = try? encoder.encode(sanitized) else { return }
 
         defaults.set(data, forKey: Keys.trailingItems)
     }

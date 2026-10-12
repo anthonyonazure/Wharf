@@ -187,11 +187,15 @@ final class StorageKeyContractTests: DockyPreferencesTestCase {
     }
 
     func testAppearanceKeysAreAllRealKeys() {
-        let literals = Set(expected.map(\.literal))
+        let literals = Set(expected.map(\.literal)).union([
+            DockSettingsService.Keys.tileSize,
+            DockSettingsService.Keys.largeSize,
+            DockSettingsService.Keys.magnification,
+        ])
         XCTAssertEqual(DockyPreferences.appearanceKeys.subtracting(literals), [])
     }
 
     func testAppearanceKeyCount() {
-        XCTAssertEqual(DockyPreferences.appearanceKeys.count, 57)
+        XCTAssertEqual(DockyPreferences.appearanceKeys.count, 61)
     }
 }

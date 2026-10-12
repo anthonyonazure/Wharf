@@ -70,9 +70,8 @@ final class EffectiveAppearanceTests: DockyPreferencesTestCase {
         prefs.windowTintOpacity = .nan
         prefs.iconShadowOpacity = .nan
         for value in [prefs.effectiveWindowTintOpacity, prefs.effectiveIconShadowOpacity] {
-            XCTExpectFailure("BUG: a NaN opacity passes through min(max(raw, 0), 1) unchanged") {
-                XCTAssertFalse(value.isNaN)
-            }
+            XCTAssertFalse(value.isNaN)
+            XCTAssertTrue((0...1).contains(value), "\(value)")
         }
     }
 
@@ -125,9 +124,7 @@ final class EffectiveAppearanceTests: DockyPreferencesTestCase {
     func testUniformCornerRadiusShouldAlsoFloorAtZero() {
         let prefs = makePrefs()
         prefs.windowCornerRadius = -12
-        XCTExpectFailure("BUG: effectiveWindowCornerRadius returns a negative radius; every sibling corner accessor floors at 0") {
-            XCTAssertGreaterThanOrEqual(prefs.effectiveWindowCornerRadius, 0)
-        }
+        XCTAssertGreaterThanOrEqual(prefs.effectiveWindowCornerRadius, 0)
     }
 
     func testWidgetChromeOverridesFloorAtZeroForEverySpan() {
@@ -388,9 +385,7 @@ final class EffectiveAppearanceTests: DockyPreferencesTestCase {
             ("dividerOffset", prefs.effectiveDividerOffset),
         ]
         for (name, value) in effective {
-            XCTExpectFailure("BUG: a stored NaN reaches layout through effective \(name)") {
-                XCTAssertTrue(value.isFinite, name)
-            }
+            XCTAssertTrue(value.isFinite, name)
         }
     }
 }

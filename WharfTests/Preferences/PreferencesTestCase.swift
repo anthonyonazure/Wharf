@@ -31,9 +31,20 @@ class DockyPreferencesTestCase: XCTestCase {
     }
 
     override func tearDown() {
-        defaults?.removePersistentDomain(forName: suiteName)
         defaults = nil
+        Self.discardSuite(named: suiteName)
         super.tearDown()
+    }
+
+    /// Empties a throwaway suite and deletes the plist the preferences daemon
+    /// leaves behind for it, so repeated runs do not litter ~/Library/Preferences.
+    static func discardSuite(named name: String) {
+        guard !name.isEmpty else { return }
+        UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
+        if let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first {
+            let plist = library.appendingPathComponent("Preferences/\(name).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
     }
 
     /// Builds preferences over the throwaway suite with every outward side

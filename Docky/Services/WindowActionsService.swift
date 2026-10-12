@@ -21,8 +21,21 @@ final class WindowActionsService {
     private(set) var sizeLockedWindowIDs: Set<String> = []
     private var lockedSizes: [String: CGSize] = [:]
     private var enforcementTimer: Timer?
+    private let windows: () -> [AppWindow]
+    private let resize: (AppWindow, CGRect) -> Bool
+    private let usesEnforcementTimer: Bool
 
-    private init() {}
+    /// The window source, the resize action and the timer are injectable so
+    /// tests can run the size-lock logic without touching real windows.
+    init(
+        windows: @escaping () -> [AppWindow] = { WindowRegistry.shared.windows },
+        resize: @escaping (AppWindow, CGRect) -> Bool = { WindowRegistry.shared.resize($0, to: $1) },
+        usesEnforcementTimer: Bool = true
+    ) {
+        self.windows = windows
+        self.resize = resize
+        self.usesEnforcementTimer = usesEnforcementTimer
+    }
 
     // MARK: - Close and quit
 
@@ -102,7 +115,7 @@ final class WindowActionsService {
     }
 
     private func startEnforcingIfNeeded() {
-        guard enforcementTimer == nil else { return }
+        guard usesEnforcementTimer, enforcementTimer == nil else { return }
         let timer = Timer(timeInterval: 0.75, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.enforceLockedSizes() }
         }
@@ -115,7 +128,7 @@ final class WindowActionsService {
         enforcementTimer = nil
     }
 
-    private func enforceLockedSizes() {
+    func enforceLockedSizes() {
         guard !sizeLockedWindowIDs.isEmpty else {
             stopEnforcing()
             return
@@ -124,7 +137,7 @@ final class WindowActionsService {
         // Only the locked windows, not every window on the system. Scanning
         // them all ran an accessibility query per window every 0.75s to service
         // what is usually a single lock.
-        let lockedWindows = WindowRegistry.shared.windows.filter {
+        let lockedWindows = windows().filter {
             sizeLockedWindowIDs.contains($0.windowIdentifier)
         }
 
@@ -132,14 +145,14 @@ final class WindowActionsService {
             let id = window.windowIdentifier
             guard let locked = lockedSizes[id], let frame = window.frame else { continue }
             guard abs(frame.width - locked.width) > 2 || abs(frame.height - locked.height) > 2 else { continue }
-            _ = WindowRegistry.shared.resize(
+            _ = resize(
                 window,
-                to: CGRect(origin: frame.origin, size: locked)
+                CGRect(origin: frame.origin, size: locked)
             )
         }
 
         // Drop locks whose window is gone, so the timer eventually stops.
-        let live = Set(WindowRegistry.shared.windows.map(\.windowIdentifier))
+        let live = Set(windows().map(\.windowIdentifier))
         let stale = sizeLockedWindowIDs.subtracting(live)
         for id in stale {
             sizeLockedWindowIDs.remove(id)

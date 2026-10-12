@@ -32,16 +32,26 @@ final class ProfileService {
         profiles.first(where: { $0.id == activeProfileID })
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private let preferences: () -> DockyPreferences
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    private enum Keys {
+    enum Keys {
         static let profiles = "docky.profiles"
         static let activeProfileID = "docky.activeProfileID"
     }
 
-    private init() {
+    /// `defaults` and `preferences` are injectable so tests run against a
+    /// throwaway suite and a throwaway preferences object. The preferences are
+    /// a closure because `DockyPreferences.shared` must not be touched while
+    /// it is itself still being constructed.
+    init(
+        defaults: UserDefaults = .standard,
+        preferences: @escaping () -> DockyPreferences = { DockyPreferences.shared }
+    ) {
+        self.defaults = defaults
+        self.preferences = preferences
         if let data = defaults.data(forKey: Keys.profiles),
            let loaded = try? decoder.decode([DockProfile].self, from: data),
            !loaded.isEmpty {
@@ -56,7 +66,7 @@ final class ProfileService {
     }
 
     private func migrateFromLegacyTileStore() {
-        let prefs = DockyPreferences.shared
+        let prefs = preferences()
         let initial = DockProfile(
             name: "Default",
             symbolName: "house.fill",
@@ -77,7 +87,7 @@ final class ProfileService {
         else { return }
         activeProfileID = id
         defaults.set(id, forKey: Keys.activeProfileID)
-        DockyPreferences.shared.applyProfile(profile)
+        preferences().applyProfile(profile)
     }
 
     /// Apply a mutation to the active profile and persist. Used by

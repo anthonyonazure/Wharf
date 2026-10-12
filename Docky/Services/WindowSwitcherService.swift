@@ -123,15 +123,33 @@ final class WindowSwitcherService: ObservableObject {
             return
         }
 
-        let initialIndex: Int
-        if latestWindows.count <= 1 {
-            initialIndex = 0
+        selectWindow(at: Self.initialSelectionIndex(count: latestWindows.count, direction: direction))
+    }
+
+    /// Where the selection starts when the switcher opens: the previous
+    /// window going forward (index 1, so one press swaps to the last-used
+    /// window), the last window going backward.
+    static func initialSelectionIndex(count: Int, direction: Int) -> Int {
+        if count <= 1 {
+            return 0
         } else if direction < 0 {
-            initialIndex = latestWindows.count - 1
+            return count - 1
         } else {
-            initialIndex = 1
+            return 1
         }
-        selectWindow(at: initialIndex)
+    }
+
+    /// Wraps any index, negative or past the end, into `0..<count`.
+    /// `count` must be positive.
+    static func wrappedIndex(_ index: Int, count: Int) -> Int {
+        ((index % count) + count) % count
+    }
+
+    /// Which row is selected after the row at `removedIndex` is removed from a
+    /// list that now has `remainingCount` rows (positive): the row that slid
+    /// into its place, or the last one when it was the final row.
+    static func selectionIndexAfterRemoving(at removedIndex: Int, remainingCount: Int) -> Int {
+        min(removedIndex, remainingCount - 1)
     }
 
     func confirmSelection() {
@@ -241,7 +259,7 @@ final class WindowSwitcherService: ObservableObject {
             return
         }
 
-        let nextIndex = min(removedIndex, windows.count - 1)
+        let nextIndex = Self.selectionIndexAfterRemoving(at: removedIndex, remainingCount: windows.count)
         selectWindow(withIdentifier: windows[nextIndex].windowIdentifier)
     }
 
@@ -400,7 +418,7 @@ final class WindowSwitcherService: ObservableObject {
             return
         }
 
-        let wrappedIndex = ((index % windows.count) + windows.count) % windows.count
+        let wrappedIndex = Self.wrappedIndex(index, count: windows.count)
         selectWindow(withIdentifier: windows[wrappedIndex].windowIdentifier)
     }
 

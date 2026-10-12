@@ -2819,7 +2819,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     /// When `true`, tile-store didSet observers skip the push to
     /// `ProfileService`. Used by `applyProfile(_:)` so loading a profile
     /// doesn't immediately overwrite it with the values just loaded.
-    private var isApplyingProfile = false
+    private(set) var isApplyingProfile = false
+
+    /// Where tile-store edits are mirrored. Nil means the shared service;
+    /// tests point it at a service built over a throwaway suite.
+    @ObservationIgnored var profileMirrorTarget: ProfileService?
 
     /// Swap the active profile's tile-store fields into this preferences
     /// object. Each assignment fires its didSet — those still persist to
@@ -2840,7 +2844,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
     /// next profile switch. No-op while a profile is being applied.
     fileprivate func mirrorToActiveProfile(_ mutate: @escaping (inout DockProfile) -> Void) {
         guard !isApplyingProfile else { return }
-        ProfileService.shared.updateActiveProfile(mutate)
+        (profileMirrorTarget ?? ProfileService.shared).updateActiveProfile(mutate)
     }
 
     // MARK: - Effective appearance values (theme override layer)

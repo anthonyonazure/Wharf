@@ -104,7 +104,12 @@ final class BoolPreferenceTests: DockyPreferencesTestCase {
         for spec in boolSpecs {
             for wrong in ["yes", "no", "maybe", "", Data([1]), [true], ["k": true]] as [Any] {
                 defaults.set(wrong, forKey: spec.key)
-                XCTAssertEqual(spec.read(makePrefs()), spec.defaultValue, "\(spec.name) \(type(of: wrong))")
+                // A wrong-typed `opensAtLogin` falls back to the machine's real
+                // login-item state, so the expected value depends on the host.
+                let expected = spec.name == "opensAtLogin"
+                    ? LaunchAtLoginService.shared.isEnabled
+                    : spec.defaultValue
+                XCTAssertEqual(spec.read(makePrefs()), expected, "\(spec.name) \(type(of: wrong))")
             }
         }
     }

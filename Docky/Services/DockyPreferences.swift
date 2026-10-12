@@ -3926,8 +3926,10 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let hasSeenDockEditorHint = false
     }
 
-    private init() {
-        self.defaults = .standard
+    /// `defaults` is injectable so tests can run against a throwaway suite
+    /// instead of the real Wharf preferences domain.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         let storedVerticalPadding = defaults.object(forKey: Keys.tileVerticalPadding) as? Double
         let storedTileSpacing = defaults.object(forKey: Keys.tileSpacing) as? Double
         let storedTileClipShape = defaults.string(forKey: Keys.tileClipShape)

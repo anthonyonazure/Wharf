@@ -13,7 +13,20 @@ final class DockEditorService {
     private static let finderBundleIdentifier = "com.apple.finder"
     private static let dockPlistFilename = "com.apple.dock.plist"
 
-    private init() {}
+    private let dockPlistURLOverride: URL?
+    private let restartsDockAfterWrite: Bool
+
+    private init() {
+        self.dockPlistURLOverride = nil
+        self.restartsDockAfterWrite = true
+    }
+
+    /// Test seam: point the editor at a scratch plist and keep it from
+    /// terminating the real system Dock after a write.
+    init(dockPlistURL: URL, restartsDockAfterWrite: Bool = false) {
+        self.dockPlistURLOverride = dockPlistURL
+        self.restartsDockAfterWrite = restartsDockAfterWrite
+    }
 
     @discardableResult
     func removePinnedApp(bundleIdentifier: String) -> Bool {
@@ -72,9 +85,14 @@ final class DockEditorService {
                 return false
             }
 
-            let appsByID = Dictionary(uniqueKeysWithValues: apps.enumerated().map { index, entry in
-                (pinnedItemID(in: entry, at: index), entry)
-            })
+            // The Dock plist is writable by any process running as the user, so a
+            // duplicate GUID must not trap. First entry wins, matching TileStore.
+            let appsByID = Dictionary(
+                apps.enumerated().map { index, entry in
+                    (pinnedItemID(in: entry, at: index), entry)
+                },
+                uniquingKeysWith: { first, _ in first }
+            )
 
             let orderedApps = ids.compactMap { appsByID[$0] }
             guard orderedApps.count == apps.count else {
@@ -95,7 +113,7 @@ final class DockEditorService {
     }
 
     private func updateDockPlist(_ mutate: (inout [String: Any]) -> Bool) -> Bool {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        let url = dockPlistURLOverride ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Preferences")
             .appendingPathComponent(Self.dockPlistFilename)
         return updateDockPlist(at: url, mutate)
@@ -139,6 +157,7 @@ final class DockEditorService {
     }
 
     private func restartDock() {
+        guard restartsDockAfterWrite else { return }
         NSRunningApplication
             .runningApplications(withBundleIdentifier: Self.dockBundleIdentifier)
             .forEach { $0.forceTerminate() }

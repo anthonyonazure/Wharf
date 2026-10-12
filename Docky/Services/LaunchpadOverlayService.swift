@@ -347,7 +347,7 @@ final class LaunchpadOverlayService: ObservableObject {
     /// Resolves the persisted layout against the live filesystem
     /// scan into the renderable entry list. Folders with zero or one
     /// resolvable apps degrade gracefully.
-    private static func resolveEntries(
+    static func resolveEntries(
         layout: LaunchpadLayout,
         appsByBundleID: [String: AppTile]
     ) -> [LaunchpadEntry] {

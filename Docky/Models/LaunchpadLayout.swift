@@ -82,3 +82,12 @@ struct LaunchpadDragPayload: Codable, Equatable, Transferable {
         CodableRepresentation(contentType: .data)
     }
 }
+
+/// Splits `items` into pages of `pageSize`. A non-positive page size or an
+/// empty list yields a single empty page, so callers always have a page to show.
+func launchpadPaginate<Element>(_ items: [Element], pageSize: Int) -> [[Element]] {
+    guard !items.isEmpty, pageSize > 0 else { return [[]] }
+    return stride(from: 0, to: items.count, by: pageSize).map { offset in
+        Array(items[offset..<min(offset + pageSize, items.count)])
+    }
+}

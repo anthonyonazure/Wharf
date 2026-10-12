@@ -19,6 +19,47 @@ import AppKit
 import ApplicationServices
 import Combine
 
+/// Pure badge-text rules, kept free of the accessibility walk so they can be
+/// exercised directly. Badge text is untrusted: any app can set any string.
+enum DockBadgeText {
+    /// Per-app ceiling when rolling badges into a folder total.
+    static let perAppCeiling = 99_999
+
+    /// `AXStatusLabel` text with surrounding whitespace removed; empty means no badge.
+    static func normalized(_ label: String) -> String? {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The numeric value of one app's badge, or 0 when it has none or it is
+    /// not a plain integer. Negative values and values above the ceiling are
+    /// clamped so one hostile badge cannot dominate or overflow a folder total.
+    static func clampedCount(from badge: String?) -> Int {
+        let value = badge.flatMap(Int.init) ?? 0
+        return max(0, min(value, perAppCeiling))
+    }
+
+    /// Sum of the clamped per-app counts. Wrapping add so the sum itself can
+    /// never trap, whatever the number of apps.
+    static func folderTotal(of badges: [String?]) -> Int {
+        badges.reduce(0) { sum, badge in sum &+ clampedCount(from: badge) }
+    }
+
+    /// Text drawn on a folder tile: the combined total, or nil when it is zero.
+    static func folderBadgeText(of badges: [String?]) -> String? {
+        let total = folderTotal(of: badges)
+        return total > 0 ? String(total) : nil
+    }
+
+    /// True when a numeric badge went down, which is not a reason to draw
+    /// attention. Non-numeric badges (dots, glyphs) are never a drop.
+    static func isNumericDrop(previous: String?, current: String) -> Bool {
+        guard let currentValue = Int(current),
+              let previousValue = previous.flatMap(Int.init) else { return false }
+        return previousValue > currentValue
+    }
+}
+
 @MainActor
 final class DockBadgeService: ObservableObject {
     static let shared = DockBadgeService()
@@ -166,10 +207,7 @@ final class DockBadgeService: ObservableObject {
                 // Any change counts. Badges are not always numbers — Messages
                 // and some apps use a dot or a glyph — so an increase test
                 // silently ignores exactly those apps.
-                let numericDrop = (Int(badge).map { current in
-                    previous.flatMap(Int.init).map { $0 > current } ?? false
-                }) ?? false
-                if !numericDrop {
+                if !DockBadgeText.isNumericDrop(previous: previous, current: badge) {
                     Task { @MainActor in
                         AppActivityService.shared.noteAttentionRequested(bundleIdentifier: bundleID)
                     }
@@ -210,8 +248,7 @@ final class DockBadgeService: ObservableObject {
     /// "99+"). Empty / whitespace means no badge.
     private func trimmedBadge(from item: AXUIElement) -> String? {
         guard let label = copyAttribute(item, "AXStatusLabel" as CFString) as? String else { return nil }
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return DockBadgeText.normalized(label)
     }
 
     // MARK: - AX helpers

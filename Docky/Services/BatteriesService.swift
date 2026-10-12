@@ -70,7 +70,15 @@ final class BatteriesService: ObservableObject {
         let devices = [Self.loadInternalBatterySnapshot()].compactMap { $0 }
             + Self.loadAccessoryBatterySnapshots(productNamesByLocationID: productNamesByLocationID)
 
-        let sortedDevices = devices.sorted { lhs, rhs in
+        let sortedDevices = Self.sortedForDisplay(devices)
+        snapshot = sortedDevices.isEmpty ? nil : BatteriesSnapshot(devices: sortedDevices)
+        lastRefreshDate = Date()
+        isLoading = false
+    }
+
+    /// Display order: Mac first, then by kind, then lowest charge, then name.
+    static func sortedForDisplay(_ devices: [BatteryDeviceSnapshot]) -> [BatteryDeviceSnapshot] {
+        devices.sorted { lhs, rhs in
             if lhs.kind != rhs.kind {
                 return lhs.kind.sortRank < rhs.kind.sortRank
             }
@@ -81,9 +89,6 @@ final class BatteriesService: ObservableObject {
 
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
-        snapshot = sortedDevices.isEmpty ? nil : BatteriesSnapshot(devices: sortedDevices)
-        lastRefreshDate = Date()
-        isLoading = false
     }
 
     private static func loadInternalBatterySnapshot() -> BatteryDeviceSnapshot? {
@@ -207,7 +212,7 @@ final class BatteriesService: ObservableObject {
         return productNamesByLocationID
     }
 
-    private static func batteryLevels(from properties: [String: Any]) -> [BatteryLevelSnapshot] {
+    static func batteryLevels(from properties: [String: Any]) -> [BatteryLevelSnapshot] {
         let candidates: [(String, BatteryLevelSnapshot.Component)] = [
             ("BatteryPercent", .main),
             ("BatteryPercentLeft", .left),
@@ -224,7 +229,7 @@ final class BatteriesService: ObservableObject {
         }
     }
 
-    private static func internalPowerStateDescription(
+    static func internalPowerStateDescription(
         isCharging: Bool,
         powerSourceState: String?,
         timeToEmpty: Int?,
@@ -253,7 +258,7 @@ final class BatteriesService: ObservableObject {
         return nil
     }
 
-    private static func inferredAccessoryName(from properties: [String: Any]) -> String {
+    static func inferredAccessoryName(from properties: [String: Any]) -> String {
         if let notificationType = trimmedNonEmptyString(properties["ConnectionNotificationType"]) {
             if notificationType.hasPrefix("KB") {
                 return "Keyboard"
@@ -285,7 +290,7 @@ final class BatteriesService: ObservableObject {
         return "Accessory"
     }
 
-    private static func accessoryKind(for name: String, properties: [String: Any]) -> BatteryDeviceSnapshot.Kind {
+    static func accessoryKind(for name: String, properties: [String: Any]) -> BatteryDeviceSnapshot.Kind {
         let normalizedName = name.lowercased()
         if normalizedName.contains("keyboard") {
             return .keyboard
@@ -311,7 +316,7 @@ final class BatteriesService: ObservableObject {
         return .accessory
     }
 
-    private static func accessoryIdentifier(
+    static func accessoryIdentifier(
         locationID: UInt32?,
         properties: [String: Any],
         fallbackName: String
@@ -341,7 +346,7 @@ final class BatteriesService: ObservableObject {
         return properties
     }
 
-    private static func durationText(minutes: Int) -> String {
+    static func durationText(minutes: Int) -> String {
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
 
@@ -356,7 +361,7 @@ final class BatteriesService: ObservableObject {
         return "\(hours)h \(remainingMinutes)m"
     }
 
-    private static func boundedPercentage(_ value: Any?) -> Int? {
+    static func boundedPercentage(_ value: Any?) -> Int? {
         guard let value = numberValue(value) else {
             return nil
         }
@@ -364,7 +369,7 @@ final class BatteriesService: ObservableObject {
         return max(0, min(100, value))
     }
 
-    private static func numberValue(_ value: Any?) -> Int? {
+    static func numberValue(_ value: Any?) -> Int? {
         switch value {
         case let number as NSNumber:
             return number.intValue
@@ -375,7 +380,7 @@ final class BatteriesService: ObservableObject {
         }
     }
 
-    private static func uint32Value(_ value: Any?) -> UInt32? {
+    static func uint32Value(_ value: Any?) -> UInt32? {
         switch value {
         case let number as NSNumber:
             return number.uint32Value
@@ -390,7 +395,7 @@ final class BatteriesService: ObservableObject {
         }
     }
 
-    private static func trimmedNonEmptyString(_ value: Any?) -> String? {
+    static func trimmedNonEmptyString(_ value: Any?) -> String? {
         guard let string = value as? String else {
             return nil
         }
@@ -433,7 +438,7 @@ struct BatteryDeviceSnapshot: Identifiable, Equatable {
         case headphones
         case accessory
 
-        fileprivate var sortRank: Int {
+        var sortRank: Int {
             switch self {
             case .mac:
                 0

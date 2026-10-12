@@ -143,7 +143,8 @@ final class ExternalWidgetRegistry {
     private(set) var registrations: [ExternalWidgetRegistration] = []
     private var index: [String: ExternalWidgetRegistration] = [:]
 
-    private init() {}
+    /// Internal so tests can use an isolated registry instead of `shared`.
+    init() {}
 
     func register(_ registration: ExternalWidgetRegistration) {
         let identifier = registration.metadata.identifier

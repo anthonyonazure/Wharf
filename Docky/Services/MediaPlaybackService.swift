@@ -74,7 +74,15 @@ final class MediaPlaybackService: ObservableObject {
 
     private let mediaRemote = MediaRemoteBridge.shared
 
-    private init() {
+    private convenience init() {
+        self.init(connectsToMediaRemote: true)
+    }
+
+    /// Test seam: `false` builds an inert instance that never claims the
+    /// shared bridge's callback and never launches the helper process.
+    init(connectsToMediaRemote: Bool) {
+        guard connectsToMediaRemote else { return }
+
         mediaRemote.onStateChange = { [weak self] state in
             Task { @MainActor [weak self] in
                 self?.apply(state)
@@ -234,7 +242,7 @@ final class MediaPlaybackService: ObservableObject {
         }
     }
 
-    private struct LRCEntry: Decodable {
+    struct LRCEntry: Decodable {
         let plainLyrics: String?
         let syncedLyrics: String?
         let instrumental: Bool?
@@ -258,6 +266,20 @@ final class MediaPlaybackService: ObservableObject {
         album: String,
         duration: Int
     ) async -> LyricsContent? {
+        guard let entry: LRCEntry = await fetchDecodable(
+            from: lrclibGetURL(title: title, artist: artist, album: album, duration: duration)
+        ) else {
+            return nil
+        }
+        return resolvedLyrics(from: entry)
+    }
+
+    nonisolated static func lrclibGetURL(
+        title: String,
+        artist: String,
+        album: String,
+        duration: Int
+    ) -> URL? {
         var components = URLComponents(string: "https://lrclib.net/api/get")
         var items: [URLQueryItem] = [
             URLQueryItem(name: "track_name", value: title),
@@ -270,24 +292,23 @@ final class MediaPlaybackService: ObservableObject {
             items.append(URLQueryItem(name: "duration", value: String(duration)))
         }
         components?.queryItems = items
+        return components?.url
+    }
 
-        guard let entry: LRCEntry = await fetchDecodable(from: components?.url) else {
-            return nil
-        }
-        return resolvedLyrics(from: entry)
+    nonisolated static func lrclibSearchURL(title: String, artist: String) -> URL? {
+        var components = URLComponents(string: "https://lrclib.net/api/search")
+        components?.queryItems = [
+            URLQueryItem(name: "track_name", value: title),
+            URLQueryItem(name: "artist_name", value: artist)
+        ]
+        return components?.url
     }
 
     nonisolated private static func fetchLRClibSearch(
         title: String,
         artist: String
     ) async -> LyricsContent? {
-        var components = URLComponents(string: "https://lrclib.net/api/search")
-        components?.queryItems = [
-            URLQueryItem(name: "track_name", value: title),
-            URLQueryItem(name: "artist_name", value: artist)
-        ]
-
-        guard let entries: [LRCEntry] = await fetchDecodable(from: components?.url) else {
+        guard let entries: [LRCEntry] = await fetchDecodable(from: lrclibSearchURL(title: title, artist: artist)) else {
             return nil
         }
         for entry in entries {
@@ -312,7 +333,7 @@ final class MediaPlaybackService: ObservableObject {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
-    nonisolated private static func resolvedLyrics(from entry: LRCEntry) -> LyricsContent? {
+    nonisolated static func resolvedLyrics(from entry: LRCEntry) -> LyricsContent? {
         if entry.instrumental == true {
             return LyricsContent(plain: "♪ Instrumental ♪", lines: [])
         }
@@ -330,7 +351,7 @@ final class MediaPlaybackService: ObservableObject {
         return LyricsContent(plain: plain, lines: synced)
     }
 
-    nonisolated private static func parseLRC(_ raw: String) -> [SyncedLyricsLine] {
+    nonisolated static func parseLRC(_ raw: String) -> [SyncedLyricsLine] {
         guard let pattern = try? NSRegularExpression(
             pattern: #"\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\]"#
         ) else {
@@ -399,7 +420,7 @@ final class MediaPlaybackService: ObservableObject {
         return bundleIdentifier.isEmpty ? nil : bundleIdentifier
     }
 
-    private func apply(_ state: MediaPlaybackState?) {
+    func apply(_ state: MediaPlaybackState?) {
         guard let state else {
             let now = Date()
             statesByBundleIdentifier = statesByBundleIdentifier.mapValues { existingState in
@@ -422,7 +443,7 @@ final class MediaPlaybackService: ObservableObject {
     }
 }
 
-private struct MediaRemoteSnapshot: Decodable {
+struct MediaRemoteSnapshot: Decodable {
     let type: String?
     let diff: Bool?
     let payload: Payload

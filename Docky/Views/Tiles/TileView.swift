@@ -552,11 +552,9 @@ struct TileView: View {
             if preferences.folderBadgeMode == .perApp, appFolderDisplayMode == .grid {
                 return nil
             }
-            let total = folder.apps.reduce(0) { sum, app in
-                let badge = dockBadges.badge(forBundleIdentifier: app.bundleIdentifier).flatMap(Int.init) ?? 0
-                return sum &+ max(0, min(badge, 99_999))
-            }
-            return total > 0 ? String(total) : nil
+            return DockBadgeText.folderBadgeText(
+                of: folder.apps.map { dockBadges.badge(forBundleIdentifier: $0.bundleIdentifier) }
+            )
         case .folder, .launchpad, .startMenu, .widget, .smartStack, .spacer, .flexibleSpacer, .divider, .trash, .minimizedWindow:
             return nil
         }

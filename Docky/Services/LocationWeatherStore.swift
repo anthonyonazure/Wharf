@@ -66,10 +66,25 @@ final class ConfiguredWeatherModel: ObservableObject {
     private var lastRefreshDate: Date?
     private var pendingRefreshTask: Task<Void, Never>?
 
-    init(latitude: Double, longitude: Double, locationName: String?) {
+    /// Test seams: the network fetch and the clock. Production uses the defaults.
+    typealias Fetch = @Sendable (_ latitude: Double, _ longitude: Double, _ locationName: String?) async throws -> WeatherSnapshot
+    private let fetch: Fetch
+    private let now: () -> Date
+
+    init(
+        latitude: Double,
+        longitude: Double,
+        locationName: String?,
+        fetch: @escaping Fetch = { latitude, longitude, name in
+            try await WeatherService.fetchSnapshot(forLatitude: latitude, longitude: longitude, locationName: name)
+        },
+        now: @escaping () -> Date = Date.init
+    ) {
         self.latitude = latitude
         self.longitude = longitude
         self.locationName = locationName
+        self.fetch = fetch
+        self.now = now
     }
 
     /// Fetches only if the cached snapshot is missing or stale (15 min).
@@ -84,7 +99,7 @@ final class ConfiguredWeatherModel: ObservableObject {
 
         if !force,
            let lastRefreshDate,
-           Date().timeIntervalSince(lastRefreshDate) < 900,
+           now().timeIntervalSince(lastRefreshDate) < 900,
            snapshot != nil {
             return
         }
@@ -97,14 +112,10 @@ final class ConfiguredWeatherModel: ObservableObject {
             guard let self else { return }
 
             do {
-                let snapshot = try await WeatherService.fetchSnapshot(
-                    forLatitude: self.latitude,
-                    longitude: self.longitude,
-                    locationName: self.locationName
-                )
+                let snapshot = try await self.fetch(self.latitude, self.longitude, self.locationName)
                 guard !Task.isCancelled else { return }
                 self.snapshot = snapshot
-                self.lastRefreshDate = Date()
+                self.lastRefreshDate = self.now()
                 self.lastErrorDescription = nil
             } catch is CancellationError {
                 return
@@ -124,7 +135,7 @@ final class LocationWeatherStore {
 
     private var models: [String: ConfiguredWeatherModel] = [:]
 
-    private init() {}
+    init() {}
 
     func model(for location: ConfiguredWeatherLocation) -> ConfiguredWeatherModel {
         let key = Self.cacheKey(latitude: location.latitude, longitude: location.longitude)
@@ -141,7 +152,7 @@ final class LocationWeatherStore {
     }
 
     /// Rounded to two decimals (~1 km) so effectively-identical city picks coalesce onto one model.
-    private static func cacheKey(latitude: Double, longitude: Double) -> String {
+    static func cacheKey(latitude: Double, longitude: Double) -> String {
         String(format: "%.2f,%.2f", latitude, longitude)
     }
 }

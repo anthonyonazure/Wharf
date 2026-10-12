@@ -51,8 +51,25 @@ import Observation
         static let activeThemeID = "docky.activeThemeID"
     }
 
-    private init() {
-        self.defaults = .standard
+    /// Where user themes live and where bundled themes ship. Fixed per
+    /// instance; only tests supply values other than the defaults.
+    private let themesDirectory: URL
+    private let bundledThemesDirectory: URL?
+
+    private convenience init() {
+        self.init(
+            defaults: .standard,
+            themesDirectory: Self.themesDirectoryURL,
+            bundledThemesDirectory: Self.bundledThemesDirectoryURL
+        )
+    }
+
+    /// Test seam: an isolated manager over a scratch themes directory and
+    /// a throwaway defaults suite.
+    init(defaults: UserDefaults, themesDirectory: URL, bundledThemesDirectory: URL?) {
+        self.defaults = defaults
+        self.themesDirectory = themesDirectory
+        self.bundledThemesDirectory = bundledThemesDirectory
         self.activeThemeID = defaults.string(forKey: Keys.activeThemeID)
         ensureThemesDirectoryExists()
         refreshInstalled()
@@ -75,7 +92,7 @@ import Observation
     /// On-disk location where installed theme bundles live.
     /// Created lazily; safe to expose to UI / shell.
     var themesDirectoryURL: URL {
-        Self.themesDirectoryURL
+        themesDirectory
     }
 
     /// Manifest of the active theme, if any. Resolved from the
@@ -177,7 +194,7 @@ import Observation
     func refreshInstalled() {
         var merged: [String: InstalledTheme] = [:]
 
-        if let bundledURL = Self.bundledThemesDirectoryURL {
+        if let bundledURL = bundledThemesDirectory {
             for (id, theme) in Self.scanInstalledThemes(at: bundledURL, decoder: decoder, isBundled: true) {
                 merged[id] = theme
             }

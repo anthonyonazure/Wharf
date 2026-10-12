@@ -25,8 +25,15 @@ final class AppUpdateService: ObservableObject {
     /// control, which silently re-armed updates against a third party and
     /// defeated the Info.plist decision it was supposed to honor (audit run-1).
     static var configuredFeedURLString: String? {
-        guard let feedURL = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
-              !feedURL.isEmpty else {
+        feedURLString(fromInfoValue: Bundle.main.object(forInfoDictionaryKey: infoDictionaryFeedKey))
+    }
+
+    static let infoDictionaryFeedKey = "SUFeedURL"
+
+    /// Pure core of `configuredFeedURLString`: a feed exists only when the
+    /// Info.plist value is a non-empty string.
+    static func feedURLString(fromInfoValue value: Any?) -> String? {
+        guard let feedURL = value as? String, !feedURL.isEmpty else {
             return nil
         }
         return feedURL

@@ -715,10 +715,7 @@ private struct LaunchpadOverlayView: View {
     }
 
     private func paginate(_ entries: [LaunchpadEntry], pageSize: Int) -> [[LaunchpadEntry]] {
-        guard !entries.isEmpty, pageSize > 0 else { return [[]] }
-        return stride(from: 0, to: entries.count, by: pageSize).map { offset in
-            Array(entries[offset..<min(offset + pageSize, entries.count)])
-        }
+        launchpadPaginate(entries, pageSize: pageSize)
     }
 
     private func pageIndex(for entryID: String, in pages: [[LaunchpadEntry]]) -> Int? {
@@ -2054,10 +2051,7 @@ private struct ExpandedFolderOverlay: View {
     }
 
     private func paginate(_ apps: [AppTile], pageSize: Int) -> [[AppTile]] {
-        guard !apps.isEmpty, pageSize > 0 else { return [[]] }
-        return stride(from: 0, to: apps.count, by: pageSize).map { offset in
-            Array(apps[offset..<min(offset + pageSize, apps.count)])
-        }
+        launchpadPaginate(apps, pageSize: pageSize)
     }
 
     /// Folder apps in render order. Passthrough at rest; mid-drag the

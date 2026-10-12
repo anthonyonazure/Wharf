@@ -59,7 +59,16 @@ final class ExternalWidgetLoader {
     /// directory without Docky trying to instantiate them.
     static let bundleExtension = "dockywidget"
 
-    private init() {}
+    /// Test seam: when set, replaces the Application Support Widgets directory.
+    private let widgetsDirectoryOverride: URL?
+
+    private init() {
+        widgetsDirectoryOverride = nil
+    }
+
+    init(widgetsDirectory: URL) {
+        widgetsDirectoryOverride = widgetsDirectory
+    }
 
     /// Idempotent. Safe to call multiple times; only the first call
     /// actually scans the directory. External widgets are a Pro feature;
@@ -122,7 +131,7 @@ final class ExternalWidgetLoader {
     /// settings pane can offer "Reveal in Finder" and the loader can
     /// share one source of truth for the directory location.
     var widgetsDirectory: URL {
-        Self.widgetsDirectoryURL()
+        widgetsDirectoryOverride ?? Self.widgetsDirectoryURL()
     }
 
     static func widgetsDirectoryURL() -> URL {
@@ -154,7 +163,7 @@ final class ExternalWidgetLoader {
         return contents.filter { $0.pathExtension == Self.bundleExtension }
     }
 
-    private func loadBundle(at url: URL) {
+    func loadBundle(at url: URL) {
         let standardized = url.standardizedFileURL
 
         guard let bundle = Bundle(url: url) else {

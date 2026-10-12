@@ -58,7 +58,7 @@ final class AudioControlService: ObservableObject {
     func setVolume(_ newValue: Float) {
         let device = defaultDeviceID
         guard device != 0 else { return }
-        let clamped = min(max(newValue, 0), 1)
+        let clamped = Self.clampedVolume(newValue)
         var value = Float32(clamped)
         var address = Self.address(Self.virtualMainVolume, scope: kAudioDevicePropertyScopeOutput)
         guard AudioObjectHasProperty(device, &address) else { return }
@@ -124,6 +124,13 @@ final class AudioControlService: ObservableObject {
         }
     }
 
+    // MARK: - Pure helpers
+
+    /// Slider value limited to the 0...1 range CoreAudio accepts.
+    nonisolated static func clampedVolume(_ value: Float) -> Float {
+        min(max(value, 0), 1)
+    }
+
     // MARK: - CoreAudio reads
 
     /// `kAudioHardwareServiceDeviceProperty_VirtualMainVolume`, written as its
@@ -148,7 +155,7 @@ final class AudioControlService: ObservableObject {
         )
     }
 
-    nonisolated private static func readDefaultOutputDevice() -> AudioDeviceID {
+    nonisolated static func readDefaultOutputDevice() -> AudioDeviceID {
         var device = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var address = address(kAudioHardwarePropertyDefaultOutputDevice)
@@ -158,7 +165,7 @@ final class AudioControlService: ObservableObject {
         return status == noErr ? device : 0
     }
 
-    nonisolated private static func readVolume(_ device: AudioDeviceID) -> Float? {
+    nonisolated static func readVolume(_ device: AudioDeviceID) -> Float? {
         guard device != 0 else { return nil }
         var address = address(virtualMainVolume, scope: kAudioDevicePropertyScopeOutput)
         guard AudioObjectHasProperty(device, &address) else { return nil }
@@ -175,7 +182,7 @@ final class AudioControlService: ObservableObject {
         return settable.boolValue
     }
 
-    nonisolated private static func readMuted(_ device: AudioDeviceID) -> Bool {
+    nonisolated static func readMuted(_ device: AudioDeviceID) -> Bool {
         guard device != 0 else { return false }
         var address = address(kAudioDevicePropertyMute, scope: kAudioDevicePropertyScopeOutput)
         guard AudioObjectHasProperty(device, &address) else { return false }
@@ -185,7 +192,7 @@ final class AudioControlService: ObservableObject {
         return value != 0
     }
 
-    nonisolated private static func readOutputDevices() -> [AudioOutputDevice] {
+    nonisolated static func readOutputDevices() -> [AudioOutputDevice] {
         var address = address(kAudioHardwarePropertyDevices)
         var size = UInt32(0)
         let system = AudioObjectID(kAudioObjectSystemObject)

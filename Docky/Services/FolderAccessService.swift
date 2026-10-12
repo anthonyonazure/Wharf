@@ -25,7 +25,8 @@ final class FolderAccessService: ObservableObject {
     private var contentsCache: [URL: (date: Date, items: [URL])] = [:]
     private var watchersByURL: [URL: FolderWatcher] = [:]
 
-    private init() {}
+    /// Internal so tests can use an isolated instance instead of `shared`.
+    init() {}
 
     deinit {
         for watcher in watchersByURL.values {

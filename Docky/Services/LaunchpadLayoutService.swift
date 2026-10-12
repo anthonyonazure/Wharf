@@ -25,12 +25,17 @@ import Observation
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    private enum Keys {
+    enum Keys {
         static let layout = "docky.launchpadLayout"
     }
 
-    private init() {
-        self.defaults = .standard
+    private convenience init() {
+        self.init(defaults: .standard)
+    }
+
+    /// Test seam: an isolated service over a throwaway defaults suite.
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
         if let data = defaults.data(forKey: Keys.layout),
            let decoded = try? JSONDecoder().decode(LaunchpadLayout.self, from: data) {
             self.layout = decoded

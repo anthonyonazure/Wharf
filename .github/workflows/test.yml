@@ -1,0 +1,76 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and unit tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build and test
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Docky.xcodeproj \
+            -scheme Docky \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -resultBundlePath "$RUNNER_TEMP/WharfTests.xcresult" \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            test
+
+      - name: Keep the test results when something fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WharfTests.xcresult
+          path: ${{ runner.temp }}/WharfTests.xcresult
+          retention-days: 7
+
+  release-build:
+    name: Release build compiles
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Release
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Docky.xcodeproj \
+            -scheme Docky \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

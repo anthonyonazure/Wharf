@@ -33,7 +33,7 @@ struct BundleIDListEditor: View {
                 // Lazy, so a very long list does not build every row (and
                 // look up every app icon) the moment the pane opens.
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(bundleIDs, id: \.self) { bundleID in
+                    ForEach(BundleIDList.deduplicated(bundleIDs), id: \.self) { bundleID in
                         HStack(spacing: 8) {
                             Image(nsImage: icon(for: bundleID))
                                 .resizable()

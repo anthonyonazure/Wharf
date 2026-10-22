@@ -4338,9 +4338,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.dockStaysBehindBundleIDs = storedDockStaysBehindBundleIDs ?? DefaultValues.dockStaysBehindBundleIDs
         self.windowsKeyboardMode = storedWindowsKeyboardMode ?? DefaultValues.windowsKeyboardMode
         self.windowsKeyboardSnipShortcut = storedWindowsKeyboardSnipShortcut ?? DefaultValues.windowsKeyboardSnipShortcut
-        // Case variants of one bundle ID are the same app; keep the first.
-        self.windowsKeyboardExcludedBundleIDs = BundleIDList.deduplicated(
-            storedWindowsKeyboardExcludedBundleIDs ?? DefaultValues.windowsKeyboardExcludedBundleIDs)
+        // Stored lists round trip verbatim (WharfTests pins this); the editor
+        // de-duplicates case variants for display and removal instead.
+        self.windowsKeyboardExcludedBundleIDs = storedWindowsKeyboardExcludedBundleIDs ?? DefaultValues.windowsKeyboardExcludedBundleIDs
         self.windowSnapEnabled = storedWindowSnapEnabled ?? DefaultValues.windowSnapEnabled
         self.windowSnapGap = Double(WindowSnapGeometry.clampedGap(storedWindowSnapGap ?? DefaultValues.windowSnapGap))
         self.windowSnapShortcutOverrides = storedWindowSnapShortcuts

@@ -62,6 +62,11 @@ struct CommandBarSettingsView: View {
                             .font(.callout)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
+                    } else if preferences.enabled, let activeConflict = service.activeConflictMessage {
+                        Text(activeConflict + " The shortcut is off until you record a different one.")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     } else if preferences.enabled, service.isShortcutUnavailable {
                         Text("Another app already uses this shortcut, so it does nothing. Launchers such as Raycast and Alfred often use Option-Space. Record a different one.")
                             .font(.callout)

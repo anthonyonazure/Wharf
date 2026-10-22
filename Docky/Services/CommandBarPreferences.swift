@@ -37,8 +37,8 @@ final class CommandBarPreferences {
             switch self {
             case .apps: "Installed and running apps."
             case .windows: "Open windows of every app. Choosing one brings it to the front."
-            case .files: "Files on this Mac found by Spotlight, local disks only."
-            case .menus: "Commands in the menu bar of the app in front. Choosing one runs it."
+            case .files: "Files in your home folder and Applications found by Spotlight. Hidden files, Library and network home folders are left out."
+            case .menus: "Commands in the menu bar of the app in front. Choosing one runs it; commands such as Delete or Quit ask for a second Return."
             case .snap: "Type a layout such as left half or maximize to snap the window in front."
             case .calculator: "Type arithmetic such as 2 * (3 + 4) to see the answer."
             case .units: "Type a conversion such as 100 km to mi or 20 c to f."

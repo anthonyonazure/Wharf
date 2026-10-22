@@ -1,6 +1,8 @@
 #!/bin/sh
 # Compiles the Command Bar's pure logic (calculator, unit conversion,
-# ranking) with its standalone checks and runs them. The checks include
+# ranking, strict number parsing, query limits, destructive command
+# classification, stable selection, history validation and the file result
+# filter) with its standalone checks and runs them. The checks include
 # hostile input such as 1/0, huge exponents and thousands of open brackets;
 # a watchdog inside the test fails the run if anything hangs. Needs only the
 # Swift toolchain that ships with Xcode.

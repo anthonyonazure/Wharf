@@ -838,6 +838,12 @@ expressions, and a watchdog thread that fails the run after 20 seconds.
 - Assumed, not observed: a Button inside the card wins the click over the
   card's tap-to-focus gesture (standard SwiftUI behavior), and `.focusable(false)`
   plus the never-key panel keep keyboard input with the user's app.
+- The Option alternate rows in the menu bar Layouts submenu follow the
+  documented NSMenu pattern (primary with no modifier, alternate with Option)
+  but were not seen swapping.
+- The "Layouts in Dock Menus" switch sits in the new Preview Actions group so
+  LayoutsSettingsView (a shared file) stayed untouched; the merger may move it
+  to the Layouts pane.
 - WharfTests is hosted inside Wharf.app, so it was compiled
   (`build-for-testing` succeeded) but not run. All six standalone check
   scripts pass.

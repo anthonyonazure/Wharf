@@ -62,7 +62,9 @@ enum LayoutMenuActions {
         for row in rows() {
             switch row {
             case .restore(let id, let title):
-                submenu.addItem(MenuItem(title: title) { restore(id: id, launchingMissingApps: false) })
+                let primary = MenuItem(title: title) { restore(id: id, launchingMissingApps: false) }
+                primary.keyEquivalentModifierMask = []
+                submenu.addItem(primary)
                 let alternate = MenuItem(title: LayoutMenuModel.restoreTitle(title, launchesMissingApps: true)) {
                     restore(id: id, launchingMissingApps: true)
                 }

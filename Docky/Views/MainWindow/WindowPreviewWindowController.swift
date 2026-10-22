@@ -728,7 +728,7 @@ private struct WindowPreviewListRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if isRowHovered || isActionMenuPresented {
+            if isRowHovered || isActionMenuPresented, PreviewActionsPreferences.shared.anyPreviewActionOn {
                 PreviewCardActionRow(window: window, isMenuPresented: $isActionMenuPresented)
                     .transition(.opacity)
             } else if window.isMinimized {

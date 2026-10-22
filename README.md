@@ -50,7 +50,7 @@ These already work, courtesy of upstream:
 
 - **Tiles and layout** — apps, widgets, Smart Stacks, folders, spacers, dividers
 - **Live window switcher** — Cmd-Tab style with live previews, plus per-tile hover previews
-- **Preview actions** — snap, minimize and close buttons on each hover preview card
+- **Preview actions**: snap, minimize and close buttons on each hover preview card
 - **Launchpad** — fullscreen, searchable, keyboard navigable
 - **Widgets** — Calendar, Reminders, Batteries, System, Weather, Now Playing, Audio
   (volume, mute and output device), stackable

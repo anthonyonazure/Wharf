@@ -1588,3 +1588,92 @@ new layout and system chord rules. Build succeeded; all eight
   (the safe direction).
 - The "could not confirm" note may show for an app that handles Command-W
   without any visible change Accessibility can see.
+
+## 2026-10-22, Code review chunk 1 re-check (green button)
+
+Codex and Gemini re-attacked the chunk 1 green button patches. Principle
+applied throughout: when unsure, the click goes to the app untouched; a
+click Wharf already held back is handed back only to the exact window and
+button it was aimed at, otherwise it is canceled quietly. A lost click is a
+nuisance; a click landing on a different window can do damage.
+
+Done:
+
+1. (Codex 1, high) Replay onto a different window. `replay` now confirms,
+   right before posting, that the original window is still in front at the
+   point with the same frame (window server, on main) and that
+   Accessibility still finds the green button there (on the app's lookup
+   queue). Any mismatch cancels. A preflight `.missed` no longer replays at
+   all. The hold path (tiling menu) checks the window the same way before
+   handing the press back. Logic: `GreenButtonLogic.mayReplay`.
+2. (Gemini 1, high) Replay loop. Disproved the premise (below), but added
+   the second guard anyway: `GreenButtonReplayGuard` leaves a 0.5 s token at
+   each replay point that the tap recognizes and spends, allows one replay
+   per press serial, and refuses more than 4 replays in 2 s, so even if both
+   the marker and the token failed a loop dies within 4 rounds (tested).
+3. (Codex 3, high) Partial restore. After a failed snap the window frame is
+   read again; `GreenButtonLogic.outcome` gives completed, no action (frame
+   readable and unchanged) or partial/unknown. Only no action replays or
+   falls back to the native press; partial/unknown spends the click. A
+   native press that times out is also treated as unknown (no replay).
+4. (Codex 5, medium) Late work. Every click carries the service generation
+   (bumped on tap build, tap removal, settings change, and tap interrupt)
+   and its press serial; `perform`, `act`, `replay` and the replay post all
+   check both and that the feature is on. The window frame is rechecked
+   just before focus and the move; the delayed cache follow-ups stop after a
+   generation change.
+5. (Codex 7, medium) Click-through overlays. Wharf's own windows with
+   `ignoresMouseEvents` (the quit protection HUD) are passed to the hit test
+   as `ignoredWindowIDs` and seen through. Other apps' click-through
+   overlays cannot be detected from the window server list, so they still
+   end the scan and the click goes to the app (safe direction).
+7. (Gemini 5, medium) The native button press (both the zoom fallback and
+   the Option full screen fallback) now runs on the app's lookup queue.
+   Left on main by design: `registry.focus`, `setFullscreen` and the
+   `WindowSnapService` move, which are main actor services bounded by the
+   registry's messaging timeout. A newer click arriving in the moment
+   between dispatching the native press and the press itself is not
+   rechecked on the queue.
+8. (Gemini 7, medium) Rapid double click. Decided to keep dropping the
+   first click's pending work when a second press arrives (now covering the
+   action too, not only the replay). The second click is evaluated on its
+   own: it toggles once, the same as one click. Every replayed press and
+   release is sent as a single click (click count 1), so a dropped first
+   click cannot turn a replayed second click into a title bar double click.
+
+Deviations (disproved):
+
+- Gemini 1 premise: "HID posting strips eventSourceUserData." Tested on
+  this Mac with a listen-only session tap: a mouse move carrying the marker,
+  posted at `.cghidEventTap`, arrived at the session tap with the marker
+  intact. The guard in item 2 was added regardless, because the test used a
+  mouse move and a listen-only tap rather than a left press seen by a
+  default tap. `postToPid` was not adopted: mouse events sent that way skip
+  the window server's routing, and it was not tested.
+- Item 6 (Gemini 3, shadow margin): not changed. Compared
+  `kCGWindowBounds` with the Accessibility frame of six real windows
+  (Claude, Spotify, Screen Sharing, Brave, Chrome, VS Code): identical to
+  the point. The window server bounds do not include the drop shadow, so an
+  inset would only let clicks on the edge of a front window fall through to
+  the one behind.
+- The `.missed` preflight result mixes "another window in front" with "same
+  window, but Accessibility no longer finds the button (or timed out)". Both
+  now cancel, following the brief's "control is still what it was" rule,
+  rather than replaying to the same window.
+
+Tests: `Tests/WindowBehavior/GreenButtonReviewTests.swift` (35 checks) runs
+as its own program from `scripts/test-window-behavior.sh`; the old source
+guard that required a replay on every give-up path was replaced by guards
+that the replay and hold paths go through the target gate and the replay
+guard, that `.missed` and partial moves never replay, that the tap has the
+second replay check, and that the native press runs in one place on a
+lookup queue.
+
+Unverified:
+
+- No live clicks were driven. Replay, cancel and hold behavior on real
+  windows, and the tiling menu after a hold, are checked by logic and
+  source guards only.
+- Whether a canceled click in a real app feels like a missed click rather
+  than a stuck state (the press and release are both withheld, so no
+  stuck button is expected).

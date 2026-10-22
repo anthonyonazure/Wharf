@@ -66,7 +66,9 @@ These already work, courtesy of upstream:
 - [x] Mirror mode: identical dock on every display
 - [x] Docks pinned to a specific display, surviving unplug and reconnect
 - [x] Per-screen mode: each dock shows only the windows on its own screen
-- [ ] Per-screen configuration (position, theme, size, contents)
+- [~] Per-screen configuration: each display can set its own edge, tile size and
+  autohide in **Settings → Behavior → Placement → Displays**. Theme and contents
+  are still shared by every dock
 
 Turn it on in **Settings → Behavior → Placement → Display → All Displays**.
 
@@ -126,12 +128,11 @@ In **Settings → Layouts**. Verified restoring a window across displays.
 
 ### 4. Placement and behavior
 
-- [x] Any screen edge (global today, not yet per display)
+- [x] Any screen edge, globally or per display
 - [x] Windows respect dock edges without overlapping, on every screen
 - [x] Collapse to a single button
-- [~] Multi-row layouts — rows are built and chunked, but the dock chrome is
-  still sized for one row, so extra rows are clipped. Needs the chrome
-  measurement to account for row count
+- [x] Multi-row layouts (**Placement → Rows**): the dock grows a row at a time on
+  any edge, and snapped or reserved windows stay clear of the taller dock
 - [ ] Float or snap, per dock
 - [ ] Blink-free native fullscreen transitions
 - [ ] Native Dock suppression control

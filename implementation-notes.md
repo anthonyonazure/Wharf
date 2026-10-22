@@ -769,3 +769,91 @@ expressions, and a watchdog thread that fails the run after 20 seconds.
 - Spotlight speed and result quality with a broad "contains" search on the
   whole local disk were not measured; a short query may take a moment.
 - The Option-Space registration failure path was not triggered.
+
+## 2026-10-22, Stage 5: multi-row docks and per-display settings
+
+### Multi-row docks
+
+The row arithmetic already existed, but two things still clipped extra rows:
+
+- The dock window never re-measured when the **Rows** stepper changed. The
+  tiles redrew in several rows while the panel kept its one-row frame until
+  something unrelated (a tile change, a display change) resized it. The frame
+  now watches the row count.
+- The window was measured by wrapping the whole tile list into rows, section
+  dividers included, while the view wraps each section (pinned, running,
+  trailing) on its own. The panel asked for a different shape than the rows
+  drawn. Both now go through `Docky/Services/DockRowLayout.swift`, which is
+  Foundation only. The magnification hover center uses the same file, so a
+  tile in row two no longer measures as though it followed all of row one.
+
+The reservation frame (`MainWindow.currentReservationFrame`, used by
+`WindowReservationService` and `WindowSnapService`) is the window frame
+itself, so it grows with the rows with no change of its own. A bottom dock
+gets taller, and a left or right dock wider, by one tile plus one gap per
+extra row. `scripts/test-dock-rows.sh` checks that number (20 checks).
+
+### Per-display settings
+
+Each display can override **edge, tile size and autohide** in **Settings,
+Behavior, Placement, Displays**. Each connected display gets a row with a
+"Use global settings" toggle; turning it off copies the current global values
+in, so nothing moves until one is changed.
+
+- Storage is the existing `wharf.perDisplayOverrides` store, keyed by display
+  UUID, with one new optional field, `autohide`. Entries saved before this
+  stage still load. Nothing deletes an entry when a display is unplugged, so
+  it comes back on reconnect; a display that is not connected is just not
+  listed and its entry is never asked for.
+- Rules live in `Docky/Services/PerScreenResolution.swift` (Foundation only):
+  override wins, otherwise global. An unknown edge name, a non-numeric or
+  non-finite size, or a non-boolean autohide falls back for that field alone;
+  sizes are clamped to the slider's 16 to 128 pt. Stored data is now read
+  entry by entry and field by field, so one corrupt entry no longer wipes
+  every display's overrides (before, the whole store decoded or nothing did).
+  `scripts/test-perscreen.sh` covers partial, corrupt, garbage, old-format
+  and vanished-display cases (44 checks).
+- `Docky/Services/DockContext+PerScreen.swift` is the single seam: the window
+  frame, the chrome, the tiles, folders, dividers and the profile switcher all
+  ask the dock's context for its edge and tile size, so a left override no
+  longer moves the window while the tiles still lay out in a horizontal strip.
+- Global settings are unchanged and still move every display that has no
+  override.
+
+### How to run the checks
+
+`scripts/test-dock-rows.sh`, `scripts/test-perscreen.sh`, the build command,
+and the WharfTests command from HANDOFF.md (1,988 tests, 0 failures, 7 skipped
+as before). The test run needs default signing; with
+`CODE_SIGN_IDENTITY=-` the build fails on an embedded binary signature check.
+
+### Deviations
+
+- **Theme per screen and contents per screen are skipped**, as asked. The
+  store has a theme field already, but nothing reads it; every dock still wears
+  the global theme and shows the same tiles.
+- **Overrides apply only when Display is All Displays.** The single dock modes
+  have no bound display, so they always use the global values. The Displays
+  section says so in orange when another mode is selected.
+- **Pop-overs still use the global edge**: the dock editor overlay and hint,
+  profile switcher window, Start Menu, widget expansion and settings panels,
+  and the folder fan's size. On a display whose edge differs from the global
+  one, these can open toward the global edge.
+- The global Window Position picker has no Top choice, so the per-display
+  picker has none either. The row code handles all four edges.
+- Dragging the per-display size slider saves on every step, like the global
+  slider does.
+
+### Unverified
+
+- Nothing was seen on screen. The running copy is the installed build, and
+  launching the Debug build beside it would add a second set of docks, so no
+  multi-row dock, override or Displays section was looked at. The multi-row
+  fix rests on the measured geometry in the check script, not on a screenshot.
+- Snapping and Resize Windows clearing a multi-row dock follow from the frame
+  growing; they were not run against real windows.
+- Unplugging and reconnecting a display was not done; persistence across it is
+  shown by the stored-value checks, not by hardware.
+- The first frame of a bound dock with an autohide override (the window is
+  built before it knows its display, then settles) was not watched for a
+  brief flash.

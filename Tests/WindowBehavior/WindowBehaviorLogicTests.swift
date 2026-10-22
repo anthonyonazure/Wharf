@@ -155,7 +155,7 @@ struct WindowBehaviorLogicTests {
 
         expect(QuitGuardKey.matching(character: "Q", keyCode: 0), .quit, "character match")
         expect(QuitGuardKey.matching(character: "w", keyCode: 0), .close, "close character")
-        expect(QuitGuardKey.matching(character: "й", keyCode: 12), nil, "a readable other character wins over the key position")
+        expect(QuitGuardKey.matching(character: "й", keyCode: 12), .quit, "a non-Latin layout falls back to the key position")
         expect(QuitGuardKey.matching(character: nil, keyCode: 13), .close, "fallback key code")
         expect(QuitGuardKey.matching(character: "a", keyCode: 0), nil, "other key")
 
@@ -275,11 +275,11 @@ struct WindowBehaviorLogicTests {
 
         // Extra modifier.
         machine = QuitGuardStateMachine()
-        expect(machine.keyDown(key: .quit, keyCode: 12, modifiers: cmd, isRepeat: false, timestamp: 0, mode: .extraModifier, target: 5), D.showModifierHint(.quit, .shift), "bare shortcut shows the hint")
-        expect(machine.keyUp(keyCode: 12), D.swallow, "hint stays after release")
-        expect(machine.keyDown(key: .quit, keyCode: 12, modifiers: cmdShift, isRepeat: false, timestamp: 200 * ms, mode: .extraModifier, target: 6), D.confirm(.quit, target: 6), "with Shift confirms for the app the press went to")
+        expect(machine.keyDown(key: .close, keyCode: 13, modifiers: cmd, isRepeat: false, timestamp: 0, mode: .extraModifier, target: 5), D.showModifierHint(.close, .shift), "bare shortcut shows the hint")
+        expect(machine.keyUp(keyCode: 13), D.swallow, "hint stays after release")
+        expect(machine.keyDown(key: .close, keyCode: 13, modifiers: cmdShift, isRepeat: false, timestamp: 200 * ms, mode: .extraModifier, target: 6), D.confirm(.close, target: 6), "with Shift confirms for the app the press went to")
         expect(machine.confirmedSequence, nil, "a one-press confirm has no earlier sequence")
-        expect(machine.keyUp(keyCode: 12), D.swallow, "its release swallowed")
+        expect(machine.keyUp(keyCode: 13), D.swallow, "its release swallowed")
         machine.extraModifier = .option
         expect(machine.keyDown(key: .close, keyCode: 13, modifiers: cmdShift, isRepeat: false, timestamp: 0, mode: .extraModifier, target: 5), D.pass, "wrong extra modifier passes untouched")
         expect(machine.keyDown(key: .close, keyCode: 13, modifiers: QuitGuardModifiers(command: true, option: true), isRepeat: false, timestamp: 0, mode: .extraModifier, target: 5), D.confirm(.close, target: 5), "chosen modifier confirms")

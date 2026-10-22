@@ -13,6 +13,14 @@ xcrun swiftc -O \
     -o "$OUT"
 "$OUT"
 
+# The chunk 1 code review fixes for quit protection and quit on close, as
+# their own program.
+xcrun swiftc -O \
+    "$ROOT/Docky/Services/WindowBehaviorLogic.swift" \
+    "$ROOT/Tests/WindowBehavior/QuitGuardReviewTests.swift" \
+    -o "$OUT-quit-review"
+"$OUT-quit-review"
+
 # Source guards for the review fixes that live in the services, not the
 # pure logic. Quit protection must never post a shortcut to whatever app is
 # in front (only postToPid to the captured app), and must sit at the tail of

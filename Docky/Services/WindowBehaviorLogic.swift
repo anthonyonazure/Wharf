@@ -211,17 +211,32 @@ nonisolated enum QuitOnCloseLogic {
 /// window again, or quits.
 nonisolated struct QuitOnCloseEpisodes: Equatable {
     private(set) var quitSent: Set<Int32> = []
+    /// Apps the user brought to the front after their quit request.
+    private(set) var activatedSinceRequest: Set<Int32> = []
 
     func hasRequestedQuit(_ pid: Int32) -> Bool { quitSent.contains(pid) }
 
-    mutating func requestedQuit(_ pid: Int32) { quitSent.insert(pid) }
-
-    /// A dialog or panel does not end the stretch; only a standard window does.
-    mutating func sawWindow(of pid: Int32, isStandard: Bool) {
-        if isStandard { quitSent.remove(pid) }
+    mutating func requestedQuit(_ pid: Int32) {
+        quitSent.insert(pid)
+        activatedSinceRequest.remove(pid)
     }
 
-    mutating func forget(_ pid: Int32) { quitSent.remove(pid) }
+    /// The user brought the app forward: whatever window it shows next
+    /// starts a fresh stretch, even one whose subrole is not standard.
+    mutating func activated(_ pid: Int32) {
+        if quitSent.contains(pid) { activatedSinceRequest.insert(pid) }
+    }
+
+    /// A dialog or panel does not end the stretch on its own; a standard
+    /// window does, and so does any window after the user activated the app.
+    mutating func sawWindow(of pid: Int32, isStandard: Bool) {
+        if isStandard || activatedSinceRequest.contains(pid) { forget(pid) }
+    }
+
+    mutating func forget(_ pid: Int32) {
+        quitSent.remove(pid)
+        activatedSinceRequest.remove(pid)
+    }
 }
 
 // MARK: - Quit and close protection
@@ -235,10 +250,15 @@ nonisolated enum QuitGuardKey: String, CaseIterable, Equatable {
     var fallbackKeyCode: Int64 { self == .quit ? 12 : 13 }
     var symbol: String { self == .quit ? "⌘Q" : "⌘W" }
 
-    /// Matches by the typed character first so other layouts work, then by
-    /// the US key position.
+    /// Matches by the typed character first so other Latin layouts (AZERTY,
+    /// Dvorak) work, then by the US key position. A layout that types no
+    /// ASCII at all (Cyrillic, Greek, Hebrew) gets the key position too,
+    /// since macOS itself maps Command shortcuts there by position. ASCII
+    /// punctuation is a real, different shortcut (Command-' on Dvorak sits
+    /// where Q is on US), so it never falls back.
     static func matching(character: String?, keyCode: Int64) -> QuitGuardKey? {
-        if let character = character?.lowercased(), !character.isEmpty {
+        if let character = character?.lowercased(), !character.isEmpty,
+           character.unicodeScalars.contains(where: \.isASCII) {
             return allCases.first { $0.character == character }
         }
         return allCases.first { $0.fallbackKeyCode == keyCode }
@@ -282,6 +302,13 @@ nonisolated enum QuitGuardModifier: String, CaseIterable, Identifiable, Codable 
         case .control: "⌃"
         }
     }
+
+    /// The modifier that actually confirms `key`. Shift-Command-Q (Log Out)
+    /// and Control-Command-Q (Lock Screen) belong to macOS, so Command-Q
+    /// confirms with Option instead when either of those is chosen.
+    func effective(for key: QuitGuardKey) -> QuitGuardModifier {
+        key == .quit && self != .option ? .option : self
+    }
 }
 
 nonisolated struct QuitGuardModifiers: Equatable {
@@ -291,6 +318,12 @@ nonisolated struct QuitGuardModifiers: Equatable {
     var control = false
 
     var isBareCommand: Bool { command && !shift && !option && !control }
+
+    /// Shift-Command-Q (Log Out) or Control-Command-Q (Lock Screen), with
+    /// nothing else: chords macOS owns, which always pass through.
+    var isSystemQuitChord: Bool {
+        command && !option && (shift != control)
+    }
 
     func isCommand(plusOnly extra: QuitGuardModifier) -> Bool {
         guard command else { return false }
@@ -338,9 +371,35 @@ nonisolated struct QuitGuardPolicy: Equatable {
     ]
 
     var defaultMode: QuitGuardMode
-    var overrides: [String: QuitGuardMode]
+    /// Normalized on the way in, so two spellings of one bundle id can never
+    /// leave the answer to dictionary order.
+    var overrides: [String: QuitGuardMode] {
+        didSet { overrides = Self.normalized(overrides) }
+    }
     var protectsQuit: Bool
     var protectsClose: Bool
+
+    init(defaultMode: QuitGuardMode, overrides: [String: QuitGuardMode], protectsQuit: Bool, protectsClose: Bool) {
+        self.defaultMode = defaultMode
+        self.overrides = Self.normalized(overrides)
+        self.protectsQuit = protectsQuit
+        self.protectsClose = protectsClose
+    }
+
+    /// Trimmed, blank keys dropped, and one entry per bundle id ignoring
+    /// case. When two spellings collide, the one first in sorted order wins,
+    /// so the result never depends on dictionary order. The surviving key
+    /// keeps its spelling for display.
+    static func normalized(_ overrides: [String: QuitGuardMode]) -> [String: QuitGuardMode] {
+        var seen: Set<String> = []
+        var result: [String: QuitGuardMode] = [:]
+        for key in overrides.keys.sorted() {
+            let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed.lowercased()).inserted, let mode = overrides[key] else { continue }
+            result[trimmed] = mode
+        }
+        return result
+    }
 
     func mode(for bundleIdentifier: String?, key: QuitGuardKey) -> QuitGuardMode {
         switch key {
@@ -407,14 +466,26 @@ nonisolated struct QuitGuardStateMachine {
 
     private(set) var pending: Pending?
     /// Physical keys whose press was swallowed and whose release has not
-    /// come yet. Their repeats and release are swallowed too.
-    private(set) var ownedKeyCodes: Set<Int64> = []
+    /// come yet, with the time each was last seen. Their repeats and release
+    /// are swallowed too. A key not seen for `ownershipTimeout` is dropped,
+    /// so a release missed while Secure Input was on cannot leave it stuck.
+    private(set) var owned: [Int64: UInt64] = [:]
+    var ownedKeyCodes: Set<Int64> { Set(owned.keys) }
+    /// The tap was disabled and turned back on, so a press may have reached
+    /// the app unseen. Until the next key-up or fresh press, a repeat of a
+    /// protected shortcut with Command held is swallowed, never passed.
+    private(set) var isRecovering = false
+    private var recoveringSince: UInt64?
     /// The sequence a confirm finished, so the service can match it with
     /// what it captured at the first press. Nil for a confirm in one press.
     private(set) var confirmedSequence: Int?
     private var nextSequence = 0
 
-    var hasPressInFlight: Bool { pending != nil || !ownedKeyCodes.isEmpty }
+    /// Longer than any key repeat delay macOS offers, so a key still held
+    /// keeps refreshing itself well inside it.
+    static let ownershipTimeout: UInt64 = 10_000_000_000
+
+    var hasPressInFlight: Bool { pending != nil || !owned.isEmpty || isRecovering }
 
     static func clampedHold(_ value: Double) -> Double {
         guard value.isFinite else { return 800 }
@@ -438,15 +509,31 @@ nonisolated struct QuitGuardStateMachine {
         mode: QuitGuardMode,
         target: Int32
     ) -> Decision {
-        if ownedKeyCodes.contains(keyCode) {
+        prune(now: timestamp)
+        if owned[keyCode] != nil {
             // Still held from a press that was swallowed.
-            if isRepeat { return .swallow }
+            if isRepeat {
+                owned[keyCode] = timestamp
+                return .swallow
+            }
             // A fresh press means the old release was missed; judge it anew.
-            ownedKeyCodes.remove(keyCode)
+            owned[keyCode] = nil
+        }
+        if isRecovering {
+            if isRepeat {
+                // The press itself may have been missed while the tap was off.
+                if key != nil, mode != .off, modifiers.command {
+                    owned[keyCode] = timestamp
+                    return .swallow
+                }
+            } else {
+                isRecovering = false
+                recoveringSince = nil
+            }
         }
         if keyCode == Self.escapeKeyCode, pending != nil {
             pending = nil
-            ownedKeyCodes.insert(keyCode)
+            owned[keyCode] = timestamp
             return .cancel
         }
         guard modifiers.command || pending != nil else { return .pass }
@@ -472,7 +559,7 @@ nonisolated struct QuitGuardStateMachine {
             if let current = pending, current.mode == .doublePress, current.target == target,
                Self.isWithin(first: current.timestamp, second: timestamp, milliseconds: doublePressMilliseconds) {
                 pending = nil
-                ownedKeyCodes.insert(keyCode)
+                owned[keyCode] = timestamp
                 confirmedSequence = current.sequence
                 return .confirm(key, target: target)
             }
@@ -482,22 +569,32 @@ nonisolated struct QuitGuardStateMachine {
             return .beginDoublePress(key)
 
         case .extraModifier:
-            if modifiers.isCommand(plusOnly: extraModifier) {
+            // Log Out and Lock Screen belong to macOS: never held, never a
+            // confirm.
+            if key == .quit, modifiers.isSystemQuitChord {
                 pending = nil
-                ownedKeyCodes.insert(keyCode)
+                return .pass
+            }
+            let modifier = extraModifier.effective(for: key)
+            if modifiers.isCommand(plusOnly: modifier) {
+                pending = nil
+                owned[keyCode] = timestamp
                 confirmedSequence = nil
                 return .confirm(key, target: target)
             }
             guard modifiers.isBareCommand else { return .pass }
             begin(key, keyCode: keyCode, mode: .extraModifier, timestamp: timestamp, target: target)
-            return .showModifierHint(key, extraModifier)
+            return .showModifierHint(key, modifier)
         }
     }
 
     /// Matched by physical key, never by the character it types now: the
     /// input source can change between press and release.
-    mutating func keyUp(keyCode: Int64) -> Decision {
-        guard ownedKeyCodes.remove(keyCode) != nil else { return .pass }
+    mutating func keyUp(keyCode: Int64, timestamp: UInt64? = nil) -> Decision {
+        if let timestamp { prune(now: timestamp) }
+        isRecovering = false
+        recoveringSince = nil
+        guard owned.removeValue(forKey: keyCode) != nil else { return .pass }
         if let current = pending, current.keyCode == keyCode, current.mode == .hold {
             // Let go too early: nothing happens, and the release is swallowed.
             pending = nil
@@ -525,10 +622,18 @@ nonisolated struct QuitGuardStateMachine {
         return .cancel
     }
 
-    /// The hold timer for `sequence` fired.
-    mutating func holdElapsed(sequence: Int) -> Decision {
+    /// The hold timer for `sequence` fired. Time alone never confirms: the
+    /// service reads whether the key and Command are physically down right
+    /// now, and if either was let go unseen (Secure Input, a disabled tap),
+    /// the hold is cancelled.
+    mutating func holdElapsed(sequence: Int, keyStillDown: Bool = true, commandStillDown: Bool = true) -> Decision {
         guard let current = pending, current.mode == .hold, current.sequence == sequence else { return .pass }
         pending = nil
+        guard keyStillDown, commandStillDown else {
+            // A key that is up has no release left to swallow.
+            if !keyStillDown { owned[current.keyCode] = nil }
+            return .cancel
+        }
         confirmedSequence = sequence
         return .confirm(current.key, target: current.target)
     }
@@ -541,11 +646,38 @@ nonisolated struct QuitGuardStateMachine {
         return .cancel
     }
 
-    /// Drops everything, for when the tap stops or was disabled and events
-    /// may have been missed.
+    /// Drops everything, for when the tap stops and no more events will come.
     mutating func reset() {
         pending = nil
-        ownedKeyCodes.removeAll()
+        owned.removeAll()
+        isRecovering = false
+        recoveringSince = nil
+    }
+
+    /// The tap was disabled and turned back on: events may have been missed.
+    /// The wait ends, but the keys already held back stay owned, and a
+    /// repeat of a protected shortcut is swallowed until it is clear the key
+    /// was let go (see `isRecovering`).
+    mutating func interrupted() {
+        pending = nil
+        isRecovering = true
+        recoveringSince = nil
+    }
+
+    /// Forgets owned keys and recovery that have gone quiet for longer than
+    /// `ownershipTimeout`.
+    private mutating func prune(now: UInt64) {
+        owned = owned.filter { now < $0.value || now - $0.value <= Self.ownershipTimeout }
+        if isRecovering {
+            if let since = recoveringSince {
+                if now >= since, now - since > Self.ownershipTimeout {
+                    isRecovering = false
+                    recoveringSince = nil
+                }
+            } else {
+                recoveringSince = now
+            }
+        }
     }
 
     static func isWithin(first: UInt64, second: UInt64, milliseconds: Double) -> Bool {
@@ -555,8 +687,72 @@ nonisolated struct QuitGuardStateMachine {
 
     private mutating func begin(_ key: QuitGuardKey, keyCode: Int64, mode: QuitGuardMode, timestamp: UInt64, target: Int32) {
         nextSequence += 1
-        ownedKeyCodes.insert(keyCode)
+        owned[keyCode] = timestamp
         pending = Pending(key: key, keyCode: keyCode, mode: mode, timestamp: timestamp, target: target, sequence: nextSequence)
+    }
+}
+
+/// What reading an app's focused window gave.
+nonisolated enum QuitGuardWindowRead: Equatable {
+    /// A window was read.
+    case window
+    /// The app answered: it has no focused window.
+    case noFocusedWindow
+    /// The app cannot be asked at all (no Accessibility support, or no answer).
+    case unreadable
+}
+
+/// Whether a confirmed Command-W may be sent, judged from the focused window
+/// read at the first press and again right before sending.
+nonisolated enum QuitGuardCloseCheck {
+    enum Verdict: Equatable {
+        case post
+        /// The app says no window is in front: nothing to close.
+        case noWindow
+        /// A different window is in front now, or it can no longer be read.
+        case windowChanged
+    }
+
+    /// `captured` is nil for a one-press confirm (nothing was captured), and
+    /// `.unreadable` when the capture never answered. `sameWindow` says the
+    /// two reads are the same window, when both are `.window`.
+    static func verdict(captured: QuitGuardWindowRead?, current: QuitGuardWindowRead, sameWindow: Bool) -> Verdict {
+        switch current {
+        case .noFocusedWindow:
+            return .noWindow
+        case .unreadable:
+            // An app that cannot be read at all still gets its Command-W, as
+            // without Wharf. One that showed a window before and no longer
+            // answers might have a different window in front: nothing.
+            return captured == nil || captured == .unreadable ? .post : .windowChanged
+        case .window:
+            switch captured {
+            case nil: return .post
+            case .window: return sameWindow ? .post : .windowChanged
+            case .noFocusedWindow, .unreadable: return .windowChanged
+            }
+        }
+    }
+
+    /// What can be seen of the target app before and after Command-W.
+    struct Snapshot: Equatable {
+        /// The window that was in front still exists.
+        var windowExists: Bool?
+        var windowTitle: String?
+        var windowCount: Int?
+        var focusedIsSameWindow: Bool?
+
+        var isBlank: Bool { windowExists == nil && windowTitle == nil && windowCount == nil }
+    }
+
+    /// True when Command-W visibly did something (a window or tab went, a
+    /// sheet asked to save), or when nothing could be read to tell. Only a
+    /// readable "nothing changed at all" is reported as unconfirmed.
+    static func looksHandled(before: Snapshot, after: Snapshot) -> Bool {
+        if before.isBlank || after.isBlank { return true }
+        if after.windowExists == false { return true }
+        if after.focusedIsSameWindow == false { return true }
+        return before.windowTitle != after.windowTitle || before.windowCount != after.windowCount
     }
 }
 

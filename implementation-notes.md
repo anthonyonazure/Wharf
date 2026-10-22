@@ -863,3 +863,86 @@ x = 2000 past the destination edge), the new code passes. Totals: geometry
 - A restore that had to shrink an oversized frame keeps its entry if the app
   then refuses the smaller size, so that window's Restore keeps reporting
   failure until it is snapped again. Harmless, but new behavior.
+## 2026-10-22, Stage 4b: preview card actions and layouts from the dock
+
+### What was built
+
+- **Preview Actions.** Hovering a window's card in a tile's hover preview
+  shows a small row of round buttons in its top right corner (in the list
+  layout, at the right end of the row): Snap, Minimize and Close. Snap opens
+  a menu with Left Half, Right Half, Maximize and, with more than one
+  display, Next Display. Each button acts on that card's window through
+  `WindowSnapService.perform(_:on:)`, which already took a window, so no new
+  overload was needed. A minimized window's card shows Restore instead of
+  Snap and Minimize. Close and Minimize drop the card and keep the preview
+  open; Snap and Restore close the preview and bring the window forward.
+  The existing "more" button, click-to-focus, hover delay and grace dismiss
+  are unchanged; the Snap menu uses the same menu plumbing as the "more"
+  button, which holds the preview open while a menu is up.
+- **Settings.** Window Management, Window Preview section, a new "Preview
+  Actions" group: Close Button, Minimize Button, Snap Menu, each on by
+  default, and "Layouts in Dock Menus", on by default. The orange
+  Accessibility line shows when any button is on and the permission is
+  missing. Keys use the `wharf.previewActions.` prefix in a new
+  `PreviewActionsPreferences`; DockyPreferences was not touched.
+- **Layouts from the dock.** A "Layouts" submenu in the dock's background
+  menu (the divider's right-click menu), in the right-click menu of Wharf's
+  own tiles (Start, Launchpad, spacers and other Wharf-pinned tiles) and in
+  the Wharf menu bar item. It lists saved layouts for one-click Restore, then
+  "Save Current Layout..." (asks for a name, suggests "Layout N", confirms
+  before replacing a layout of the same name), then "Undo Last Restore" when
+  there is one. Holding Option restores and also opens missing apps through
+  `launchAndRestore`, the same path the Layouts widget uses. With the switch
+  off, the menu bar item goes back to its old flat list.
+- **Pure logic** in `Docky/Services/PreviewActionsLogic.swift`, checked by
+  `scripts/test-preview-actions.sh` (32 checks): which buttons show, what
+  happens to a card afterward, snap choices per display count, the Layouts
+  rows, the suggested name, name trimming and the replace check.
+
+### Deviations
+
+- **Defaults are on**, against the usual default-off rule, because the brief
+  asked for close, minimize and the snap menu on by default. Each only acts
+  on the window the user points at. The Layouts submenu is also on, since it
+  only adds a menu entry.
+- **Minimize always removes the card**, even when previews list minimized
+  windows. The card's dimmed minimized look is set when the preview opens and
+  would not refresh, so a live-looking card for a window that just left the
+  screen would read as a failed click. It comes back dimmed on the next hover.
+- **The launch-missing-apps variant is behind Option**, not a second row per
+  layout. In the menu bar item it is a standard Option alternate. In the dock
+  menus the titles change if Option is already held when the Layouts submenu
+  opens, and Option held at the moment of the click also counts.
+- **Restore with launch uses `launchAndRestore`** (polls for the new windows),
+  as the Layouts widget does, rather than the fixed 3 second delay in the
+  Settings pane and the URL scheme.
+- **"No Saved Layouts" in the dock menus is a clickable no-op**: the shared
+  `ContextAction` type has no disabled row. The menu bar version is disabled.
+- **The dock has no separate background menu**; the divider's menu is the
+  dock-wide one (hiding, magnification, position, settings), so that is where
+  the submenu went, next to Edit Dock.
+
+### Unverified
+
+- The Debug build was not launched, same reason as earlier stages (a second
+  Wharf would add docks on the real desktop). So the buttons, their hover
+  reveal, the Snap menu holding the preview open, the save prompt taking
+  typing, and the menus were not seen working.
+- Assumed, not observed: a Button inside the card wins the click over the
+  card's tap-to-focus gesture (standard SwiftUI behavior), and `.focusable(false)`
+  plus the never-key panel keep keyboard input with the user's app.
+- The Option alternate rows in the menu bar Layouts submenu follow the
+  documented NSMenu pattern (primary with no modifier, alternate with Option)
+  but were not seen swapping.
+- The "Layouts in Dock Menus" switch sits in the new Preview Actions group so
+  LayoutsSettingsView (a shared file) stayed untouched; the merger may move it
+  to the Layouts pane.
+- WharfTests is hosted inside Wharf.app, so it was compiled
+  (`build-for-testing` succeeded) but not run. All six standalone check
+  scripts pass.
+- New `String(localized:)` titles ("Layouts", "Save Current Layout...",
+  "Undo Last Restore", "No Saved Layouts") were not added to
+  Localizable.xcstrings by hand; Xcode extracts them on the next build in the
+  IDE, and Spanish has no translation yet.
+- The README Credits section already repeats the snapping paragraph three
+  times from earlier stage merges; left as is, flagged for cleanup.

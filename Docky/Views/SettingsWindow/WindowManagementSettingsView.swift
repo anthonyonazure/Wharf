@@ -220,6 +220,8 @@ struct WindowManagementSettingsView: View {
                     }
                 }
                 .padding(.vertical, 4)
+
+                PreviewActionsSettingsSection()
             }
         }
         .formStyle(.grouped)

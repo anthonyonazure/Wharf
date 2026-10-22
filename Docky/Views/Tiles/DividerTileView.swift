@@ -56,6 +56,7 @@ struct DividerTileView: View {
             .action(String(localized: "Edit Dock...")) {
                 DockEditModeService.shared.enter()
             },
+        ] + LayoutMenuActions.dockMenuEntries() + [
             .divider,
             .submenu(String(localized: "Troubleshoot"), children: troubleshootActions),
             .action(String(localized: "Send Feedback...")) {

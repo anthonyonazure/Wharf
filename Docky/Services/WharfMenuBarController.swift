@@ -80,7 +80,9 @@ final class WharfMenuBarController: NSObject {
         menu.addItem(.separator())
 
         let layouts = WorkspaceLayoutService.shared.layouts
-        if layouts.isEmpty {
+        if let layoutsItem = LayoutMenuActions.menuBarItem() {
+            menu.addItem(layoutsItem)
+        } else if layouts.isEmpty {
             let empty = NSMenuItem(title: "No Saved Layouts", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
@@ -97,7 +99,8 @@ final class WharfMenuBarController: NSObject {
             }
         }
 
-        if WorkspaceLayoutService.shared.undoSnapshot != nil {
+        if !PreviewActionsPreferences.shared.showsLayoutsInDockMenus,
+           WorkspaceLayoutService.shared.undoSnapshot != nil {
             let undo = NSMenuItem(
                 title: "Undo Last Restore",
                 action: #selector(undoRestore),

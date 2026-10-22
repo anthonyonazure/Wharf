@@ -1817,7 +1817,7 @@ key.
    dot separated parts of ASCII letters, digits and hyphens. The reason for a
    refusal shows under the field and Add is disabled; Return is checked too.
 
-Regression checks added to `scripts/test-focus-and-wintap.sh` (109 to 161):
+Regression checks added to `scripts/test-focus-and-wintap.sh` (109 to 163):
 system-defined key cancels, hardware key during the hold cancels (and one
 well before it does not), detector reset, negative hold, mask by action,
 timestamp conversion for ticks, nanoseconds, Intel and implausible stamps,

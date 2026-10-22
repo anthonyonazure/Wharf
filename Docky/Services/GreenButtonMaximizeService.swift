@@ -501,7 +501,7 @@ final class GreenButtonMaximizeService {
         let target = click.target
         let point = click.point
         lookUpQueue(for: target.pid).async { [weak self] in
-            let preflight = Self.preflight(pid: target.pid, button: button, greenButtons: target.greenButtons, at: point)
+            let preflight = Self.preflight(pid: target.pid, windowID: target.windowID, button: button, greenButtons: target.greenButtons, at: point)
             DispatchQueue.main.async { self?.act(on: click, release: release, preflight: preflight) }
         }
     }
@@ -628,16 +628,21 @@ final class GreenButtonMaximizeService {
     /// window. Runs on the app's lookup queue.
     nonisolated private static func preflight(
         pid: pid_t,
+        windowID: CGWindowID,
         button: AXUIElement,
         greenButtons: [AXUIElement],
         at point: CGPoint
     ) -> Preflight {
-        guard hitIsOnButton(pid: pid, buttons: greenButtons, at: point) else { return .missed }
+        // The app scoped hit test below cannot see another app's window
+        // that came in front since the press; the window server can.
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        guard TrafficLightHitTest.frontWindow(in: windows, at: point, ownProcessID: getpid())?.windowID == windowID,
+              hitIsOnButton(pid: pid, buttons: greenButtons, at: point)
+        else { return .missed }
         guard boolAttribute(button, kAXEnabledAttribute as String, default: true) else { return .blocked }
         let window = elementAttribute(button, kAXWindowAttribute as String)
         if let window, hasSheet(window) { return .blocked }
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-            as? [[String: Any]] ?? []
         if GreenButtonLogic.hasModalPanel(in: windows, pid: pid) { return .blocked }
         let isMain = window.map { boolAttribute($0, kAXMainAttribute as String) } ?? false
         return .clear(isMainWindow: isMain, frame: window.flatMap { frame(of: $0) })

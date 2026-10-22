@@ -1429,7 +1429,11 @@ Branch `cr1-green-button`, from `feature/vorssaint-parity`. Files:
    frame is under the press; a press near a title bar with no cached answer
    schedules a lookup after the event is passed; a press elsewhere costs a
    scan of a short array. The system wide element is gone: the hit test
-   asks the app element, with the timeout set on it. The hit test, enabled
+   asks the app element, with the timeout set on it. Because an app scoped
+   hit test cannot see another app's window that came in front after the
+   press, the preflight first checks the window server that the target is
+   still the front window at the point (the cover the system wide hit test
+   used to give); if not, the click is replayed. The hit test, enabled
    and sheet checks, modal check and frame read run on the app's lookup
    queue. Left on main: `WindowRegistry.liveWindows`, `focus`,
    `setFullscreen`, `liveFrame` (only as a fallback) and

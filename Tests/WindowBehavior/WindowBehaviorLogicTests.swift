@@ -55,7 +55,7 @@ struct WindowBehaviorLogicTests {
         expect(TrafficLightHitTest.candidate(in: [front, behind], at: CGPoint(x: 400, y: 400), button: .zoom, ownProcessID: 99), nil, "click inside window body is no candidate")
         expect(TrafficLightHitTest.candidate(in: [front, behind], at: CGPoint(x: 100 + 14, y: 114), button: .zoom, ownProcessID: 99), nil, "close button area is not zoom")
         expect(TrafficLightHitTest.candidate(in: [front, behind], at: CGPoint(x: 100 + 14, y: 114), button: .close, ownProcessID: 99)?.pid, 10, "close area found for close")
-        expect(TrafficLightHitTest.candidate(in: [front, behind], at: zoomPoint, button: .zoom, ownProcessID: 10), nil, "own window skipped, and the window behind does not contain the zoom area at that point")
+        expect(TrafficLightHitTest.candidate(in: [front, behind], at: zoomPoint, button: .zoom, ownProcessID: 10), nil, "a Wharf window in front ends the scan")
         expect(TrafficLightHitTest.candidate(in: [front, behind], at: zoomPoint, button: .zoom, ownProcessID: 99, pidIsEligible: { $0 != 10 }), nil, "ineligible front window ends the scan instead of falling through")
         let menuLayer = windowInfo(pid: 30, number: 3, rect: CGRect(x: 100, y: 100, width: 800, height: 600), layer: 25)
         expect(TrafficLightHitTest.candidate(in: [menuLayer, front], at: zoomPoint, button: .zoom, ownProcessID: 99), nil, "a menu layer window over the button ends the scan")

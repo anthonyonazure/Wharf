@@ -1762,3 +1762,103 @@ AXModal read, settings text).
   value is treated as a doubt.
 - No live run: the tap, the HUD and quit on close were not driven against
   real apps in this pass.
+
+## 2026-10-22, Code review chunk 2 patches (keyboard listener)
+
+Branch `cr3-keyboard` from `feature/vorssaint-parity`. Patches from the BMAD
+adversarial review of the Win tap and Windows keyboard chunk. Principle held
+throughout: when unsure, do nothing rather than open something or swallow a
+key.
+
+### What changed
+1. Media keys and window server shortcuts. System-defined events (type 14:
+   volume, brightness, media keys) are in the tap mask and cancel a tap. For
+   Command+Tab, Command+Space and other shortcuts the window server may
+   consume before the session tap, the release asks the hardware layer
+   (`CGEventSource.secondsSinceLastEventType(.hidSystemState, ...)` for key
+   down and type 14) when it last saw a key go down; a key at or after the
+   Command press (with 50 ms of slack before it) cancels the tap. Modifier
+   keys are flag changes, not key downs, so Command never cancels itself.
+   This needs no extra permission (it answered from a plain command line
+   tool with no prompt).
+2. Mask by action. `WinTapEvents.mask(for:)`: key down and key up only when
+   the Win key action is Nothing; modifiers, clicks, scrolls and media keys
+   added otherwise. The tap remembers its mask and is reinstalled when the
+   wanted mask changes. Each event now takes the state lock once (a
+   snapshot of action, snip settings and exclusion), and the detector is
+   reset in place only when it holds state, never rebuilt per event.
+3. Hold time from the event's own stamp. `WinTapEvents.eventTime` converts
+   `CGEvent.timestamp` through the mach timebase, also tries plain
+   nanoseconds, and trusts a reading only when it lands within one second
+   before the callback's own clock; otherwise it uses the callback time, as
+   before. A negative hold never fires.
+4. Stale state. `CommandTapDetector.reset()`; the detector and the snip
+   latch reset when the tap is re-armed after a timeout or user-input
+   disable, and on every install (a flag set under the lock, consumed by the
+   tap thread on its first event).
+5. Snip in excluded apps. Win+Shift+S now passes through untouched in an
+   excluded app, so a remote desktop or virtual machine gets its own. New
+   switch "Take Snips in Excluded Apps Too", key
+   `wharf.windowsKeyboardSnip.inExcludedApps`, default off, in
+   BehaviorExtrasPreferences (keys, default, property, init, reset: each a
+   line appended at the end of its block). Footer text rewritten.
+6. `windowsKeyboardExcludedBundleIDs` is passed through
+   `BundleIDList.deduplicated` on load; the editor's remove button uses the
+   new case-insensitive `BundleIDList.removing`.
+7. Apps without a bundle ID. The frontmost check uses
+   `BundleIDList.matchKey` (bundle ID, else the executable's file name). The
+   editor's Choose App falls back to the executable name and says so in an
+   orange line, or says plainly why the app could not be added; Add Running
+   App lists such apps too. Opt-in per list (`allowsExecutableNames`), on for
+   the Windows keyboard list only.
+8. Orange note under the Win Key picker when Launchpad is picked and the
+   Launchpad overlay is off, naming Features, Launchpad, Enable Launchpad.
+9. Typed bundle IDs go through `BundleIDList.validationError`: two or more
+   dot separated parts of ASCII letters, digits and hyphens. The reason for a
+   refusal shows under the field and Add is disabled; Return is checked too.
+
+Regression checks added to `scripts/test-focus-and-wintap.sh` (109 to 163):
+system-defined key cancels, hardware key during the hold cancels (and one
+well before it does not), detector reset, negative hold, mask by action,
+timestamp conversion for ticks, nanoseconds, Intel and implausible stamps,
+stamp-based hold, snip decision, dedupe on load, case-insensitive removal,
+bundle ID validation, executable-name match key.
+
+### Deviations
+- Item 5 premise was half right: the old footer already said "Win+Shift+S
+  still takes a snip everywhere", so the code did not contradict the text.
+  The underlying point (remote desktops and virtual machines should get the
+  guest's own Win+Shift+S) stands, so the fix was applied as asked.
+- Item 1, window server shortcuts: instead of the suggested "frontmost app
+  changed or Spotlight became active" guard, the release checks the
+  hardware's last key down. It covers every swallowed shortcut, not just two
+  known ones, and does not race the app activation notification, which for
+  Command+Tab arrives after Command is released.
+- Item 9: underscores are refused, as asked (letters, digits, dots,
+  hyphens) and as Apple's rules for the key say. A real app with an
+  underscore in its ID can still be added with Choose App or Add Running
+  App, which skip validation. The same validation now applies to the focus
+  follows mouse list, which shares the editor.
+- Item 7: the executable-name fallback is not offered on the focus follows
+  mouse list, since its gate (owned by the other agent) matches by bundle ID
+  only; there the picker shows the "could not be added" line instead.
+- Items 1 to 4 share the same functions and are one commit; items 6 and 9
+  are one commit (same helper block, editor and tests).
+- Duplicates in the stored list are collapsed in memory on load; the stored
+  value is rewritten the next time the list is edited, not at launch.
+
+### Unverified
+- Whether the session tap really never sees Command+Tab or Command+Space key
+  downs. Not probed: it would mean posting synthetic Command events into the
+  live session. The hardware check is the conservative guard either way.
+- Units of a real `CGEvent.timestamp` on this machine. A freshly created
+  event carries 0, so only a real keystroke would tell; the conversion tries
+  both readings and falls back to the old behavior when neither fits.
+- That `secondsSinceLastEventType(.hidSystemState, .keyDown)` never counts a
+  modifier key. Modifier keys are flag changes at the HID layer, so it should
+  not; if it did, every tap would be cancelled (the safe failure). To make
+  that visible, a tap stopped only by this check writes a line to
+  `wharf-keyboard-status.txt` (from a background queue, never the tap
+  thread): if every tap reports it, this assumption is wrong.
+- No live run of the tap, the snip in an excluded app or the Settings
+  changes.

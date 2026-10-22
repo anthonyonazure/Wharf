@@ -29,6 +29,12 @@ struct WindowsKeyboardExtrasSections: View {
                 Text("Press and release the Win key on its own, with nothing else between, to open the Start Menu or Launchpad, as on Windows. Tap again to close it. Win key shortcuts still work as before. Launchpad opens only when the Launchpad overlay is turned on under Features, Launchpad.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if extras.winTapAction == .launchpad, !preferences.enablesLaunchpadOverlay {
+                    Text("The Launchpad overlay is off, so a Win key tap does nothing. Turn on Enable Launchpad under Features, Launchpad.")
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.vertical, 4)
         } header: {
@@ -39,12 +45,22 @@ struct WindowsKeyboardExtrasSections: View {
         Section {
             BundleIDListEditor(
                 bundleIDs: $preferences.windowsKeyboardExcludedBundleIDs,
-                emptyText: "No apps excluded. Control keeps its Windows meaning everywhere."
+                emptyText: "No apps excluded. Control keeps its Windows meaning everywhere.",
+                allowsExecutableNames: true
             )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Take Snips in Excluded Apps Too", isOn: $extras.snipInExcludedApps)
+                    .disabled(!preferences.windowsKeyboardSnipShortcut)
+                Text("Off: in an excluded app, Win+Shift+S goes to the app itself, so a remote desktop or virtual machine can take its own snip. On: Win+Shift+S takes a Mac snip in every app.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
         } header: {
             Text("Excluded Apps")
         } footer: {
-            Text("In these apps Control keeps its Mac meaning, nothing is translated and a Win key tap does nothing. Terminals are on the list by default, so Ctrl+C there still interrupts a running process. Win+Shift+S still takes a snip everywhere.")
+            Text("In these apps the Win key belongs to the app: Control keeps its Mac meaning, nothing is translated, a Win key tap does nothing and Win+Shift+S reaches the app unless the switch above says otherwise. Terminals are on the list by default, so Ctrl+C there still interrupts a running process.")
                 .foregroundStyle(.secondary)
         }
         .disabled(!preferences.windowsKeyboardMode)

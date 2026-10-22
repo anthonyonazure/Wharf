@@ -45,6 +45,7 @@ final class WindowsKeyboardService {
     private var _snipEnabled = false
     private var _excludedBundleIDs: Set<String> = []
     private var _winTapAction: WinKeyTapAction = .off
+    private var _snipInExcludedApps = false
 
     /// Frontmost bundle ID, cached. The exclusion check runs on every
     /// keystroke, and asking NSWorkspace each time would put a cross-process
@@ -71,6 +72,44 @@ final class WindowsKeyboardService {
     /// it needs no lock.
     private var winTapDetector = CommandTapDetector()
 
+    /// Set under the lock when a tap is installed, so the tap thread starts
+    /// from a clean detector and snip latch instead of state left over from
+    /// a previous tap.
+    private var _tapStatePending = false
+
+    /// The mask the current tap was created with. A tap's mask cannot change,
+    /// so a different wanted mask means a reinstall.
+    private var _installedMask: CGEventMask?
+
+    /// Everything one event needs, read under a single lock.
+    private struct Snapshot {
+        let winTapAction: WinKeyTapAction
+        let snipEnabled: Bool
+        let snipInExcludedApps: Bool
+        let frontmostExcluded: Bool
+        let resetTapState: Bool
+    }
+
+    private func snapshot() -> Snapshot {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let reset = _tapStatePending
+        _tapStatePending = false
+        return Snapshot(
+            winTapAction: _winTapAction,
+            snipEnabled: _snipEnabled,
+            snipInExcludedApps: _snipInExcludedApps,
+            frontmostExcluded: _frontmostBundleID.map { _excludedBundleIDs.contains($0) } ?? false,
+            resetTapState: reset
+        )
+    }
+
+    /// Back to no press seen and no snip in flight. Tap thread only.
+    private func resetTapThreadState() {
+        if !winTapDetector.isIdle { winTapDetector.reset() }
+        isSnipInFlight = false
+    }
+
     private var excludedBundleIDs: Set<String> {
         get { stateLock.lock(); defer { stateLock.unlock() }; return _excludedBundleIDs }
         set { stateLock.lock(); _excludedBundleIDs = newValue; stateLock.unlock() }
@@ -84,6 +123,10 @@ final class WindowsKeyboardService {
         // Lowercased, like the frontmost bundle ID: bundle IDs ignore case.
         excludedBundleIDs = BundleIDList.matchSet(DockyPreferences.shared.windowsKeyboardExcludedBundleIDs)
         winTapAction = BehaviorExtrasPreferences.shared.winTapAction
+        let snipInExcludedApps = BehaviorExtrasPreferences.shared.snipInExcludedApps
+        stateLock.lock()
+        _snipInExcludedApps = snipInExcludedApps
+        stateLock.unlock()
     }
 
     /// Guards against autorepeat launching a second region capture while the
@@ -197,6 +240,7 @@ final class WindowsKeyboardService {
             // reach the tap without toggling the mode off and on.
             _ = DockyPreferences.shared.windowsKeyboardExcludedBundleIDs
             _ = BehaviorExtrasPreferences.shared.winTapAction
+            _ = BehaviorExtrasPreferences.shared.snipInExcludedApps
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -206,34 +250,41 @@ final class WindowsKeyboardService {
         }
     }
 
+    /// Bundle ID, or the executable's name for an app without one, so such
+    /// an app can still be excluded. Matches what the Settings list stores.
+    private static func matchKey(for app: NSRunningApplication?) -> String? {
+        guard let app else { return nil }
+        return BundleIDList.matchKey(bundleID: app.bundleIdentifier,
+                                     executableName: app.executableURL?.lastPathComponent)
+    }
+
     private func observeFrontmostApplication() {
-        frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier.map(BundleIDList.normalized)
+        frontmostBundleID = Self.matchKey(for: NSWorkspace.shared.frontmostApplication)
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            self?.frontmostBundleID = app?.bundleIdentifier.map(BundleIDList.normalized)
+            self?.frontmostBundleID = Self.matchKey(for: app)
         }
     }
 
     // MARK: - Event tap
 
     private func installTapIfNeeded() {
+        // Modifier changes, clicks, scrolls and media keys are watched only
+        // to recognize a lone Win key tap, and only while a tap can open
+        // something; they always pass through untouched.
+        let mask = WinTapEvents.mask(for: winTapAction)
         stateLock.lock()
         let installed = _eventTap != nil
+        let installedMask = _installedMask
         stateLock.unlock()
-        guard !installed else { return }
-
-        // Modifier changes, clicks and scrolls are watched only to recognize
-        // a lone Win key tap; they always pass through untouched.
-        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
-            | (1 << CGEventType.flagsChanged.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue)
-            | (1 << CGEventType.rightMouseDown.rawValue)
-            | (1 << CGEventType.otherMouseDown.rawValue)
-            | (1 << CGEventType.scrollWheel.rawValue)
+        if installed {
+            guard installedMask != mask else { return }
+            removeTap()
+        }
 
         // `.cgSessionEventTap` at `.headInsertEventTap` so the rewrite happens
         // before any application sees the keystroke. The tap must be active
@@ -242,7 +293,7 @@ final class WindowsKeyboardService {
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: CGEventMask(mask),
+            eventsOfInterest: mask,
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let service = Unmanaged<WindowsKeyboardService>.fromOpaque(refcon).takeUnretainedValue()
@@ -258,6 +309,8 @@ final class WindowsKeyboardService {
         stateLock.lock()
         _eventTap = tap
         _runLoopSource = source
+        _installedMask = mask
+        _tapStatePending = true
         stateLock.unlock()
 
         // Onto its own thread, not the main runloop. Keystrokes must not wait
@@ -299,6 +352,7 @@ final class WindowsKeyboardService {
         _tapRunLoop = nil
         _eventTap = nil
         _runLoopSource = nil
+        _installedMask = nil
         stateLock.unlock()
 
         if let eventTap {
@@ -325,10 +379,16 @@ final class WindowsKeyboardService {
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
+            // Events were missed while it was off: a release seen now may
+            // belong to a press that had a key in between.
+            resetTapThreadState()
             return Unmanaged.passUnretained(event)
         }
 
-        trackWinTap(type: type, event: event)
+        let state = snapshot()
+        if state.resetTapState { resetTapThreadState() }
+
+        trackWinTap(type: type, event: event, state: state)
 
         guard type == .keyDown || type == .keyUp else {
             return Unmanaged.passUnretained(event)
@@ -347,9 +407,12 @@ final class WindowsKeyboardService {
             isSnipInFlight = false
         }
 
-        // Not gated on the exclusion list: that list keeps Control's Mac
-        // meaning in terminals and the like, and the snip uses no Control.
-        if snipEnabled,
+        // Excluded apps keep the Win key, so a remote desktop or virtual
+        // machine gets its own Win+Shift+S, unless the user turned on snips
+        // in excluded apps too.
+        if WinTapEvents.snipAllowed(enabled: state.snipEnabled,
+                                    frontmostExcluded: state.frontmostExcluded,
+                                    inExcludedApps: state.snipInExcludedApps),
            keyCode == Int64(kVK_ANSI_S),
            flags.contains(.maskCommand),
            flags.contains(.maskShift),
@@ -369,7 +432,7 @@ final class WindowsKeyboardService {
             return nil
         }
 
-        guard shouldTranslateControl() else {
+        guard !state.frontmostExcluded else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -389,24 +452,35 @@ final class WindowsKeyboardService {
     /// Feeds the Win key tap detector and opens the chosen overlay when a
     /// tap completes. Never changes or swallows the event: Command still
     /// reaches the app, so Command shortcuts keep working.
-    private func trackWinTap(type: CGEventType, event: CGEvent) {
-        let action = winTapAction
+    private func trackWinTap(type: CGEventType, event: CGEvent, state: Snapshot) {
+        let action = state.winTapAction
         // Excluded apps (remote desktops, virtual machines, terminals) keep
         // the Win key to themselves. Checked on every event, so a press that
         // began elsewhere cannot complete once an excluded app is in front.
-        guard action != .off, shouldTranslateControl() else {
-            winTapDetector = CommandTapDetector()
+        // With the action set to Nothing only key events arrive (see
+        // `WinTapEvents.mask`), and an idle detector is left as it is.
+        guard action != .off, !state.frontmostExcluded else {
+            if !winTapDetector.isIdle { winTapDetector.reset() }
             return
         }
         let input: CommandTapDetector.Input
         switch type {
         case .flagsChanged:
             let flags = event.flags
+            let command = flags.contains(.maskCommand)
+            let now = ProcessInfo.processInfo.systemUptime
             input = .flagsChanged(
-                command: flags.contains(.maskCommand),
+                command: command,
                 otherModifiers: !flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
-                time: ProcessInfo.processInfo.systemUptime,
-                mouseHeld: Self.isAnyMouseButtonDown
+                time: WinTapEvents.eventTime(
+                    timestamp: event.timestamp,
+                    timebaseNumer: Self.timebase.numer,
+                    timebaseDenom: Self.timebase.denom,
+                    now: now
+                ),
+                mouseHeld: Self.isAnyMouseButtonDown,
+                // Asked only on release, where it decides the tap.
+                lastOtherKeyAt: command ? nil : now - Self.secondsSinceHardwareKeyDown
             )
         case .keyDown:
             input = .keyDown
@@ -415,9 +489,18 @@ final class WindowsKeyboardService {
         case .scrollWheel:
             input = .scrollWheel
         default:
+            guard type.rawValue == WinTapEvents.systemDefinedType else { return }
+            input = .systemDefined
+        }
+        guard winTapDetector.handle(input) else {
+            if winTapDetector.lastCancelledByHardwareKey {
+                // Off the tap thread: file I/O has no place in the input path.
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    self?.writeStatus("ACTIVE: last Win key tap ignored because the hardware saw another key during the press (Command+Tab, Command+Space or a media key, for example).")
+                }
+            }
             return
         }
-        guard winTapDetector.handle(input) else { return }
         DispatchQueue.main.async {
             switch action {
             case .startMenu: StartMenuService.shared.toggle()
@@ -435,15 +518,21 @@ final class WindowsKeyboardService {
         }
     }
 
-    /// False inside terminals, where Control must keep its Unix meaning.
-    /// Ctrl+C there is SIGINT; rewriting it would remove the ability to
-    /// interrupt a running process.
-    private func shouldTranslateControl() -> Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        // Both sides are already lowercased; see `refreshSnapshot`.
-        guard let bundleID = _frontmostBundleID else { return true }
-        return !_excludedBundleIDs.contains(bundleID)
+    private nonisolated static let timebase: mach_timebase_info_data_t = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return info
+    }()
+
+    /// How long ago the hardware last saw a key or a media key go down,
+    /// whether or not this tap received it. The window server can consume
+    /// Command+Tab, Command+Space and similar shortcuts before a session tap
+    /// sees the key, so the tap's own events cannot rule them out. Modifier
+    /// keys are flag changes, not key downs, so Command itself never counts.
+    private nonisolated static var secondsSinceHardwareKeyDown: TimeInterval {
+        let key = CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .keyDown)
+        guard let systemDefined = CGEventType(rawValue: WinTapEvents.systemDefinedType) else { return key }
+        return min(key, CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: systemDefined))
     }
 
     // MARK: - Snip

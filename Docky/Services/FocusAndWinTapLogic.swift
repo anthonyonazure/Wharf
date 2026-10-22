@@ -395,14 +395,24 @@ nonisolated enum SpacesOrderPlan {
 /// it reads as an abandoned shortcut.
 nonisolated struct CommandTapDetector {
     static let maximumHoldSeconds: TimeInterval = 0.8
+    /// A key the hardware saw this long before Command went down still
+    /// cancels the tap. Errs toward doing nothing.
+    static let otherKeySlackSeconds: TimeInterval = 0.05
 
     enum Input {
         /// A modifier changed. `command` is whether Command is now down,
         /// `otherModifiers` whether Shift, Control, Option or Fn is, and
         /// `mouseHeld` whether any mouse button is down right now (Command
         /// during a drag changes the drag, it is not a tap).
-        case flagsChanged(command: Bool, otherModifiers: Bool, time: TimeInterval, mouseHeld: Bool = false)
+        /// `lastOtherKeyAt` is when the hardware last saw a key or media key
+        /// go down, on the same clock as `time`. It catches keys the tap
+        /// never receives, such as Command+Tab and Command+Space, which the
+        /// window server can consume before the session tap.
+        case flagsChanged(command: Bool, otherModifiers: Bool, time: TimeInterval,
+                          mouseHeld: Bool = false, lastOtherKeyAt: TimeInterval? = nil)
         case keyDown
+        /// Volume, brightness and media keys (event type 14).
+        case systemDefined
         case mouseDown
         /// Command with the scroll wheel zooms in many apps.
         case scrollWheel
@@ -411,13 +421,23 @@ nonisolated struct CommandTapDetector {
     private var commandDown = false
     private var armedAt: TimeInterval?
 
+    /// True while a press or a pending tap is remembered.
+    var isIdle: Bool { !commandDown && armedAt == nil }
+
+    /// Forget everything, for a tap that was re-armed or reinstalled and may
+    /// have missed events in between. A release that follows does not fire.
+    mutating func reset() {
+        commandDown = false
+        armedAt = nil
+    }
+
     /// True exactly when the input completes a lone tap.
     mutating func handle(_ input: Input) -> Bool {
         switch input {
-        case .keyDown, .mouseDown, .scrollWheel:
+        case .keyDown, .systemDefined, .mouseDown, .scrollWheel:
             armedAt = nil
             return false
-        case let .flagsChanged(command, otherModifiers, time, mouseHeld):
+        case let .flagsChanged(command, otherModifiers, time, mouseHeld, lastOtherKeyAt):
             defer { commandDown = command }
             if command, !commandDown {
                 // Command just went down. Only a press on its own can count.
@@ -434,8 +454,59 @@ nonisolated struct CommandTapDetector {
                 return false
             }
             self.armedAt = nil
-            return !otherModifiers && !mouseHeld && time - armedAt <= Self.maximumHoldSeconds
+            if let lastOtherKeyAt, lastOtherKeyAt >= armedAt - Self.otherKeySlackSeconds {
+                return false
+            }
+            let held = time - armedAt
+            return !otherModifiers && !mouseHeld && held >= 0 && held <= Self.maximumHoldSeconds
         }
+    }
+}
+
+/// Which events the Windows keyboard tap listens to, and how to read their
+/// clocks. Pure, so the choices can be checked without a real tap.
+nonisolated enum WinTapEvents {
+    /// `NX_SYSDEFINED`: volume, brightness and media keys. CoreGraphics has
+    /// no named case for it.
+    static let systemDefinedType: UInt32 = 14
+
+    /// Key events always, for the Control translation and the snip. The rest
+    /// only while a Win key tap can open something; with the action set to
+    /// Nothing, clicks, scrolls and modifier changes never reach the tap.
+    static func mask(for action: WinKeyTapAction) -> CGEventMask {
+        var mask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        guard action != .off else { return mask }
+        mask |= (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
+            | (1 << CGEventType.scrollWheel.rawValue)
+            | (1 << CGEventMask(systemDefinedType))
+        return mask
+    }
+
+    /// When an event happened, in seconds on the `systemUptime` clock.
+    ///
+    /// `CGEvent.timestamp` is documented as nanoseconds since startup, but on
+    /// Apple silicon it is widely reported to carry mach ticks; on Intel the
+    /// two agree. Both readings are tried, mach ticks first, and one is
+    /// trusted only when it lands within `plausibleAgeSeconds` before `now`.
+    /// Otherwise `now` is used, which is what the tap did before.
+    static let plausibleAgeSeconds: TimeInterval = 1
+
+    static func eventTime(timestamp: UInt64, timebaseNumer: UInt32, timebaseDenom: UInt32,
+                          now: TimeInterval) -> TimeInterval {
+        guard timestamp != 0 else { return now }
+        var candidates: [Double] = []
+        if timebaseDenom != 0 {
+            candidates.append(Double(timestamp) * Double(timebaseNumer) / Double(timebaseDenom) / 1_000_000_000)
+        }
+        candidates.append(Double(timestamp) / 1_000_000_000)
+        for seconds in candidates {
+            let age = now - seconds
+            if age >= -0.01, age <= plausibleAgeSeconds { return min(seconds, now) }
+        }
+        return now
     }
 }
 

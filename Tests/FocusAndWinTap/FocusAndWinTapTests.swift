@@ -361,6 +361,79 @@ private func testCommandTap() {
     expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: 2.1)), "tap after a drag fires")
 }
 
+private func testCommandTapReviewFixes() {
+    typealias D = CommandTapDetector
+    // Volume, brightness and media keys arrive as system-defined events.
+    var d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0))
+    _ = d.handle(.systemDefined)
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.2)), "Cmd+volume key is not a tap")
+
+    // Command+Tab or Command+Space the tap never saw: the hardware did.
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.3, lastOtherKeyAt: 10.1)),
+           "key seen by the hardware during the hold cancels")
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.3, lastOtherKeyAt: 9.98)),
+           "key a hair before Command also cancels")
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10))
+    expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.3, lastOtherKeyAt: 9)),
+           "key well before Command does not cancel")
+
+    // Reset, as after a re-armed or reinstalled tap.
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0))
+    expect(!d.isIdle, "press is remembered")
+    d.reset()
+    expect(d.isIdle, "reset forgets the press")
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1)), "release after reset does not fire")
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 1))
+    expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: 1.1)), "clean tap after reset fires")
+
+    // A release stamped before its press (clock mix-up) never fires.
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 5))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 4.9)), "negative hold is not a tap")
+}
+
+private func testWinTapEvents() {
+    typealias E = WinTapEvents
+    let keys: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+    expect(E.mask(for: .off) == keys, "Nothing: key events only")
+    for action in [WinKeyTapAction.startMenu, .launchpad] {
+        let mask = E.mask(for: action)
+        expect(mask & keys == keys, "\(action): keys included")
+        expect(mask & (1 << CGEventType.flagsChanged.rawValue) != 0, "\(action): modifiers included")
+        expect(mask & (1 << CGEventType.scrollWheel.rawValue) != 0, "\(action): scrolls included")
+        expect(mask & (1 << CGEventType.leftMouseDown.rawValue) != 0, "\(action): clicks included")
+        expect(mask & (1 << 14) != 0, "\(action): media keys included")
+    }
+
+    // Timestamps: mach ticks on Apple silicon (125/3), nanoseconds on Intel.
+    let now: TimeInterval = 1_000
+    let ticks = UInt64((now - 0.25) * 1_000_000_000 * 3 / 125)
+    let fromTicks = E.eventTime(timestamp: ticks, timebaseNumer: 125, timebaseDenom: 3, now: now)
+    expect(abs(fromTicks - 999.75) < 0.001, "mach ticks convert to the event's own time")
+    let nanos = UInt64((now - 0.25) * 1_000_000_000)
+    let fromNanos = E.eventTime(timestamp: nanos, timebaseNumer: 125, timebaseDenom: 3, now: now)
+    expect(abs(fromNanos - 999.75) < 0.001, "nanoseconds still read right on Apple silicon")
+    expect(abs(E.eventTime(timestamp: nanos, timebaseNumer: 1, timebaseDenom: 1, now: now) - 999.75) < 0.001,
+           "Intel timebase")
+    expect(E.eventTime(timestamp: 0, timebaseNumer: 1, timebaseDenom: 1, now: now) == now, "missing stamp: now")
+    expect(E.eventTime(timestamp: 5, timebaseNumer: 1, timebaseDenom: 1, now: now) == now, "implausibly old: now")
+    expect(E.eventTime(timestamp: UInt64(2_000 * 1e9), timebaseNumer: 1, timebaseDenom: 1, now: now) == now,
+           "in the future: now")
+
+    // Hold measured from event stamps: a tap the tap thread saw late still fires.
+    var d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 999.0))
+    expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: fromTicks)),
+           "0.75 s hold by stamps fires though the callback ran later")
+}
+
 private func testWinKeyActions() {
     expect(WinKeyTapAction(rawValue: "startMenu") == .startMenu, "raw value round trip")
     expect(WinKeyTapAction.allCases.count == 3, "three choices")
@@ -380,6 +453,8 @@ enum FocusAndWinTapTests {
         testStoredDelay()
         testHoverCommitCheck()
         testCommandTap()
+        testCommandTapReviewFixes()
+        testWinTapEvents()
         testWinKeyActions()
 
         if failures == 0 {

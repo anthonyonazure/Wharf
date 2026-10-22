@@ -542,3 +542,8 @@ x = 2000 past the destination edge), the new code passes. Totals: geometry
 - Whether a fixed-size app reports the size failure through
   `AXUIElementSetAttributeValue` (as Codex assumed) or silently keeps its size
   was not observed; both paths now reach the re-anchoring.
+- The retry nudge only knows about Wharf's own dock. With the macOS Dock on
+  the left and no Wharf dock there, the nudge is still the old left and up.
+- A restore that had to shrink an oversized frame keeps its entry if the app
+  then refuses the smaller size, so that window's Restore keeps reporting
+  failure until it is snapped again. Harmless, but new behavior.

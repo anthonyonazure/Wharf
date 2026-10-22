@@ -129,11 +129,16 @@ final class SystemStatusService: ObservableObject {
         )
     }
 
-    private static func cpuUsagePercent(from previous: CPUSample, to current: CPUSample) -> Double {
-        let userDelta = current.user &- previous.user
-        let systemDelta = current.system &- previous.system
-        let idleDelta = current.idle &- previous.idle
-        let niceDelta = current.nice &- previous.nice
+    static func cpuUsagePercent(from previous: CPUSample, to current: CPUSample) -> Double {
+        // The kernel counters are 32-bit and wrap. Subtract modulo 2^32 and
+        // only then widen, so a wrap yields the small true delta.
+        func delta(_ current: UInt64, _ previous: UInt64) -> UInt64 {
+            UInt64(UInt32(truncatingIfNeeded: current) &- UInt32(truncatingIfNeeded: previous))
+        }
+        let userDelta = delta(current.user, previous.user)
+        let systemDelta = delta(current.system, previous.system)
+        let idleDelta = delta(current.idle, previous.idle)
+        let niceDelta = delta(current.nice, previous.nice)
         let totalDelta = userDelta + systemDelta + idleDelta + niceDelta
 
         guard totalDelta > 0 else {
@@ -213,7 +218,7 @@ final class SystemStatusService: ObservableObject {
         )
     }
 
-    private static func networkThroughput(
+    static func networkThroughput(
         from previous: NetworkCounters,
         to current: NetworkCounters
     ) -> NetworkThroughput {
@@ -235,7 +240,7 @@ final class SystemStatusService: ObservableObject {
         )
     }
 
-    private static func shouldIncludeNetworkInterface(named interfaceName: String, flags: Int32) -> Bool {
+    static func shouldIncludeNetworkInterface(named interfaceName: String, flags: Int32) -> Bool {
         guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else {
             return false
         }
@@ -280,11 +285,11 @@ struct SystemStatusSnapshot: Equatable {
         ]
     }
 
-    private static func percentText(_ value: Double) -> String {
+    static func percentText(_ value: Double) -> String {
         "\(Int(value.rounded()))%"
     }
 
-    private static func compactRateText(_ bytesPerSecond: Double) -> String {
+    static func compactRateText(_ bytesPerSecond: Double) -> String {
         let units = ["B", "K", "M", "G"]
         var value = max(0, bytesPerSecond)
         var unitIndex = 0
@@ -304,7 +309,7 @@ struct SystemStatusSnapshot: Equatable {
         return "\(formatted)\(units[unitIndex])"
     }
 
-    private static func networkProgress(_ bytesPerSecond: Double) -> Double {
+    static func networkProgress(_ bytesPerSecond: Double) -> Double {
         let ceiling = 25 * 1_024 * 1_024.0
         guard bytesPerSecond > 0 else {
             return 0
@@ -346,14 +351,14 @@ enum SystemStatusMetricKind: String, CaseIterable, Identifiable {
     }
 }
 
-private struct CPUSample {
+struct CPUSample {
     let user: UInt64
     let system: UInt64
     let idle: UInt64
     let nice: UInt64
 }
 
-private struct MemorySample {
+struct MemorySample {
     let usedBytes: UInt64
     let totalBytes: UInt64
 
@@ -366,13 +371,13 @@ private struct MemorySample {
     }
 }
 
-private struct NetworkCounters {
+struct NetworkCounters {
     let timestamp: Date
     let receivedBytes: UInt64
     let sentBytes: UInt64
 }
 
-private struct NetworkThroughput {
+struct NetworkThroughput {
     let receivedBytesPerSecond: Double
     let sentBytesPerSecond: Double
 

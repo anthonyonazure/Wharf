@@ -25,7 +25,8 @@ final class FolderAccessService: ObservableObject {
     private var contentsCache: [URL: (date: Date, items: [URL])] = [:]
     private var watchersByURL: [URL: FolderWatcher] = [:]
 
-    private init() {}
+    /// Internal so tests can use an isolated instance instead of `shared`.
+    init() {}
 
     deinit {
         for watcher in watchersByURL.values {
@@ -194,8 +195,11 @@ final class FolderAccessService: ObservableObject {
             .localizedTypeDescriptionKey,
             .totalFileAllocatedSizeKey
         ]
+        // contentsOfDirectory returns nil for a URL that is itself a symlink
+        // (for example /tmp), so list the resolved target. The cache stays
+        // keyed by the caller's URL.
         guard let loaded = try? FileManager.default.contentsOfDirectory(
-            at: normalizedFolderURL,
+            at: normalizedFolderURL.resolvingSymlinksInPath(),
             includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]
         ).sorted(by: { Self.modDate($0) > Self.modDate($1) }) else {

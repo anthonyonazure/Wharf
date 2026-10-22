@@ -37,11 +37,11 @@ func appFolderSeedName(for apps: [AppTile]) -> String {
     return _appFolderSanitize("\(firstName) + \(names.count - 1)", fallback: "Folder")
 }
 
-private func _appFolderNormalizeName(_ value: String) -> String {
+func _appFolderNormalizeName(_ value: String) -> String {
     value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
 }
 
-private func _appFolderSanitize(_ value: String, fallback: String) -> String {
+func _appFolderSanitize(_ value: String, fallback: String) -> String {
     let collapsed = value
         .replacingOccurrences(of: "\n", with: " ")
         .trimmingCharacters(in: CharacterSet(charactersIn: " \t\n\r\"'`“”‘’.:,;!?-"))

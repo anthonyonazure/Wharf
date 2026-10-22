@@ -15,12 +15,13 @@ import ImageIO
 final class IconCacheService {
     static let shared = IconCacheService()
 
-    private let cache: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 256
-        cache.totalCostLimit = 64 * 1024 * 1024
-        return cache
-    }()
+    /// Largest edge, in pixels, of a decoded preview image. Bounds the decode
+    /// cost of a hostile or enormous image file.
+    static let maxPreviewPixelSize = 512
+    static let cacheCountLimit = 256
+    static let cacheTotalCostLimit = 64 * 1024 * 1024
+
+    private let cache: NSCache<NSString, NSImage>
 
     /// Nominal point size stamped onto every icon fetched from LaunchServices.
     /// `NSWorkspace.icon(forFile:)` returns a multi-representation image whose
@@ -39,7 +40,17 @@ final class IconCacheService {
     /// gain in the dock and extra per-frame resampling work during magnification.
     private static let normalizedIconExtent: CGFloat = 256
 
-    private init() {}
+    private convenience init() {
+        self.init(countLimit: Self.cacheCountLimit, totalCostLimit: Self.cacheTotalCostLimit)
+    }
+
+    /// Test seam: lets a test build an isolated cache with its own limits.
+    init(countLimit: Int, totalCostLimit: Int) {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = countLimit
+        cache.totalCostLimit = totalCostLimit
+        self.cache = cache
+    }
 
     /// Fetches an icon from LaunchServices and normalizes its nominal size so
     /// downstream `resizable()` rendering downsamples a high-resolution
@@ -116,7 +127,7 @@ final class IconCacheService {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 512
+            kCGImageSourceThumbnailMaxPixelSize: Self.maxPreviewPixelSize
         ]
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
@@ -138,7 +149,7 @@ final class IconCacheService {
         return NSImage(systemSymbolName: "app.fill", accessibilityDescription: nil) ?? NSImage()
     }
 
-    private func isImageFileURL(_ url: URL) -> Bool {
+    func isImageFileURL(_ url: URL) -> Bool {
         guard url.isFileURL else {
             return false
         }

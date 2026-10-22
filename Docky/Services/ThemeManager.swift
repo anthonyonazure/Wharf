@@ -51,8 +51,25 @@ import Observation
         static let activeThemeID = "docky.activeThemeID"
     }
 
-    private init() {
-        self.defaults = .standard
+    /// Where user themes live and where bundled themes ship. Fixed per
+    /// instance; only tests supply values other than the defaults.
+    private let themesDirectory: URL
+    private let bundledThemesDirectory: URL?
+
+    private convenience init() {
+        self.init(
+            defaults: .standard,
+            themesDirectory: Self.themesDirectoryURL,
+            bundledThemesDirectory: Self.bundledThemesDirectoryURL
+        )
+    }
+
+    /// Test seam: an isolated manager over a scratch themes directory and
+    /// a throwaway defaults suite.
+    init(defaults: UserDefaults, themesDirectory: URL, bundledThemesDirectory: URL?) {
+        self.defaults = defaults
+        self.themesDirectory = themesDirectory
+        self.bundledThemesDirectory = bundledThemesDirectory
         self.activeThemeID = defaults.string(forKey: Keys.activeThemeID)
         ensureThemesDirectoryExists()
         refreshInstalled()
@@ -75,7 +92,7 @@ import Observation
     /// On-disk location where installed theme bundles live.
     /// Created lazily; safe to expose to UI / shell.
     var themesDirectoryURL: URL {
-        Self.themesDirectoryURL
+        themesDirectory
     }
 
     /// Manifest of the active theme, if any. Resolved from the
@@ -100,8 +117,19 @@ import Observation
         guard let relativePath, !relativePath.isEmpty else { return nil }
         guard let activeBundleURL else { return nil }
         let url = activeBundleURL.appending(path: relativePath, directoryHint: .notDirectory)
+        guard Self.isContained(url, in: activeBundleURL) else { return nil }
         guard fileManager.fileExists(atPath: url.path) else { return nil }
         return url
+    }
+
+    /// True when `url`, after collapsing `..` and resolving symlinks, lies
+    /// strictly inside `root`. Keeps a hostile theme.json from pointing at
+    /// files outside its own folder.
+    private static func isContained(_ url: URL, in root: URL) -> Bool {
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let prefix = resolvedRoot.hasSuffix("/") ? resolvedRoot : resolvedRoot + "/"
+        return resolved.hasPrefix(prefix)
     }
 
     /// Looks for a theme-supplied app icon at
@@ -118,7 +146,7 @@ import Observation
                 path: "\(bundleIdentifier).\(ext)",
                 directoryHint: .notDirectory
             )
-            if fileManager.fileExists(atPath: url.path) {
+            if Self.isContained(url, in: assetsDir), fileManager.fileExists(atPath: url.path) {
                 return url
             }
         }
@@ -177,7 +205,7 @@ import Observation
     func refreshInstalled() {
         var merged: [String: InstalledTheme] = [:]
 
-        if let bundledURL = Self.bundledThemesDirectoryURL {
+        if let bundledURL = bundledThemesDirectory {
             for (id, theme) in Self.scanInstalledThemes(at: bundledURL, decoder: decoder, isBundled: true) {
                 merged[id] = theme
             }

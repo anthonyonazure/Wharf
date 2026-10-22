@@ -25,6 +25,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var debugSnapshotCancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // Hosted unit tests launch the real app. Starting the dock, event taps and
+        // system Dock hiding there would alter the machine running the tests.
+        // Debug builds only: in a shipped build an environment variable must never
+        // be able to switch off the startup that restores the system Dock.
+        #if DEBUG
+        if NSClassFromString("XCTestCase") != nil
+            && (ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+                || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil) {
+            window?.orderOut(nil)
+            NSApplication.shared.setActivationPolicy(.prohibited)
+            return
+        }
+        #endif
+
         // Bound every AX call to 1s so a hung app can't stall the main run loop.
         // Must precede any other AX work — applies process-wide.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)

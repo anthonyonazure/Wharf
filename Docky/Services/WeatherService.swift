@@ -198,12 +198,16 @@ final class WeatherService: NSObject, ObservableObject {
         )
     }
 
-    private static func fetchSnapshot(
-        latitude: Double,
-        longitude: Double,
-        locationName: String?,
-        units: WeatherUnits
-    ) async throws -> WeatherSnapshot {
+    /// The forecast request for a coordinate. Split out of `fetchSnapshot` so
+    /// the query can be checked without touching the network.
+    static func forecastURL(latitude: Double, longitude: Double, units: WeatherUnits) -> URL? {
+        // Refuse NaN, infinity and out-of-range coordinates locally rather
+        // than sending them to the remote API.
+        guard latitude.isFinite, longitude.isFinite,
+              (-90.0...90.0).contains(latitude),
+              (-180.0...180.0).contains(longitude) else {
+            return nil
+        }
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")
         components?.queryItems = [
             URLQueryItem(name: "latitude", value: String(latitude)),
@@ -216,12 +220,22 @@ final class WeatherService: NSObject, ObservableObject {
             URLQueryItem(name: "timezone", value: "auto"),
             URLQueryItem(name: "forecast_days", value: "6")
         ]
+        return components?.url
+    }
 
-        guard let url = components?.url else {
+    /// `session` is a test seam; production callers use `URLSession.shared`.
+    static func fetchSnapshot(
+        latitude: Double,
+        longitude: Double,
+        locationName: String?,
+        units: WeatherUnits,
+        session: URLSession = .shared
+    ) async throws -> WeatherSnapshot {
+        guard let url = forecastURL(latitude: latitude, longitude: longitude, units: units) else {
             throw WeatherError.invalidRequest
         }
 
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await session.data(from: url)
         let response = try JSONDecoder().decode(OpenMeteoResponse.self, from: data)
         let current = response.current
         let resolvedName: String
@@ -245,7 +259,7 @@ final class WeatherService: NSObject, ObservableObject {
         )
     }
 
-    private static func makeForecastDays(from daily: OpenMeteoResponse.DailyWeather) -> [WeatherForecastDay] {
+    static func makeForecastDays(from daily: OpenMeteoResponse.DailyWeather) -> [WeatherForecastDay] {
         let isoFormatter = DateFormatter()
         isoFormatter.dateFormat = "yyyy-MM-dd"
         isoFormatter.locale = Locale(identifier: "en_US_POSIX")
@@ -419,7 +433,7 @@ extension WeatherService: CLLocationManagerDelegate {
         lastErrorDescription = "Couldn’t determine your location."
     }
 
-    private static func isAuthorizedStatus(_ status: CLAuthorizationStatus) -> Bool {
+    static func isAuthorizedStatus(_ status: CLAuthorizationStatus) -> Bool {
         #if os(macOS)
         switch status {
         case .authorizedAlways:
@@ -540,6 +554,16 @@ struct WeatherForecastDay: Equatable, Identifiable {
     let highTemperature: Double?
     let lowTemperature: Double?
 
+    init(date: Date, symbolName: String, highTemperature: Double?, lowTemperature: Double?) {
+        self.date = date
+        self.symbolName = symbolName
+        // Same clamp as `WeatherSnapshot`: forecast temperatures also come off
+        // the network and reach `Int(_:)` in the widget view, which traps on
+        // an out-of-range or non-finite value.
+        self.highTemperature = highTemperature.flatMap { $0.isFinite ? min(max($0, -999), 999) : nil }
+        self.lowTemperature = lowTemperature.flatMap { $0.isFinite ? min(max($0, -999), 999) : nil }
+    }
+
     var id: TimeInterval { date.timeIntervalSinceReferenceDate }
 
     var weekdayShortText: String {
@@ -550,11 +574,11 @@ struct WeatherForecastDay: Equatable, Identifiable {
     }
 }
 
-private enum WeatherError: Error {
+enum WeatherError: Error {
     case invalidRequest
 }
 
-private enum WeatherUnits: Equatable {
+enum WeatherUnits: Equatable {
     case metric
     case uk
     case us
@@ -598,7 +622,7 @@ private enum WeatherUnits: Equatable {
     }
 }
 
-private enum WeatherCondition {
+enum WeatherCondition {
     static func description(for code: Int) -> String {
         switch code {
         case 0:
@@ -648,7 +672,7 @@ private enum WeatherCondition {
     }
 }
 
-private struct OpenMeteoResponse: Decodable {
+struct OpenMeteoResponse: Decodable {
     let current: CurrentWeather
     let daily: DailyWeather
 

@@ -26,7 +26,18 @@ final class RecentFilesService: ObservableObject {
 
     private let query: NSMetadataQuery
     private var observers: [NSObjectProtocol] = []
-    private static let maxResults = 50
+    static let maxResults = 50
+
+    static func recentsPredicate() -> NSPredicate {
+        let oldDate = Date(timeIntervalSince1970: 0) as NSDate
+        return NSPredicate(
+            format: "kMDItemLastUsedDate > %@ AND (kMDItemContentTypeTree == %@ OR kMDItemContentTypeTree LIKE[cd] %@ OR kMDItemContentTypeTree == %@)",
+            oldDate,
+            "public.content",
+            "com.microsoft.*",
+            "public.archive"
+        )
+    }
 
     private init() {
         let query = NSMetadataQuery()
@@ -36,14 +47,7 @@ final class RecentFilesService: ObservableObject {
         // express MDQuery's `kMDItemLastUsedDate = "*"` (has any value).
         // `LIKE` is string-only in NSPredicate and silently matches nothing
         // against a date attribute.
-        let oldDate = Date(timeIntervalSince1970: 0) as NSDate
-        query.predicate = NSPredicate(
-            format: "kMDItemLastUsedDate > %@ AND (kMDItemContentTypeTree == %@ OR kMDItemContentTypeTree LIKE[cd] %@ OR kMDItemContentTypeTree == %@)",
-            oldDate,
-            "public.content",
-            "com.microsoft.*",
-            "public.archive"
-        )
+        query.predicate = Self.recentsPredicate()
         query.sortDescriptors = [NSSortDescriptor(key: NSMetadataItemLastUsedDateKey, ascending: false)]
         query.notificationBatchingInterval = 1.0
         self.query = query
@@ -117,11 +121,20 @@ final class RecentFilesService: ObservableObject {
     }
 
     private func url(from item: NSMetadataItem) -> URL? {
-        if let value = item.value(forAttribute: NSMetadataItemURLKey) {
+        Self.resolveURL(
+            urlValue: item.value(forAttribute: NSMetadataItemURLKey),
+            pathValue: item.value(forAttribute: NSMetadataItemPathKey)
+        )
+    }
+
+    /// Prefers the item's URL attribute, falling back to its path attribute.
+    static func resolveURL(urlValue: Any?, pathValue: Any?) -> URL? {
+        if let value = urlValue {
             if let url = value as? URL { return url }
             if let nsURL = value as? NSURL { return nsURL as URL }
         }
-        if let path = item.value(forAttribute: NSMetadataItemPathKey) as? String {
+        // An empty path would become the process working directory.
+        if let path = pathValue as? String, !path.isEmpty {
             return URL(fileURLWithPath: path)
         }
         return nil

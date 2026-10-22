@@ -21,10 +21,10 @@ final class DockChromeMetricsService: ObservableObject {
     /// Zero when magnification is inactive.
     @Published private(set) var alongAxisGrowth: CGFloat = 0
 
-    private init() {}
+    init() {}
 
     func setAlongAxisGrowth(_ value: CGFloat) {
-        guard abs(alongAxisGrowth - value) > 0.0001 else { return }
+        guard value.isFinite, abs(alongAxisGrowth - value) > 0.0001 else { return }
         alongAxisGrowth = value
     }
 }

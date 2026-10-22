@@ -13,7 +13,20 @@ final class DockEditorService {
     private static let finderBundleIdentifier = "com.apple.finder"
     private static let dockPlistFilename = "com.apple.dock.plist"
 
-    private init() {}
+    private let dockPlistURLOverride: URL?
+    private let restartsDockAfterWrite: Bool
+
+    private init() {
+        self.dockPlistURLOverride = nil
+        self.restartsDockAfterWrite = true
+    }
+
+    /// Test seam: point the editor at a scratch plist and keep it from
+    /// terminating the real system Dock after a write.
+    init(dockPlistURL: URL, restartsDockAfterWrite: Bool = false) {
+        self.dockPlistURLOverride = dockPlistURL
+        self.restartsDockAfterWrite = restartsDockAfterWrite
+    }
 
     @discardableResult
     func removePinnedApp(bundleIdentifier: String) -> Bool {
@@ -56,7 +69,7 @@ final class DockEditorService {
         }
 
         restartDock()
-        TileStore.shared.refreshAfterDockyEditedSystemDock()
+        refreshTileStore()
         return true
     }
 
@@ -72,11 +85,24 @@ final class DockEditorService {
                 return false
             }
 
-            let appsByID = Dictionary(uniqueKeysWithValues: apps.enumerated().map { index, entry in
-                (pinnedItemID(in: entry, at: index), entry)
-            })
+            // The Dock plist is writable by any process running as the user, so a
+            // duplicate GUID must not trap. Entries that share an id are handed
+            // out in plist order, one per requested occurrence, so the request
+            // must be a permutation of the existing ids and every app survives.
+            var remainingByID: [String: [[String: Any]]] = [:]
+            for (index, entry) in apps.enumerated() {
+                remainingByID[pinnedItemID(in: entry, at: index), default: []].append(entry)
+            }
 
-            let orderedApps = ids.compactMap { appsByID[$0] }
+            var orderedApps: [[String: Any]] = []
+            orderedApps.reserveCapacity(apps.count)
+            for id in ids {
+                guard var bucket = remainingByID[id], !bucket.isEmpty else {
+                    return false
+                }
+                orderedApps.append(bucket.removeFirst())
+                remainingByID[id] = bucket
+            }
             guard orderedApps.count == apps.count else {
                 return false
             }
@@ -90,12 +116,12 @@ final class DockEditorService {
         }
 
         restartDock()
-        TileStore.shared.refreshAfterDockyEditedSystemDock()
+        refreshTileStore()
         return true
     }
 
     private func updateDockPlist(_ mutate: (inout [String: Any]) -> Bool) -> Bool {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        let url = dockPlistURLOverride ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Preferences")
             .appendingPathComponent(Self.dockPlistFilename)
         return updateDockPlist(at: url, mutate)
@@ -138,23 +164,31 @@ final class DockEditorService {
         }
     }
 
+    /// A scratch plist (test seam) must not spin up the process-wide store,
+    /// which would start workspace and media services.
+    private func refreshTileStore() {
+        guard dockPlistURLOverride == nil else { return }
+        TileStore.shared.refreshAfterDockyEditedSystemDock()
+    }
+
     private func restartDock() {
+        guard restartsDockAfterWrite else { return }
         NSRunningApplication
             .runningApplications(withBundleIdentifier: Self.dockBundleIdentifier)
             .forEach { $0.forceTerminate() }
     }
 
-    private func pinnedAppBundleIdentifier(in entry: [String: Any]) -> String? {
+    func pinnedAppBundleIdentifier(in entry: [String: Any]) -> String? {
         let tileData = entry["tile-data"] as? [String: Any]
         let fileData = tileData?["file-data"] as? [String: Any]
         let urlString = fileData?["_CFURLString"] as? String
         let url = urlString.flatMap(URL.init(string:))
 
         return (tileData?["bundle-identifier"] as? String)
-            ?? url.flatMap { Bundle(url: $0)?.bundleIdentifier }
+            ?? url.flatMap { $0.isFileURL ? Bundle(url: $0)?.bundleIdentifier : nil }
     }
 
-    private func pinnedItemID(in entry: [String: Any], at index: Int) -> String {
+    func pinnedItemID(in entry: [String: Any], at index: Int) -> String {
         if let guid = (entry["GUID"] as? NSNumber)?.stringValue {
             return guid
         }

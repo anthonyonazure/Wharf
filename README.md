@@ -25,9 +25,24 @@ Wharf is the open source answer, and it aims past parity rather than at it.
 
 ## Status
 
-Early. Wharf is a hard fork of [Docky](https://github.com/josejuanqm/docky) and
-currently builds and behaves as Docky does. The multi-display work described below
-is in progress and not yet shipped. Do not treat this as a working product yet.
+Beta, built from source. Wharf is a hard fork of
+[Docky](https://github.com/josejuanqm/docky) and runs every day on a three-display
+desk, with a dock on every screen, taskbar mode, saved window layouts and the
+Windows keyboard layer. There is **no signed or notarized release yet**, so you build
+it yourself (see [Building from source](#building-from-source)). macOS asks for
+Accessibility and Screen Recording permission, and a rebuilt copy needs those
+re-granted.
+
+What is verified, and how:
+
+- A unit test suite covers the code that reads data other programs can write (the
+  system Dock preferences and Wharf's own preferences), window layouts and their
+  rules, and the network and image services. It runs on every change.
+- Security reviews found and fixed crash and code-loading holes. Details are in
+  [SECURITY.md](SECURITY.md).
+- Click handling, hover previews, multi-display placement and visual behavior are
+  checked by hand, not by automated tests. See
+  [docs/user-acceptance-tests.md](docs/user-acceptance-tests.md).
 
 ## Inherited from Docky
 
@@ -36,10 +51,12 @@ These already work, courtesy of upstream:
 - **Tiles and layout** — apps, widgets, Smart Stacks, folders, spacers, dividers
 - **Live window switcher** — Cmd-Tab style with live previews, plus per-tile hover previews
 - **Launchpad** — fullscreen, searchable, keyboard navigable
-- **Widgets** — Calendar, Reminders, Batteries, System, Weather, Now Playing, stackable
+- **Widgets** — Calendar, Reminders, Batteries, System, Weather, Now Playing, Audio
+  (volume, mute and output device), stackable
 - **Rich app folders** — nested navigation, Quick Look, drag and drop
 - **Custom app icons**, **scripted actions**, **themes and profiles**
-- Universal binary, notarized, Sparkle auto-updates
+- Universal binary. Wharf ships no auto-update feed: the inherited Sparkle feed
+  belonged to upstream and was removed on purpose
 
 ## Roadmap
 
@@ -136,10 +153,20 @@ After each build, install it over the running copy:
 ditto <DerivedData>/Build/Products/Debug/Wharf.app /Applications/Wharf.app
 ```
 
+### Running the tests
+
+```sh
+xcodebuild -project Docky.xcodeproj -scheme Docky -configuration Debug \
+  -destination 'platform=macOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO test
+```
+
+The tests run inside `Wharf.app` as a host but skip the app's startup, so they never
+hide your system Dock, install event taps or touch your real preferences.
+
 ### Requirements
 
 - macOS 14.0 (Sonoma) or later
-- Xcode 16 or later
+- Xcode 26 or later (the project file uses the Xcode 26 format)
 
 Wharf needs **Accessibility** and **Screen Recording** permissions to manage windows
 and render previews, and prompts on first launch.

@@ -64,9 +64,87 @@ struct LayoutRule: Codable, Equatable, Identifiable {
     var launchesMissingApps: Bool
 }
 
+/// The calendar fields a rule looks at.
+struct LayoutCalendarEvent: Equatable {
+    var startDate: Date
+    var eventIdentifier: String
+}
+
+/// Everything the engine reads from or does to the running system. The live
+/// value uses the wall clock, the calendar service and the layout service;
+/// tests inject a clock, an event list and recorders so the whole firing path
+/// runs in process.
+struct LayoutTriggerEnvironment {
+    var now: () -> Date
+    var calendar: () -> Calendar
+    /// Upcoming events in start order, including one already in progress.
+    var upcomingEvents: () -> [LayoutCalendarEvent]
+    var layouts: () -> [WorkspaceLayout]
+    var restore: (WorkspaceLayout) -> Void
+    var launchAndRestore: (WorkspaceLayout) -> Void
+
+    static let live = LayoutTriggerEnvironment(
+        now: { Date() },
+        calendar: { Calendar.current },
+        upcomingEvents: {
+            CalendarService.shared.upcomingEvents.map {
+                LayoutCalendarEvent(startDate: $0.startDate, eventIdentifier: $0.eventIdentifier)
+            }
+        },
+        layouts: { WorkspaceLayoutService.shared.layouts },
+        restore: { WorkspaceLayoutService.shared.restore($0) },
+        launchAndRestore: { WorkspaceLayoutService.shared.launchAndRestore($0) }
+    )
+}
+
+extension LayoutTrigger {
+    /// Whether a time-of-day rule is due at `now`: the wall clock reads the
+    /// rule's hour and minute, and (when weekdays are listed) today is one of
+    /// them. The whole minute matches, which is why the engine needs a
+    /// refractory period.
+    static func timeOfDayMatches(
+        hour: Int,
+        minute: Int,
+        weekdays: [Int],
+        now: Date,
+        calendar: Calendar
+    ) -> Bool {
+        let components = calendar.dateComponents([.hour, .minute, .weekday], from: now)
+        guard components.hour == hour, components.minute == minute else { return false }
+        if !weekdays.isEmpty, let weekday = components.weekday, !weekdays.contains(weekday) { return false }
+        return true
+    }
+
+    /// The event a calendar rule should fire for, if any: the first event that
+    /// has not started, when it starts within `minutesBefore` minutes and this
+    /// rule has not already handled it.
+    static func calendarEventDue(
+        minutesBefore: Int,
+        now: Date,
+        events: [LayoutCalendarEvent],
+        handledEventID: String?
+    ) -> LayoutCalendarEvent? {
+        // First event that has not started. `nextEvent` can be the
+        // meeting currently in progress, in which case a rule for the
+        // one after it would never fire.
+        guard let event = events.first(where: { $0.startDate > now }) else { return nil }
+        let secondsAway = event.startDate.timeIntervalSince(now)
+        let windowStart = TimeInterval(minutesBefore) * 60
+        // A band, not an instant: the check runs every 20 seconds and
+        // would step straight over an exact-second comparison.
+        guard secondsAway > 0, secondsAway <= windowStart else { return nil }
+        guard handledEventID != event.eventIdentifier else { return nil }
+        return event
+    }
+}
+
 @MainActor
 final class LayoutTriggerEngine: ObservableObject {
     static let shared = LayoutTriggerEngine()
+
+    /// How often the time and calendar rules are checked. Must stay well under
+    /// 60 seconds so every wall-clock minute is sampled at least once.
+    static let checkInterval: TimeInterval = 20
 
     @Published private(set) var rules: [LayoutRule] = []
 
@@ -81,23 +159,43 @@ final class LayoutTriggerEngine: ObservableObject {
     /// for the same meeting. Keyed by rule id to the event identifier.
     private var handledEventByRule: [String: String] = [:]
 
+    /// The calendar day and minute-of-day each time-of-day rule last fired
+    /// for. On the fall-back DST day the same wall-clock minute happens twice,
+    /// more than the refractory period apart; this keeps "once per day".
+    private var lastFiredSlot: [String: TimeOfDaySlot] = [:]
+
+    private struct TimeOfDaySlot: Equatable {
+        var year: Int?
+        var month: Int?
+        var day: Int?
+        var minuteOfDay: Int
+    }
+
     private var cancellables: Set<AnyCancellable> = []
     private var timer: Timer?
-    private let defaultsKey = "wharf.layoutRules"
+    static let defaultsKey = "wharf.layoutRules"
+    private let defaults: UserDefaults
+    private let environment: LayoutTriggerEnvironment
 
     /// Minimum gap between firings of the same rule.
-    private let refractoryPeriod: TimeInterval = 5 * 60
+    let refractoryPeriod: TimeInterval = 5 * 60
 
-    private init() {
+    /// `defaults` and `environment` are injectable so tests run against a
+    /// throwaway suite, a fake clock and recorded actions.
+    init(defaults: UserDefaults = .standard, environment: LayoutTriggerEnvironment = .live) {
+        self.defaults = defaults
+        self.environment = environment
         load()
     }
+
+    var isRunning: Bool { timer != nil }
 
     func start() {
         // Idempotent: a second call would otherwise stack another timer and
         // another set of subscriptions, and every rule would fire twice.
         guard timer == nil else { return }
 
-        let checkTimer = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
+        let checkTimer = Timer(timeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.evaluateTimeAndCalendarRules() }
         }
         RunLoop.main.add(checkTimer, forMode: .common)
@@ -115,6 +213,12 @@ final class LayoutTriggerEngine: ObservableObject {
             .debounce(for: .seconds(3), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.evaluateDisplayRules() }
             .store(in: &cancellables)
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        cancellables.removeAll()
     }
 
     // MARK: - Rule management
@@ -137,29 +241,32 @@ final class LayoutTriggerEngine: ObservableObject {
 
     // MARK: - Evaluation
 
-    private func evaluateTimeAndCalendarRules() {
-        let now = Date()
-        let components = Calendar.current.dateComponents([.hour, .minute, .weekday], from: now)
+    /// One timer tick: fires every enabled time-of-day and calendar rule that
+    /// is due right now.
+    func evaluateTimeAndCalendarRules() {
+        let now = environment.now()
+        let calendar = environment.calendar()
 
         for rule in rules where rule.isEnabled {
             switch rule.trigger {
             case let .timeOfDay(hour, minute, weekdays):
-                guard components.hour == hour, components.minute == minute else { continue }
-                if !weekdays.isEmpty, let weekday = components.weekday, !weekdays.contains(weekday) { continue }
-                fire(rule)
+                guard LayoutTrigger.timeOfDayMatches(
+                    hour: hour, minute: minute, weekdays: weekdays, now: now, calendar: calendar
+                ) else { continue }
+                let day = calendar.dateComponents([.year, .month, .day], from: now)
+                let slot = TimeOfDaySlot(
+                    year: day.year, month: day.month, day: day.day, minuteOfDay: hour * 60 + minute
+                )
+                guard lastFiredSlot[rule.id] != slot else { continue }
+                if fire(rule) { lastFiredSlot[rule.id] = slot }
 
             case let .beforeCalendarEvent(minutesBefore):
-                // First event that has not started. `nextEvent` can be the
-                // meeting currently in progress, in which case a rule for the
-                // one after it would never fire.
-                guard let event = CalendarService.shared.upcomingEvents
-                    .first(where: { $0.startDate > now }) else { continue }
-                let secondsAway = event.startDate.timeIntervalSince(now)
-                let windowStart = TimeInterval(minutesBefore * 60)
-                // A band, not an instant: the check runs every 20 seconds and
-                // would step straight over an exact-second comparison.
-                guard secondsAway > 0, secondsAway <= windowStart else { continue }
-                guard handledEventByRule[rule.id] != event.eventIdentifier else { continue }
+                guard let event = LayoutTrigger.calendarEventDue(
+                    minutesBefore: minutesBefore,
+                    now: now,
+                    events: environment.upcomingEvents(),
+                    handledEventID: handledEventByRule[rule.id]
+                ) else { continue }
                 handledEventByRule[rule.id] = event.eventIdentifier
                 fire(rule, bypassRefractory: true)
 
@@ -169,48 +276,50 @@ final class LayoutTriggerEngine: ObservableObject {
         }
     }
 
-    private func evaluateAppRules(_ bundleIdentifier: String) {
+    func evaluateAppRules(_ bundleIdentifier: String) {
         for rule in rules where rule.isEnabled {
             guard case let .appActivated(target) = rule.trigger, target == bundleIdentifier else { continue }
             fire(rule)
         }
     }
 
-    private func evaluateDisplayRules() {
+    func evaluateDisplayRules() {
         for rule in rules where rule.isEnabled {
             guard case .displayConfigurationChanged = rule.trigger else { continue }
             fire(rule)
         }
     }
 
-    private func fire(_ rule: LayoutRule, bypassRefractory: Bool = false) {
+    @discardableResult
+    private func fire(_ rule: LayoutRule, bypassRefractory: Bool = false) -> Bool {
         if !bypassRefractory,
            let last = lastFired[rule.id],
-           Date().timeIntervalSince(last) < refractoryPeriod { return }
-        let layouts = WorkspaceLayoutService.shared.layouts
+           environment.now().timeIntervalSince(last) < refractoryPeriod { return false }
+        let layouts = environment.layouts()
         let resolved = rule.layoutID.flatMap { id in layouts.first { $0.id == id } }
             ?? layouts.first { $0.name == rule.layoutName }
-        guard let layout = resolved else { return }
+        guard let layout = resolved else { return false }
 
-        lastFired[rule.id] = Date()
+        lastFired[rule.id] = environment.now()
 
         guard rule.launchesMissingApps else {
-            WorkspaceLayoutService.shared.restore(layout)
-            return
+            environment.restore(layout)
+            return true
         }
-        WorkspaceLayoutService.shared.launchAndRestore(layout)
+        environment.launchAndRestore(layout)
+        return true
     }
 
     // MARK: - Persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+        guard let data = defaults.data(forKey: Self.defaultsKey),
               let decoded = try? JSONDecoder().decode([LayoutRule].self, from: data) else { return }
         rules = decoded
     }
 
     private func save() {
         guard let data = try? JSONEncoder().encode(rules) else { return }
-        UserDefaults.standard.set(data, forKey: defaultsKey)
+        defaults.set(data, forKey: Self.defaultsKey)
     }
 }

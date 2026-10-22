@@ -21,6 +21,16 @@ final class MenuCatalogService: ObservableObject {
         reload()
     }
 
+    /// Test seam: builds a service from in-memory documents, running the same
+    /// validation as `reload()` without reading the app bundle.
+    init(actionsDocument: CatalogActionsDocument, menusDocument: CatalogMenusDocument) {
+        apply(actionsDocument: actionsDocument, menusDocument: menusDocument)
+    }
+
+    /// Validated action ids, exposed for tests.
+    var acceptedActionIDs: Set<String> { Set(actionsByID.keys) }
+    var acceptedMenuTileTypes: Set<MenuTileType> { Set(menusByTileType.keys) }
+
     func reload() {
         diagnostics = []
         packageSummaries = []

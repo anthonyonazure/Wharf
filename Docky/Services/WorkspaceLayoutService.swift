@@ -37,6 +37,62 @@ struct WorkspaceLayout: Codable, Equatable, Identifiable {
     var bundleIdentifiers: [String]
 }
 
+/// One attached display, reduced to what layout capture and restore need.
+struct LayoutDisplay: Equatable {
+    /// Persistent display UUID, nil when the system could not provide one.
+    var uuid: String?
+    var frame: CGRect
+    var visibleFrame: CGRect
+}
+
+/// Everything the layout service reads from or does to the running system.
+/// The live value talks to NSScreen, the window registry and NSWorkspace; tests
+/// substitute plain values so capture, restore and the launch-wait loop can be
+/// exercised without moving a real window.
+struct WorkspaceLayoutEnvironment {
+    /// Attached displays, primary first (NSScreen.screens order).
+    var displays: () -> [LayoutDisplay]
+    /// The display NSScreen.main reports, used when a placement's own
+    /// display is gone.
+    var mainDisplay: () -> LayoutDisplay?
+    var windows: () -> [AppWindow]
+    var resize: (AppWindow, CGRect) -> Bool
+    var runningBundleIdentifiers: () -> Set<String>
+    /// Launches the app; false when no installed app has that identifier.
+    var launchApp: (String) -> Bool
+    var now: () -> Date
+    var schedule: (TimeInterval, @escaping () -> Void) -> Void
+
+    static let live = WorkspaceLayoutEnvironment(
+        displays: { NSScreen.screens.map(WorkspaceLayoutEnvironment.display(for:)) },
+        mainDisplay: { NSScreen.main.map(WorkspaceLayoutEnvironment.display(for:)) },
+        windows: { WindowRegistry.shared.windows },
+        resize: { WindowRegistry.shared.resize($0, to: $1) },
+        runningBundleIdentifiers: {
+            Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        },
+        launchApp: { bundleID in
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return false }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            return true
+        },
+        now: { Date() },
+        schedule: { delay, work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+    )
+
+    private static func display(for screen: NSScreen) -> LayoutDisplay {
+        LayoutDisplay(
+            uuid: screen.displayID.flatMap(WorkspaceLayoutService.displayUUIDString),
+            frame: screen.frame,
+            visibleFrame: screen.visibleFrame
+        )
+    }
+}
+
 @MainActor
 final class WorkspaceLayoutService: ObservableObject {
     static let shared = WorkspaceLayoutService()
@@ -48,9 +104,15 @@ final class WorkspaceLayoutService: ObservableObject {
     /// the dock strip mid-restore.
     @Published private(set) var isRestoring = false
 
-    private let defaultsKey = "wharf.workspaceLayouts"
+    static let defaultsKey = "wharf.workspaceLayouts"
+    private let defaults: UserDefaults
+    private let environment: WorkspaceLayoutEnvironment
 
-    private init() {
+    /// `defaults` and `environment` are injectable so tests run against a
+    /// throwaway suite and a fake desk instead of the real ones.
+    init(defaults: UserDefaults = .standard, environment: WorkspaceLayoutEnvironment = .live) {
+        self.defaults = defaults
+        self.environment = environment
         load()
     }
 
@@ -62,30 +124,26 @@ final class WorkspaceLayoutService: ObservableObject {
     /// restoring one would need un-minimizing it, which changes what the user
     /// asked to capture.
     func capture(name: String) {
-        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+        let displays = environment.displays()
+        guard let primaryHeight = displays.first?.frame.height else { return }
 
         var placements: [WindowPlacement] = []
         var bundles = Set<String>()
 
-        for window in WindowRegistry.shared.windows where !window.isMinimized {
+        for window in environment.windows() where !window.isMinimized {
             guard let axFrame = window.frame, axFrame.width > 0, axFrame.height > 0 else { continue }
 
             // AX reports a top-left origin with Y increasing downward; every
             // frame stored here is in NSScreen space so restore can compare it
             // against screens directly.
-            let nsFrame = CGRect(
-                x: axFrame.minX,
-                y: primaryHeight - axFrame.maxY,
-                width: axFrame.width,
-                height: axFrame.height
-            )
+            let nsFrame = Self.flipY(axFrame, primaryHeight: primaryHeight)
 
             placements.append(
                 WindowPlacement(
                     bundleIdentifier: window.bundleIdentifier,
                     windowTitle: window.windowTitle,
                     frame: nsFrame,
-                    displayUUID: Self.displayUUID(containing: nsFrame)
+                    displayUUID: Self.displayUUID(containing: nsFrame, in: displays)
                 )
             )
             bundles.insert(window.bundleIdentifier)
@@ -93,8 +151,11 @@ final class WorkspaceLayoutService: ObservableObject {
 
         guard !placements.isEmpty else { return }
 
+        // Re-capturing keeps the existing id so rules bound by layoutID keep
+        // pointing at this layout.
+        let existingIndex = layouts.firstIndex(where: { $0.name == name })
         let layout = WorkspaceLayout(
-            id: UUID().uuidString,
+            id: existingIndex.map { layouts[$0].id } ?? UUID().uuidString,
             name: name,
             placements: placements,
             bundleIdentifiers: Array(bundles).sorted()
@@ -102,7 +163,7 @@ final class WorkspaceLayoutService: ObservableObject {
 
         // Replacing by name makes re-capturing an existing layout the obvious
         // gesture: save over "work" rather than accumulating "work 2".
-        if let index = layouts.firstIndex(where: { $0.name == name }) {
+        if let index = existingIndex {
             layouts[index] = layout
         } else {
             layouts.append(layout)
@@ -125,7 +186,8 @@ final class WorkspaceLayoutService: ObservableObject {
     ///   would ping-pong forever.
     @discardableResult
     func restore(_ layout: WorkspaceLayout, capturesUndo: Bool = true) -> (moved: Int, missed: Int) {
-        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return (0, 0) }
+        let displays = environment.displays()
+        guard let primaryHeight = displays.first?.frame.height else { return (0, 0) }
 
         // Snapshot before moving anything. Restore rearranges real windows and
         // there is no system-level undo for that; a wrong layout, or a rule
@@ -142,34 +204,27 @@ final class WorkspaceLayoutService: ObservableObject {
         isRestoring = true
         defer { isRestoring = false }
 
-        var windowsByBundle: [String: [AppWindow]] = [:]
-        for window in WindowRegistry.shared.windows where !window.isMinimized {
-            windowsByBundle[window.bundleIdentifier, default: []].append(window)
-        }
+        // A persisted placement with a non-positive or non-finite size would
+        // collapse its window, so it is skipped and never claims a window.
+        let applicable = layout.placements.filter(Self.hasUsableSize)
+
+        let matches = Self.match(
+            applicable,
+            to: environment.windows().filter { !$0.isMinimized }
+        )
 
         var moved = 0
-        var missed = 0
-        var claimed = Set<String>()
+        var missed = layout.placements.count - applicable.count
+        let mainDisplay = environment.mainDisplay()
 
-        for placement in layout.placements {
-            let candidates = (windowsByBundle[placement.bundleIdentifier] ?? [])
-                .filter { !claimed.contains($0.windowIdentifier) }
-
-            guard !candidates.isEmpty else {
+        for (placement, candidate) in zip(applicable, matches) {
+            guard let match = candidate else {
                 missed += 1
                 continue
             }
 
-            let match = candidates.first { $0.windowTitle == placement.windowTitle } ?? candidates[0]
-            claimed.insert(match.windowIdentifier)
-
-            let target = Self.resolvedFrame(for: placement)
-            let axFrame = CGRect(
-                x: target.minX,
-                y: primaryHeight - target.maxY,
-                width: target.width,
-                height: target.height
-            )
+            let target = Self.resolvedFrame(for: placement, displays: displays, main: mainDisplay)
+            let axFrame = Self.flipY(target, primaryHeight: primaryHeight)
 
             // Applied twice on purpose. AX sets position then size, and a
             // window still carrying its old size can have the move clamped by
@@ -178,8 +233,8 @@ final class WorkspaceLayoutService: ObservableObject {
             // already correct, so the position sticks. This is the difference
             // between "restore worked" and "restore resized everything and
             // moved nothing".
-            let first = WindowRegistry.shared.resize(match, to: axFrame)
-            let second = WindowRegistry.shared.resize(match, to: axFrame)
+            let first = environment.resize(match, axFrame)
+            let second = environment.resize(match, axFrame)
 
             if first || second {
                 moved += 1
@@ -217,25 +272,25 @@ final class WorkspaceLayoutService: ObservableObject {
         // in the layout stalls the full timeout whenever a captured app is
         // running with all its windows closed.
         let expected = launchedIDs
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = environment.now().addingTimeInterval(timeout)
 
         func attempt() {
             guard generation == pendingGeneration else { return }
 
             let present = Set(
-                WindowRegistry.shared.windows
+                environment.windows()
                     .filter { !$0.isMinimized }
                     .map(\.bundleIdentifier)
             )
 
-            if expected.subtracting(present).isEmpty || Date() >= deadline {
+            if expected.subtracting(present).isEmpty || environment.now() >= deadline {
                 restore(layout)
                 return
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: attempt)
+            environment.schedule(0.5, attempt)
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: attempt)
+        environment.schedule(0.5, attempt)
     }
 
     /// Cancels any placement that is waiting on apps to finish launching.
@@ -244,14 +299,11 @@ final class WorkspaceLayoutService: ObservableObject {
     }
 
     private func launchMissingAppsReturningIDs(for layout: WorkspaceLayout) -> Set<String> {
-        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let running = environment.runningBundleIdentifiers()
         var launched: Set<String> = []
 
         for bundleID in layout.bundleIdentifiers where !running.contains(bundleID) {
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { continue }
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = false
-            NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            guard environment.launchApp(bundleID) else { continue }
             launched.insert(bundleID)
         }
 
@@ -260,16 +312,11 @@ final class WorkspaceLayoutService: ObservableObject {
 
     @discardableResult
     func launchMissingApps(for layout: WorkspaceLayout) -> Int {
-        let running = Set(
-            NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
-        )
+        let running = environment.runningBundleIdentifiers()
         var launched = 0
 
         for bundleID in layout.bundleIdentifiers where !running.contains(bundleID) {
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { continue }
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = false
-            NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            guard environment.launchApp(bundleID) else { continue }
             launched += 1
         }
 
@@ -284,28 +331,29 @@ final class WorkspaceLayoutService: ObservableObject {
     private var pendingGeneration = 0
 
     private func captureUndoSnapshot() {
-        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return }
+        let displays = environment.displays()
+        guard let primaryHeight = displays.first?.frame.height else { return }
 
         var placements: [WindowPlacement] = []
-        for window in WindowRegistry.shared.windows where !window.isMinimized {
+        for window in environment.windows() where !window.isMinimized {
             guard let axFrame = window.frame, axFrame.width > 0, axFrame.height > 0 else { continue }
-            let nsFrame = CGRect(
-                x: axFrame.minX,
-                y: primaryHeight - axFrame.maxY,
-                width: axFrame.width,
-                height: axFrame.height
-            )
+            let nsFrame = Self.flipY(axFrame, primaryHeight: primaryHeight)
             placements.append(
                 WindowPlacement(
                     bundleIdentifier: window.bundleIdentifier,
                     windowTitle: window.windowTitle,
                     frame: nsFrame,
-                    displayUUID: Self.displayUUID(containing: nsFrame)
+                    displayUUID: Self.displayUUID(containing: nsFrame, in: displays)
                 )
             )
         }
 
-        guard !placements.isEmpty else { return }
+        // An empty desk is still the state before this restore, so the old
+        // snapshot is cleared rather than left to send undo back two restores.
+        guard !placements.isEmpty else {
+            undoSnapshot = nil
+            return
+        }
         undoSnapshot = WorkspaceLayout(
             id: "undo",
             name: "Before Last Restore",
@@ -344,63 +392,118 @@ final class WorkspaceLayoutService: ObservableObject {
     /// monitor unplugged — the window would otherwise be sent to coordinates
     /// no screen occupies, i.e. off-screen and unreachable. In that case the
     /// frame is remapped proportionally onto the main screen.
-    private static func resolvedFrame(for placement: WindowPlacement) -> CGRect {
+    static func resolvedFrame(
+        for placement: WindowPlacement,
+        displays: [LayoutDisplay],
+        main: LayoutDisplay?
+    ) -> CGRect {
         guard let uuid = placement.displayUUID else { return placement.frame }
 
-        let attachedScreen = NSScreen.screens.first { screen in
-            screen.displayID.flatMap(displayUUIDString) == uuid
-        }
-
-        if let attachedScreen {
+        if let attached = displays.first(where: { $0.uuid == uuid }) {
             // Attached is not the same as unmoved. Rearranging displays in
             // System Settings changes their global origins, so a frame captured
             // when this monitor sat to the left replays off-screen once it sits
             // to the right. Clamp it back inside the screen it belongs to.
-            let visible = attachedScreen.visibleFrame
+            let visible = attached.visibleFrame
             if visible.contains(placement.frame) { return placement.frame }
-
-            let width = min(placement.frame.width, visible.width)
-            let height = min(placement.frame.height, visible.height)
-            return CGRect(
-                x: min(max(placement.frame.minX, visible.minX), visible.maxX - width),
-                y: min(max(placement.frame.minY, visible.minY), visible.maxY - height),
-                width: width,
-                height: height
-            )
+            return clamp(placement.frame, into: visible)
         }
 
-        guard let fallback = NSScreen.main else { return placement.frame }
-        let visible = fallback.visibleFrame
+        guard let fallback = main else { return placement.frame }
 
         // Clamp rather than scale: a window keeps its size and simply comes
         // back on-screen, which is less surprising than being resized because
         // a monitor was unplugged.
-        let width = min(placement.frame.width, visible.width)
-        let height = min(placement.frame.height, visible.height)
+        return clamp(placement.frame, into: fallback.visibleFrame)
+    }
+
+    /// Keeps the frame's size (shrunk only when larger than `visible`) and
+    /// slides it fully inside `visible`.
+    static func clamp(_ frame: CGRect, into visible: CGRect) -> CGRect {
+        let width = min(frame.width, visible.width)
+        let height = min(frame.height, visible.height)
         return CGRect(
-            x: min(max(placement.frame.minX, visible.minX), visible.maxX - width),
-            y: min(max(placement.frame.minY, visible.minY), visible.maxY - height),
+            x: min(max(frame.minX, visible.minX), visible.maxX - width),
+            y: min(max(frame.minY, visible.minY), visible.maxY - height),
             width: width,
             height: height
         )
     }
 
-    private static func displayUUID(containing frame: CGRect) -> String? {
-        var best: NSScreen?
+    /// AX space (top-left origin, Y down) and NSScreen space (bottom-left
+    /// origin, Y up) are related by the same flip in both directions.
+    static func flipY(_ frame: CGRect, primaryHeight: CGFloat) -> CGRect {
+        CGRect(
+            x: frame.minX,
+            y: primaryHeight - frame.maxY,
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
+    /// Whether a placement's stored size is something a window can be given.
+    static func hasUsableSize(_ placement: WindowPlacement) -> Bool {
+        // CGRect.width and .height are the normalized magnitudes, so a rect
+        // stored with a negative size still counts as the window it describes.
+        let width = placement.frame.width
+        let height = placement.frame.height
+        return width.isFinite && height.isFinite && width > 0 && height > 0
+    }
+
+    /// Picks, for each placement in order, the window it should move, or nil
+    /// when the app has no unclaimed window left. Matching is per app: the
+    /// first unclaimed window whose title equals the placement's, otherwise
+    /// the first unclaimed window of that app.
+    static func match(_ placements: [WindowPlacement], to windows: [AppWindow]) -> [AppWindow?] {
+        var windowsByBundle: [String: [AppWindow]] = [:]
+        for window in windows {
+            windowsByBundle[window.bundleIdentifier, default: []].append(window)
+        }
+
+        var claimed = Set<String>()
+        var result = [AppWindow?](repeating: nil, count: placements.count)
+
+        // Exact-title matches are settled across every placement first, so a
+        // positional fallback can never take a window another placement names.
+        for (index, placement) in placements.enumerated() {
+            let exact = (windowsByBundle[placement.bundleIdentifier] ?? []).first {
+                !claimed.contains($0.windowIdentifier) && $0.windowTitle == placement.windowTitle
+            }
+            if let exact {
+                claimed.insert(exact.windowIdentifier)
+                result[index] = exact
+            }
+        }
+
+        for (index, placement) in placements.enumerated() where result[index] == nil {
+            let fallback = (windowsByBundle[placement.bundleIdentifier] ?? []).first {
+                !claimed.contains($0.windowIdentifier)
+            }
+            if let fallback {
+                claimed.insert(fallback.windowIdentifier)
+                result[index] = fallback
+            }
+        }
+
+        return result
+    }
+
+    static func displayUUID(containing frame: CGRect, in displays: [LayoutDisplay]) -> String? {
+        var best: LayoutDisplay?
         var bestArea: CGFloat = 0
-        for screen in NSScreen.screens {
-            let intersection = screen.frame.intersection(frame)
+        for display in displays {
+            let intersection = display.frame.intersection(frame)
             guard !intersection.isNull else { continue }
             let area = intersection.width * intersection.height
             if area > bestArea {
                 bestArea = area
-                best = screen
+                best = display
             }
         }
-        return best?.displayID.flatMap(displayUUIDString)
+        return best?.uuid
     }
 
-    private static func displayUUIDString(_ displayID: CGDirectDisplayID) -> String? {
+    static func displayUUIDString(_ displayID: CGDirectDisplayID) -> String? {
         guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else { return nil }
         return CFUUIDCreateString(nil, uuid) as String
     }
@@ -408,13 +511,13 @@ final class WorkspaceLayoutService: ObservableObject {
     // MARK: - Persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+        guard let data = defaults.data(forKey: Self.defaultsKey),
               let decoded = try? JSONDecoder().decode([WorkspaceLayout].self, from: data) else { return }
         layouts = decoded
     }
 
     private func save() {
         guard let data = try? JSONEncoder().encode(layouts) else { return }
-        UserDefaults.standard.set(data, forKey: defaultsKey)
+        defaults.set(data, forKey: Self.defaultsKey)
     }
 }

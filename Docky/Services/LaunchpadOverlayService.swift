@@ -347,21 +347,26 @@ final class LaunchpadOverlayService: ObservableObject {
     /// Resolves the persisted layout against the live filesystem
     /// scan into the renderable entry list. Folders with zero or one
     /// resolvable apps degrade gracefully.
-    private static func resolveEntries(
+    static func resolveEntries(
         layout: LaunchpadLayout,
         appsByBundleID: [String: AppTile]
     ) -> [LaunchpadEntry] {
         var entries: [LaunchpadEntry] = []
         entries.reserveCapacity(layout.items.count)
+        // Each app shows at most once; the earliest placement wins.
+        var placed = Set<String>()
 
         for item in layout.items {
             switch item {
             case .app(let bundleID):
-                if let app = appsByBundleID[bundleID] {
+                if let app = appsByBundleID[bundleID], placed.insert(bundleID).inserted {
                     entries.append(.app(app))
                 }
             case .folder(let folder):
-                let resolved = folder.bundleIDs.compactMap { appsByBundleID[$0] }
+                let resolved = folder.bundleIDs.compactMap { id -> AppTile? in
+                    guard let app = appsByBundleID[id], placed.insert(id).inserted else { return nil }
+                    return app
+                }
                 guard !resolved.isEmpty else { continue }
                 // A folder with one surviving app renders as a plain
                 // app card; the layout service collapses these

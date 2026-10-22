@@ -185,7 +185,7 @@ final class DockSettingsService {
         }
     }
 
-    private enum Keys {
+    enum Keys {
         static let hasImportedSystemDockSettings = "docky.dockSettings.hasImportedSystemDockSettings"
         static let orientation = "docky.dockSettings.orientation"
         static let tileSize = "docky.dockSettings.tileSize"

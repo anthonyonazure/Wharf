@@ -61,6 +61,17 @@ struct DockProfile: Codable, Equatable, Identifiable {
         widgetPlacements = try container.decode([WidgetPlacement].self, forKey: .widgetPlacements)
         appWidgetDisplays = try container.decode([AppWidgetDisplay].self, forKey: .appWidgetDisplays)
         hiddenAppBundleIdentifiers = try container.decode([String].self, forKey: .hiddenAppBundleIdentifiers)
-        triggers = try container.decodeIfPresent([ProfileTrigger].self, forKey: .triggers) ?? []
+        // Lenient: one trigger this build cannot decode (a kind written by a
+        // newer version, or a damaged entry) is skipped instead of failing the
+        // whole profile list, which used to wipe every profile.
+        triggers = (try container.decodeIfPresent([LossyTrigger].self, forKey: .triggers) ?? [])
+            .compactMap(\.value)
+    }
+
+    private struct LossyTrigger: Decodable {
+        let value: ProfileTrigger?
+        init(from decoder: Decoder) throws {
+            value = try? ProfileTrigger(from: decoder)
+        }
     }
 }

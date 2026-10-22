@@ -1,6 +1,28 @@
 # Handoff
 
-## Where this stands
+## Update 2026-10-12 (read this first; the sections below are from August)
+
+- Branch `widget-audio-controls` holds everything below plus: a `WharfTests` target
+  (1,988 tests, all passing, about 11 seconds), automatic checks on every change
+  (`/Users/anthony/projects/wharf-integrate/.github/workflows/test.yml`), about 30
+  bug fixes the tests pinned, four fixes from the October security re-audit, and
+  `/Users/anthony/projects/wharf-integrate/SECURITY.md`.
+- It is 27 commits ahead of `origin/main` and 0 behind. Nothing is pushed.
+- Run the tests: `xcodebuild -project Docky.xcodeproj -scheme Docky -configuration Debug
+  -destination 'platform=macOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO test`.
+- The test host (Wharf.app) skips its startup under XCTest in Debug builds only, so
+  tests never touch the real Dock or the real preferences.
+- Not done: a signed, notarized release. This Mac has only an Apple Development
+  certificate and no notarytool profile. `scripts/release.sh` does the rest once a
+  Developer ID Application certificate and a `wharf-notary` profile exist.
+- Not done: custom icon paths are still read from anywhere on disk (documented in
+  SECURITY.md); the window picker trusts an app's claimed bundle identifier.
+- Not tested by automation: clicks, hover previews, multi-display placement, visuals.
+  Run docs/user-acceptance-tests.md by hand before a release.
+- A second session also committed to `main` in `/Users/anthony/projects/wharf`
+  (roadmap line 7a24c9f). It is not in this branch; rebase or merge it when landing.
+
+## Where this stands (August snapshot)
 
 Wharf is a macOS Dock replacement, hard-forked from
 [Docky](https://github.com/josejuanqm/docky) (GPL-3.0) on 2026-08-15 because macOS

@@ -45,11 +45,16 @@ final class MarketplaceClient {
     private let session: URLSession
     private var cached: [MarketplaceWidget]?
 
-    private init() {
+    private convenience init() {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 12
         config.timeoutIntervalForResource = 30
-        self.session = URLSession(configuration: config)
+        self.init(session: URLSession(configuration: config))
+    }
+
+    /// Test seam: lets a test supply a session backed by a stub protocol.
+    init(session: URLSession) {
+        self.session = session
     }
 
     /// Fetches the marketplace manifest. Results are cached in-memory

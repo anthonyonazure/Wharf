@@ -25,12 +25,17 @@ import Observation
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    private enum Keys {
+    enum Keys {
         static let layout = "docky.launchpadLayout"
     }
 
-    private init() {
-        self.defaults = .standard
+    private convenience init() {
+        self.init(defaults: .standard)
+    }
+
+    /// Test seam: an isolated service over a throwaway defaults suite.
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
         if let data = defaults.data(forKey: Keys.layout),
            let decoded = try? JSONDecoder().decode(LaunchpadLayout.self, from: data) {
             self.layout = decoded
@@ -131,16 +136,20 @@ import Observation
         name: String
     ) -> String? {
         guard draggedBundleID != targetBundleID else { return nil }
-        // Remove the dragged app from wherever it currently lives.
-        removeApp(bundleID: draggedBundleID)
-        // Find the target's top-level position (must be an .app — if
-        // the target is already a folder, callers should use addApp).
-        guard let targetIndex = layout.items.firstIndex(where: {
-            if case .app(let id) = $0 { return id == targetBundleID }
-            return false
-        }) else {
-            return nil
+        // Validate before mutating: the target must be a top-level .app (if
+        // it is already a folder, callers should use addApp). A failed
+        // merge must leave the layout untouched.
+        func topLevelIndex(of bundleID: String) -> Int? {
+            layout.items.firstIndex(where: {
+                if case .app(let id) = $0 { return id == bundleID }
+                return false
+            })
         }
+        guard topLevelIndex(of: targetBundleID) != nil else { return nil }
+        // Remove the dragged app from wherever it currently lives. This can
+        // shift indices (a collapsed folder, a removed slot), so re-locate.
+        removeApp(bundleID: draggedBundleID)
+        guard let targetIndex = topLevelIndex(of: targetBundleID) else { return nil }
 
         let folder = LaunchpadFolder(
             id: UUID().uuidString,
@@ -155,15 +164,30 @@ import Observation
     /// Adds an app to an existing folder. Removes the app from
     /// wherever it currently lives in the layout.
     func addApp(bundleID: String, toFolderWithID folderID: String) {
+        func folderIndex() -> Int? {
+            layout.items.firstIndex(where: {
+                if case .folder(let folder) = $0 { return folder.id == folderID }
+                return false
+            })
+        }
+        // Validate the destination before removing anything.
+        guard let existingIndex = folderIndex(),
+              case .folder(var existing) = layout.items[existingIndex] else { return }
+        if existing.bundleIDs.contains(bundleID) {
+            // Already a member: move to the end in place. Going through
+            // removeApp would collapse a two-app folder and lose it.
+            existing.bundleIDs.removeAll { $0 == bundleID }
+            existing.bundleIDs.append(bundleID)
+            layout.items[existingIndex] = .folder(existing)
+            persist()
+            return
+        }
         removeApp(bundleID: bundleID)
-        guard let folderIndex = layout.items.firstIndex(where: {
-            if case .folder(let folder) = $0 { return folder.id == folderID }
-            return false
-        }) else { return }
-        guard case .folder(var folder) = layout.items[folderIndex] else { return }
-        guard !folder.bundleIDs.contains(bundleID) else { return }
+        // removeApp can shift indices; re-locate the destination.
+        guard let located = folderIndex(),
+              case .folder(var folder) = layout.items[located] else { return }
         folder.bundleIDs.append(bundleID)
-        layout.items[folderIndex] = .folder(folder)
+        layout.items[located] = .folder(folder)
         persist()
     }
 
@@ -253,8 +277,9 @@ import Observation
     /// after a scan when new apps appear on disk.
     func appendNewApps(_ bundleIDs: [String]) {
         let known = allReferencedBundleIDs
+        var seen = known
         let additions = bundleIDs
-            .filter { !known.contains($0) }
+            .filter { seen.insert($0).inserted }
             .map { LaunchpadLayoutItem.app(bundleID: $0) }
         guard !additions.isEmpty else { return }
         layout.items.append(contentsOf: additions)

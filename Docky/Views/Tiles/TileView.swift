@@ -552,11 +552,9 @@ struct TileView: View {
             if preferences.folderBadgeMode == .perApp, appFolderDisplayMode == .grid {
                 return nil
             }
-            let total = folder.apps.reduce(0) { sum, app in
-                let badge = dockBadges.badge(forBundleIdentifier: app.bundleIdentifier).flatMap(Int.init) ?? 0
-                return sum &+ max(0, min(badge, 99_999))
-            }
-            return total > 0 ? String(total) : nil
+            return DockBadgeText.folderBadgeText(
+                of: folder.apps.map { dockBadges.badge(forBundleIdentifier: $0.bundleIdentifier) }
+            )
         case .folder, .launchpad, .startMenu, .widget, .smartStack, .spacer, .flexibleSpacer, .divider, .trash, .minimizedWindow:
             return nil
         }
@@ -2207,7 +2205,7 @@ struct TileView: View {
     private func widgetContextActions(for widget: WidgetTile) -> [ContextAction] {
         switch widget.kind {
         // Wharf: the layouts switcher owns its own menu on click.
-        case .layouts, .clock:
+        case .layouts, .clock, .audio:
             return []
         case .calendar:
             var actions: [ContextAction] = []
@@ -2584,7 +2582,7 @@ struct TileView: View {
     }
     private func handleWidgetTap(_ widget: WidgetTile) {
         switch widget.kind {
-        case .layouts:
+        case .layouts, .audio:
             // The widget view presents its own popover; nothing to do here.
             break
         case .clock:

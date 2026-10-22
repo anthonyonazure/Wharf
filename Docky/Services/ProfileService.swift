@@ -32,31 +32,50 @@ final class ProfileService {
         profiles.first(where: { $0.id == activeProfileID })
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private let preferences: () -> DockyPreferences
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    private enum Keys {
+    enum Keys {
         static let profiles = "docky.profiles"
         static let activeProfileID = "docky.activeProfileID"
+        /// Raw copy of a stored profile list that failed to decode.
+        static let undecodableBackup = "docky.profiles.undecodableBackup"
     }
 
-    private init() {
-        if let data = defaults.data(forKey: Keys.profiles),
-           let loaded = try? decoder.decode([DockProfile].self, from: data),
-           !loaded.isEmpty {
+    /// `defaults` and `preferences` are injectable so tests run against a
+    /// throwaway suite and a throwaway preferences object. The preferences are
+    /// a closure because `DockyPreferences.shared` must not be touched while
+    /// it is itself still being constructed.
+    init(
+        defaults: UserDefaults = .standard,
+        preferences: @escaping () -> DockyPreferences = { DockyPreferences.shared }
+    ) {
+        self.defaults = defaults
+        self.preferences = preferences
+        let stored = defaults.data(forKey: Keys.profiles)
+        let decoded = stored.flatMap { try? decoder.decode([DockProfile].self, from: $0) }
+        if let loaded = decoded, !loaded.isEmpty {
             self.profiles = loaded
             let storedActive = defaults.string(forKey: Keys.activeProfileID) ?? ""
             self.activeProfileID = loaded.contains(where: { $0.id == storedActive })
                 ? storedActive
                 : loaded[0].id
+        } else if let stored, decoded == nil {
+            // Stored data exists but cannot be decoded. Keep a copy and run on
+            // an in-memory Default; never overwrite what the user has stored.
+            if defaults.data(forKey: Keys.undecodableBackup) == nil {
+                defaults.set(stored, forKey: Keys.undecodableBackup)
+            }
+            migrateFromLegacyTileStore(persistResult: false)
         } else {
             migrateFromLegacyTileStore()
         }
     }
 
-    private func migrateFromLegacyTileStore() {
-        let prefs = DockyPreferences.shared
+    private func migrateFromLegacyTileStore(persistResult: Bool = true) {
+        let prefs = preferences()
         let initial = DockProfile(
             name: "Default",
             symbolName: "house.fill",
@@ -68,7 +87,7 @@ final class ProfileService {
         )
         self.profiles = [initial]
         self.activeProfileID = initial.id
-        persist()
+        if persistResult { persist() }
     }
 
     func setActiveProfile(id: String) {
@@ -77,7 +96,7 @@ final class ProfileService {
         else { return }
         activeProfileID = id
         defaults.set(id, forKey: Keys.activeProfileID)
-        DockyPreferences.shared.applyProfile(profile)
+        preferences().applyProfile(profile)
     }
 
     /// Apply a mutation to the active profile and persist. Used by
@@ -146,9 +165,10 @@ final class ProfileService {
         profiles.removeAll { $0.id == id }
         if wasActive, let first = profiles.first {
             setActiveProfile(id: first.id)
-        } else {
-            persist()
         }
+        // setActiveProfile persists nothing but the active id, so the
+        // shortened list is always written here.
+        persist()
     }
 
     private func persist() {

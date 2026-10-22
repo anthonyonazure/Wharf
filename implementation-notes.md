@@ -525,7 +525,8 @@ x = 2000 past the destination edge), the new code passes. Totals: geometry
   scope: the settings pane only checks conflicts while recording, and there is
   no live conflict display to refresh. If a user later turns Launchpad or the
   switcher back on with a combination a snap action took meanwhile, the later
-  registration fails and the snap action shows as unavailable in the pane.
+  registration (Launchpad or the switcher, since snapping registered first)
+  is expected to fail with no warning. Not tested.
 - Restore history still stores frames only, not a display identity (Codex
   suggested both). The clamp covers the unplugged case without it.
 - Gemini findings not on the fix list, seen and not addressed here: hot key

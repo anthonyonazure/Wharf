@@ -221,14 +221,12 @@ final class SpacesOrderService {
     // MARK: - Dock restart
 
     private func launchRestartDecision() -> DockRestartDecision {
-        let requestedAt = preferences.spacesOrderDockRestartRequestedAt
-        // Longer ago than the Mac has been up: it restarted since.
-        let rebooted = requestedAt.map { Date().timeIntervalSince($0) > ProcessInfo.processInfo.systemUptime } ?? false
-        return DockRestartPlan.decide(
+        DockRestartPlan.decide(
             pending: preferences.spacesOrderDockRestartPending,
-            killedPIDs: preferences.spacesOrderDockRestartPIDs,
-            runningPIDs: DockRestartGate.runningDockPIDs(),
-            rebootedSince: rebooted,
+            recorded: preferences.spacesOrderDockRestartDocks,
+            running: DockRestartGate.runningDockIdentities(),
+            savedBootSession: preferences.spacesOrderDockRestartBootSession,
+            currentBootSession: DockRestartGate.bootSessionID(),
             attempts: preferences.spacesOrderDockRestartAttempts)
     }
 
@@ -240,8 +238,8 @@ final class SpacesOrderService {
     private func restartDock() {
         restartedDuringApply = true
         preferences.spacesOrderDockRestartPending = true
-        preferences.spacesOrderDockRestartPIDs = Set(DockRestartGate.runningDockPIDs())
-        preferences.spacesOrderDockRestartRequestedAt = Date()
+        preferences.spacesOrderDockRestartDocks = Set(DockRestartGate.runningDockIdentities().compactMap { $0 })
+        preferences.spacesOrderDockRestartBootSession = DockRestartGate.bootSessionID()
         preferences.spacesOrderDockRestartAttempts += 1
         CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
         let killed = DockRestartGate.shared.restart(reason: "Fixed Space order")
@@ -250,8 +248,6 @@ final class SpacesOrderService {
             clearRestartRecord()
             return
         }
-        preferences.spacesOrderDockRestartPIDs = killed
-        CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.restartCheckDelay) { [weak self] in
             guard let self else { return }
             switch self.launchRestartDecision() {
@@ -269,8 +265,8 @@ final class SpacesOrderService {
 
     private func clearRestartRecord() {
         preferences.spacesOrderDockRestartPending = false
-        preferences.spacesOrderDockRestartPIDs = []
-        preferences.spacesOrderDockRestartRequestedAt = nil
+        preferences.spacesOrderDockRestartDocks = []
+        preferences.spacesOrderDockRestartBootSession = nil
         preferences.spacesOrderDockRestartAttempts = 0
         dockRestartGaveUp = false
     }

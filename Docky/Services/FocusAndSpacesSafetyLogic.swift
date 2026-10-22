@@ -183,24 +183,57 @@ nonisolated enum DockRestartDecision: Equatable {
     case giveUp
 }
 
+/// One process, told apart from a later process that reuses its ID by the
+/// time the kernel says it started (microseconds since 1970). Saved as
+/// "pid:start".
+nonisolated struct DockProcessIdentity: Hashable {
+    let pid: pid_t
+    let startMicroseconds: Int64
+
+    var stored: String { "\(pid):\(startMicroseconds)" }
+
+    init(pid: pid_t, startMicroseconds: Int64) {
+        self.pid = pid
+        self.startMicroseconds = startMicroseconds
+    }
+
+    init?(stored: String) {
+        let parts = stored.split(separator: ":")
+        guard parts.count == 2, let pid = pid_t(parts[0]), let start = Int64(parts[1]), pid > 0 else {
+            return nil
+        }
+        self.init(pid: pid, startMicroseconds: start)
+    }
+}
+
 nonisolated enum DockRestartPlan {
     /// The most restarts one change may cost, across launches.
     static let maximumAttempts = 3
 
-    /// Whether a restart recorded earlier is still owed. `killedPIDs` are the
-    /// Dock processes Wharf asked to quit, `runningPIDs` the Dock processes
-    /// now. `rebootedSince` is true when the Mac started after the restart was
-    /// asked for, which makes a matching process ID a coincidence.
-    static func decide(pending: Bool, killedPIDs: Set<pid_t>, runningPIDs: [pid_t],
-                       rebootedSince: Bool, attempts: Int) -> DockRestartDecision {
+    /// Whether a restart recorded earlier is still owed. `recorded` are the
+    /// Dock processes that may still use the old value, `running` the Dock
+    /// processes now (nil for one whose start time could not be read). The
+    /// boot sessions are the kernel's ID for each boot, saved with the record
+    /// and read now; a different one means the Mac restarted. No clocks are
+    /// compared, so sleep never looks like a reboot.
+    ///
+    /// Restart only when every running Dock is provably one recorded: same
+    /// process ID and same start time. Anything less is grounds to leave the
+    /// Dock alone.
+    static func decide(pending: Bool, recorded: Set<DockProcessIdentity>, running: [DockProcessIdentity?],
+                       savedBootSession: String?, currentBootSession: String?,
+                       attempts: Int) -> DockRestartDecision {
         guard pending else { return .nothing }
-        if rebootedSince { return .clear }
+        // A different boot: the Dock running now started after the change.
+        if let savedBootSession, let currentBootSession, savedBootSession != currentBootSession {
+            return .clear
+        }
         // Not running: it reads the preference when it next starts.
-        if runningPIDs.isEmpty { return .clear }
-        // A Dock under a process ID Wharf never asked to quit has restarted.
-        // Without a record (an earlier build), a running Dock is treated as
-        // restarted too: when unsure, do nothing.
-        if killedPIDs.isEmpty || runningPIDs.contains(where: { !killedPIDs.contains($0) }) {
+        if running.isEmpty { return .clear }
+        // A Dock that is not provably a recorded one has restarted, or cannot
+        // be told apart from one that has. Without a record (an earlier build
+        // saved process IDs only), the same: when unsure, do nothing.
+        if recorded.isEmpty || !running.allSatisfy({ $0.map(recorded.contains) ?? false }) {
             return .clear
         }
         return attempts < maximumAttempts ? .restart : .giveUp

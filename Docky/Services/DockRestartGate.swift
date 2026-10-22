@@ -28,6 +28,37 @@ final class DockRestartGate {
         NSRunningApplication.runningApplications(withBundleIdentifier: dockBundleID).map(\.processIdentifier)
     }
 
+    /// The running Dock processes with their start times; nil for one whose
+    /// start time could not be read (it then never counts as a match).
+    static func runningDockIdentities() -> [DockProcessIdentity?] {
+        runningDockPIDs().map(processIdentity)
+    }
+
+    /// Process ID plus the kernel's start time, nil when the process is gone
+    /// or the kernel does not answer.
+    static func processIdentity(_ pid: pid_t) -> DockProcessIdentity? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0,
+              size >= MemoryLayout<kinfo_proc>.stride,
+              info.kp_proc.p_pid == pid else { return nil }
+        let start = info.kp_proc.p_un.__p_starttime
+        guard start.tv_sec > 0 else { return nil }
+        return DockProcessIdentity(pid: pid, startMicroseconds: Int64(start.tv_sec) * 1_000_000 + Int64(start.tv_usec))
+    }
+
+    /// The kernel's ID for this boot (kern.bootsessionuuid), nil when it
+    /// cannot be read. Unlike uptime it does not depend on sleep or clocks.
+    static func bootSessionID() -> String? {
+        var size = 0
+        guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 1 else { return nil }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.bootsessionuuid", &buffer, &size, nil, 0) == 0 else { return nil }
+        let id = String(cString: buffer)
+        return id.isEmpty ? nil : id
+    }
+
     /// Restarts the Dock unless a restart is already under way. Returns the
     /// Dock process IDs that were (or are being) asked to quit; empty when no
     /// Dock was running, which then reads the preferences when it starts.

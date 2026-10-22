@@ -230,20 +230,38 @@ private func testRetryPolicy() {
 
 private func testDockRestartPlan() {
     typealias P = DockRestartPlan
-    expect(P.decide(pending: false, killedPIDs: [5], runningPIDs: [5], rebootedSince: false, attempts: 0) == .nothing,
-           "nothing pending")
-    expect(P.decide(pending: true, killedPIDs: [5], runningPIDs: [9], rebootedSince: false, attempts: 1) == .clear,
+    typealias D = DockProcessIdentity
+    let dock = D(pid: 5, startMicroseconds: 1_000)
+    let boot = "boot-A"
+    func decide(_ pending: Bool = true, recorded: Set<D> = [dock], running: [D?] = [dock],
+                saved: String? = boot, current: String? = boot, attempts: Int = 1) -> DockRestartDecision {
+        P.decide(pending: pending, recorded: recorded, running: running,
+                 savedBootSession: saved, currentBootSession: current, attempts: attempts)
+    }
+    expect(decide(false) == .nothing, "nothing pending")
+    expect(decide(running: [D(pid: 9, startMicroseconds: 2_000)]) == .clear,
            "new Dock process: it restarted, no second restart")
-    expect(P.decide(pending: true, killedPIDs: [5], runningPIDs: [5], rebootedSince: false, attempts: 1) == .restart,
-           "same Dock still running: restart")
-    expect(P.decide(pending: true, killedPIDs: [5], runningPIDs: [5], rebootedSince: false, attempts: P.maximumAttempts) == .giveUp,
+    expect(decide() == .restart, "same Dock still running: restart")
+    expect(decide(attempts: P.maximumAttempts) == .giveUp,
            "out of attempts across launches: give up, never flicker every launch")
-    expect(P.decide(pending: true, killedPIDs: [5], runningPIDs: [5], rebootedSince: true, attempts: 0) == .clear,
-           "a reboot since: the process ID match is a coincidence")
-    expect(P.decide(pending: true, killedPIDs: [5], runningPIDs: [], rebootedSince: false, attempts: 0) == .clear,
-           "Dock not running: it reads the value at start")
-    expect(P.decide(pending: true, killedPIDs: [], runningPIDs: [5], rebootedSince: false, attempts: 0) == .clear,
-           "no record from an earlier build: do not kill blindly")
+    expect(decide(current: "boot-B") == .clear, "a reboot since: the process ID match is a coincidence")
+    expect(decide(running: []) == .clear, "Dock not running: it reads the value at start")
+    expect(decide(recorded: []) == .clear, "no record from an earlier build: do not kill blindly")
+
+    // Code review chunk 2 re-check: no clocks, process identity proven.
+    // The sleep case: the Mac slept for hours, so wall time since the record
+    // is far longer than awake time, but it is the same boot and the same
+    // Dock. The restart is still owed (the old uptime test discarded it).
+    expect(decide(saved: boot, current: boot) == .restart, "sleep is not a reboot: same boot session, restart still owed")
+    expect(decide(running: [D(pid: 5, startMicroseconds: 9_999)]) == .clear,
+           "process ID reused by a later Dock (different start time): never killed")
+    expect(decide(running: [nil]) == .clear, "start time unreadable: identity unproven, do not kill")
+    expect(decide(running: [dock, nil]) == .clear, "one unproven Dock among several: do not kill")
+    expect(decide(saved: nil, current: boot) == .restart && decide(saved: boot, current: nil) == .restart,
+           "boot session unknown on one side: the start time alone still proves the same Dock")
+    expect(D(stored: dock.stored) == dock, "identity survives being saved")
+    expect(D(stored: "5") == nil && D(stored: "x:1") == nil && D(stored: "0:1") == nil,
+           "a malformed or earlier build record proves nothing")
 
     // The shared gate.
     expect(P.canCoalesce(killedPIDs: [5], killedAt: 100, now: 101, runningPIDs: [5]),

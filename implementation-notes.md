@@ -2068,13 +2068,20 @@ the Dock unless sure it is the one that needs it.
   three attempt limit and coalesces in the gate.
 - The obligation is saved again for the Docks running at restart time;
   attempts carry over only while the recorded Docks are the same.
+- Trade made on purpose: the obligation is saved before the write, so a
+  write that failed outright (never landed) still leaves a restart owed. If
+  the user turns the switch off before the retry, `forget` restarts the Dock
+  once for nothing. That is a single flicker, never a wrong state, and it is
+  the price of never missing a restart after a write that did land.
 
 ### Unverified
 - No live Dock refusal, no real sleep or reboot, no write that lands but
   fails: those paths are covered by the in-memory checks only.
 - A read-only probe on this Mac returned a boot session UUID and the Dock's
-  start time through the same sysctl calls; the restart decision itself was
-  not driven against a real Dock.
+  start time through the same sysctl calls, and the kernel's returned record
+  size (648 bytes) equals Swift's `kinfo_proc` size and stride, so the size
+  guard in `processIdentity` passes. The restart decision itself was not
+  driven against a real Dock.
 - A Dock that restarts on its own in the moment between saving the
   obligation and writing the value would be cleared as restarted and miss
   the new value until its next start. The window is the length of one

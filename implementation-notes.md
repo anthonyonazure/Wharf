@@ -453,3 +453,101 @@ Run the zone checks with `scripts/test-snap-zones.sh` (101 checks).
   the follow-the-pointer test should cover them.
 - The macOS tiling warning reads `com.apple.WindowManager` defaults; whether
   those keys are still the ones macOS 27 uses was not checked.
+## 2026-10-22, Stage 3b: focus follows mouse, fixed Space order, Win key tap, exclusion editor
+
+Focus follows mouse and fixed Space order are adapted from Vorssaint
+(vorssaint/vorssaint-utils, GPL-3.0): `FocusFollowsMouseService`,
+`FocusFollowsMouseSupport` and `SpacesOrderHold`. Files:
+
+- `Docky/Services/FocusAndWinTapLogic.swift`: pure logic, Foundation and
+  CoreGraphics only, every type `nonisolated` (the Win key detector runs on
+  the keyboard tap thread). `HoverDwellState` (the pause timer),
+  `HoverWindowScan` and `HoverFocusGate` (which window, and whether to raise
+  it), `SpacesOrderPlan.step` (what to write to `mru-spaces` and what to put
+  back), `CommandTapDetector` (lone Command tap), `WinKeyTapAction`.
+- `Tests/FocusAndWinTap/FocusAndWinTapTests.swift` with
+  `scripts/test-focus-and-wintap.sh`: prints `PASS: 67 checks`.
+- `Docky/Services/BehaviorExtrasPreferences.swift`: the preferences for all
+  three features (see Deviations). Keys: `wharf.focusFollowsMouse.enabled`
+  (off), `.delayMilliseconds` (300, clamped 100 to 2000), `.displayUUIDs`
+  (empty, so off on every display), `.excludedBundleIDs` (empty);
+  `wharf.spacesOrder.fixed` (off), `wharf.spacesOrder.restoreMarker`
+  ("absent", "on" or "off", present only while Wharf holds the order);
+  `wharf.windowsKeyboardWinTap.action` ("off", "startMenu" or "launchpad",
+  default off).
+- `Docky/Services/FocusFollowsMouseService.swift`: a global mouse-moved
+  monitor installed only while the switch is on, at least one display is
+  opted in and Accessibility is granted. A 50 ms check runs only while a
+  pause is being timed. On settle it reads the on-screen window list, asks
+  AppKit which window would take a click at the point, and raises through
+  `WindowRegistry.focus` (the same single-window focus the switcher uses).
+  It checks both `AXIsProcessTrusted()` and the cached permission first,
+  because `focus` would otherwise put up a permission alert.
+- `Docky/Services/SpacesOrderService.swift`: reads and writes `mru-spaces` in
+  `com.apple.dock` with CFPreferences and restarts the Dock with
+  `forceTerminate`, the way `SystemDockVisibilityService` applies its Dock
+  changes. Refuses to write when a management profile forces the value. If
+  the user turns rearranging back on in System Settings while Wharf holds it
+  off, Wharf lets go and turns its own switch off.
+- `WindowsKeyboardService.swift`: the tap mask gains flagsChanged and mouse
+  down events, used only to feed `CommandTapDetector`; they always pass
+  through untouched. The preference observer now also tracks the exclusion
+  list and the Win key choice, so edits reach the tap at once (before, a list
+  change needed the mode toggled off and on).
+- UI: `FocusFollowsMouseSettingsView.swift` (new pane under Behavior, after
+  Windows Keyboard), `BehaviorExtrasSections.swift` (Win key picker and
+  exclusion editor appended to the Windows Keyboard pane, Spaces toggle
+  appended to Visibility), `BundleIDListEditor.swift` (shared list editor:
+  add a running app, choose from Applications, or type a bundle ID; remove
+  with the minus button).
+- Shared files touched, additive only: `SettingsRootView.swift` (one pane),
+  `BehaviorSettingsView.swift` (one line in each of two sections),
+  `AppDelegate.swift` (two `start()` lines). `DockyPreferences.swift` is
+  untouched.
+
+### Read-only probe
+
+A scratch script (no windows touched) confirmed two things the hover path
+rests on: `NSWindow.windowNumber(at:belowWindowWithWindowNumber:)` returns
+another app's window (a Brave window on the second display), and the y flip
+against the main screen lines up with `kCGWindowBounds`. It also showed the
+pointer itself listed as a small Window Server window at the cursor level on
+top of everything, so the fallback path (used when AppKit has no answer) now
+looks through it.
+
+### Unverified
+
+- Nothing was run against real windows, the real Dock or a real keyboard.
+  The build succeeds and the logic checks pass; the following need a hands-on
+  check: hover raising on an opted-in display and not on others; no raise
+  while a menu is open (detected by any window at the pop-up menu level, 101),
+  while dragging, or with a modifier held; the Spaces switch actually freezing
+  Space order after the Dock restart and restoring on off (this Mac has no
+  `mru-spaces` key today, so turning it off removes the key again); a lone Win
+  tap toggling the Start Menu or Launchpad without disturbing Win shortcuts.
+- The global mouse monitor does not see movement while Wharf itself is the
+  active app (for example with Settings focused). Hovering then does nothing
+  until another app is in front. Vorssaint has the same limit.
+- The window lookup asks the target app over Accessibility on the main
+  thread. A hung app under the pointer could stall Wharf briefly.
+- Hovering raises the whole window, as asked. There is no "focus without
+  raise" mode (Vorssaint has one through private window server calls).
+
+### Deviations
+
+- **Preferences live in a new store**, `BehaviorExtrasPreferences`, following
+  the `PerDisplaySettings` precedent, instead of in `DockyPreferences`. This
+  keeps the shared file untouched while sibling branches edit it. The cost:
+  "Reset Behavior" and profile snapshots do not cover these settings yet.
+  Moving them in later is a mechanical change.
+- **No Dock restart journal.** Vorssaint records which Dock process still
+  owes a restart so it can tell its own unread write from a change in System
+  Settings. Wharf restarts the Dock right after each write instead, as the
+  rest of Wharf does.
+- **Win key tap is global.** It also works in apps on the exclusion list,
+  since the exclusions are about Control translation and a lone Win tap has
+  no meaning in a terminal. A tap held longer than 0.8 s is ignored.
+- **Launchpad choice** relies on Wharf's Launchpad overlay; if that feature
+  is off the tap does nothing (the pane says so).
+- **Branch.** Work is on `stage3b-focus-wintap`, branched from
+  `feature/vorssaint-parity` at f0bec25, in an isolated worktree.

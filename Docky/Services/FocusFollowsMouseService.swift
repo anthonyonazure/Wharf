@@ -13,10 +13,13 @@
 //  The decisions live in FocusAndWinTapLogic.swift.
 //
 //  Accessibility calls go to the target app and can stall for as long as
-//  that app is busy, so the lookup runs on a worker queue, one at a time,
-//  with a short timeout on every element it touches. A lookup that misses
-//  its deadline is abandoned by a watchdog and its late answer ignored, so
-//  one stuck app never blocks hover focus for the others. The worker also
+//  that app is busy, so the lookup runs off the main thread with a short
+//  timeout on every element it touches. Each lookup gets its own worker
+//  (at most two at once, see HoverWorkerLedger), so one stuck app holds one
+//  slot instead of a queue the others wait behind. A lookup that misses its
+//  deadline is abandoned by a watchdog, told to stop at its next step, and
+//  its late answer ignored; switching the feature off cancels every lookup
+//  still running. The worker also
 //  checks that the window answers (one position read) before anything is
 //  raised. The raise itself (WindowRegistry.focus) stays on the main thread
 //  because it shares the registry's state; its few Accessibility calls are
@@ -40,6 +43,28 @@ private struct HoverAXElement: @unchecked Sendable {
     let element: AXUIElement
 }
 
+/// What a worker found, handed back to the main thread.
+private nonisolated struct HoverLookupResult: @unchecked Sendable {
+    let element: HoverAXElement?
+    /// The target app's focused window, when the worker had to ask.
+    let focusedWindowID: CGWindowID?
+    /// Whether the element came from the registry's snapshot.
+    let usedRegistryElement: Bool
+}
+
+/// `HoverWorkerLedger` behind a lock, for the worker threads.
+private nonisolated final class HoverWorkerSlots: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ledger = HoverWorkerLedger()
+
+    var canStart: Bool { lock.withLock { ledger.canStart } }
+    func start() -> UInt64? { lock.withLock { ledger.start() } }
+    func cancel(_ id: UInt64) { lock.withLock { ledger.cancel(id) } }
+    func cancelAll() { lock.withLock { ledger.cancelAll() } }
+    func shouldContinue(_ id: UInt64) -> Bool { lock.withLock { ledger.shouldContinue(id) } }
+    func finish(_ id: UInt64) { lock.withLock { ledger.finish(id) } }
+}
+
 final class FocusFollowsMouseService {
     static let shared = FocusFollowsMouseService()
 
@@ -58,9 +83,15 @@ final class FocusFollowsMouseService {
     private var cancellables: Set<AnyCancellable> = []
     private var state = HoverDwellState()
 
-    /// Serial, so a hung app costs one stuck lookup, never a pile of them.
-    private let worker = DispatchQueue(label: "wharf.focus-follows-mouse.lookup", qos: .userInitiated)
+    /// Concurrent, so a lookup stuck in a hung app does not hold up the
+    /// next one. How many run at once is capped by `workers`.
+    private let worker = DispatchQueue(label: "wharf.focus-follows-mouse.lookup", qos: .userInitiated,
+                                       attributes: .concurrent)
+    /// Whether an answer is still wanted (one at a time).
     private var lookup = HoverLookupTicket()
+    /// Which lookups are still running, answered or not. Read by the worker
+    /// threads, so behind a lock.
+    private let workers = HoverWorkerSlots()
     /// Wharf's own menus being tracked. Wharf's windows are left out of the
     /// window server menu check, so its own menus are known from here.
     private var ownMenuDepth = 0
@@ -159,6 +190,10 @@ final class FocusFollowsMouseService {
     }
 
     private func uninstall() {
+        // Nothing still running may raise a window once the feature is off,
+        // and a lookup not yet started never starts.
+        workers.cancelAll()
+        if let pending = lookup.inFlight { _ = lookup.settle(pending) }
         resetMovement()
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
@@ -201,9 +236,10 @@ final class FocusFollowsMouseService {
                 timer = nil
             }
         }
-        // One lookup at a time. A pending rest waits (the timer keeps
-        // ticking) until the previous lookup answers or is abandoned.
-        guard !lookup.isBusy,
+        // One answer awaited at a time, and a free worker slot. A pending
+        // rest waits (the timer keeps ticking) until the previous lookup
+        // answers or is abandoned and a slot is free; nothing is queued.
+        guard !lookup.isBusy, workers.canStart,
               let evaluation = state.nextEvaluation(
                 at: ProcessInfo.processInfo.systemUptime,
                 delayMilliseconds: preferences.focusFollowsMouseDelay)
@@ -239,59 +275,86 @@ final class FocusFollowsMouseService {
 
         // The registry's snapshot usually has the window already, at no
         // Accessibility cost.
-        let cached = WindowRegistry.shared.windows.first {
+        let cachedElement = WindowRegistry.shared.windows.first {
             $0.processIdentifier == target.pid && $0.cgWindowID == target.windowID
-        }
-        let cachedElement = cached.map { HoverAXElement(element: $0.element) }
+        }.map { HoverAXElement(element: $0.element) }
+        guard let job = workers.start() else { state.finishEvaluation(evaluation); return }
         let ticket = lookup.begin()
+        // An absolute deadline on the monotonic clock, checked again when
+        // the answer arrives (see `HoverCommitCheck.allowsCommit`).
+        let deadline = ProcessInfo.processInfo.systemUptime + Self.lookupDeadline
 
-        // The watchdog: a lookup still out at the deadline is abandoned, so a
-        // stalled app cannot hold up hover focus everywhere else.
+        // The watchdog: a lookup still out at the deadline is abandoned and
+        // told to stop, so a stalled app cannot hold up hover focus
+        // everywhere else.
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.lookupDeadline) { [weak self] in
             guard let self, self.lookup.settle(ticket) else { return }
+            self.workers.cancel(job)
             self.state.finishEvaluation(evaluation)
             self.startTimerIfNeeded()
         }
 
+        let workers = self.workers
         worker.async { [weak self] in
             var element: HoverAXElement?
-            var raise = true
-            if needsFocusedWindow {
+            var focusedWindowID: CGWindowID?
+            // Every step first asks whether the answer is still wanted; a
+            // job cancelled before it started does no Accessibility work.
+            var raise = workers.shouldContinue(job)
+            if raise, needsFocusedWindow {
                 var focusedInput = input
-                focusedInput.focusedWindowID = Self.focusedWindowID(of: target.pid)
+                focusedWindowID = Self.focusedWindowID(of: target.pid)
+                focusedInput.focusedWindowID = focusedWindowID
                 if case .skip = HoverFocusGate.decide(focusedInput) { raise = false }
             }
-            if raise {
+            if raise, workers.shouldContinue(job) {
                 // A fresh element gets the short timeout inside
                 // `windowElement`, which also bounds the calls `focus` makes
                 // with it. The cached one belongs to the registry and keeps
                 // its own timeout.
-                element = cachedElement ?? Self.windowElement(pid: target.pid, windowID: target.windowID)
+                element = cachedElement ?? Self.windowElement(pid: target.pid, windowID: target.windowID) {
+                    workers.shouldContinue(job)
+                }
                 // The raise on the main thread talks to this window again.
                 // A window that does not answer here is left alone.
-                if let found = element, !Self.isResponsive(found.element) { element = nil }
+                if let found = element, !workers.shouldContinue(job) || !Self.isResponsive(found.element) {
+                    element = nil
+                }
             }
+            // The slot is free the moment the Accessibility work ends, even
+            // while the main thread is busy.
+            workers.finish(job)
+            let result = HoverLookupResult(element: element, focusedWindowID: focusedWindowID,
+                                           usedRegistryElement: cachedElement != nil)
             DispatchQueue.main.async {
-                self?.finishLookup(evaluation, ticket: ticket, target: target, element: element, cached: cached)
+                self?.finishLookup(evaluation, ticket: ticket, deadline: deadline, target: target, result: result)
             }
         }
     }
 
     private func finishLookup(_ evaluation: HoverDwellEvaluation,
                               ticket: UInt64,
+                              deadline: TimeInterval,
                               target: (windowID: CGWindowID, pid: pid_t),
-                              element: HoverAXElement?,
-                              cached: AppWindow?) {
+                              result: HoverLookupResult) {
         // Already abandoned by the watchdog: the moment passed.
         guard lookup.settle(ticket) else { return }
         defer {
             state.finishEvaluation(evaluation)
             startTimerIfNeeded()
         }
-        guard let element else { return }
+        guard let element = result.element else { return }
 
         // Read everything fresh: the lookup took time.
         var check = HoverCommitCheck()
+        check.now = ProcessInfo.processInfo.systemUptime
+        check.deadline = deadline
+        // The whole gate again, on what is true now: the app in front may
+        // have become an excluded or full-screen one meanwhile, the lists
+        // and displays may have changed.
+        var fresh = input(at: evaluation.point)
+        fresh.focusedWindowID = result.focusedWindowID
+        check.freshDecision = HoverFocusGate.decide(fresh)
         check.featureActive = mouseMonitor != nil && isWanted
             && PermissionsService.shared.accessibility == .granted
         check.evaluationCurrent = state.isCurrent(evaluation)
@@ -299,9 +362,16 @@ final class FocusFollowsMouseService {
         check.receivingWindowID = check.livePointer.flatMap(Self.receivingWindow(at:))
         check.menuOpen = isMenuOpen(in: Self.onScreenWindows())
         check.buttonOrModifierHeld = Self.isButtonOrModifierHeld
-        guard check.allowsRaise(of: target.windowID, restingAt: evaluation.point) else { return }
+        guard check.allowsCommit(of: target.windowID, pid: target.pid, restingAt: evaluation.point) else { return }
 
-        let window = cached ?? AppWindow(
+        // The window as the registry knows it now, not as it was when the
+        // lookup began. One the registry has dropped since is not raised
+        // through an element it handed out earlier.
+        let registered = WindowRegistry.shared.windows.first {
+            $0.processIdentifier == target.pid && $0.cgWindowID == target.windowID
+        }
+        if result.usedRegistryElement, registered == nil { return }
+        let window = registered ?? AppWindow(
             element: element.element,
             bundleIdentifier: NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier ?? "pid:\(target.pid)",
             processIdentifier: target.pid,
@@ -424,7 +494,8 @@ final class FocusFollowsMouseService {
     /// The app's Accessibility element for one window server window, read
     /// with a short timeout per message and a cap on how many windows are
     /// looked at.
-    private nonisolated static func windowElement(pid: pid_t, windowID: CGWindowID) -> HoverAXElement? {
+    private nonisolated static func windowElement(pid: pid_t, windowID: CGWindowID,
+                                                  shouldContinue: () -> Bool) -> HoverAXElement? {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, axTimeout)
         var raw: CFArray?
@@ -435,7 +506,7 @@ final class FocusFollowsMouseService {
         // The same total budget as the registry's own enumeration.
         let deadline = DispatchTime.now() + .milliseconds(750)
         for element in elements {
-            if DispatchTime.now() > deadline { break }
+            if DispatchTime.now() > deadline || !shouldContinue() { break }
             // Every element gets the short timeout before it is asked
             // anything, not only the match.
             AXUIElementSetMessagingTimeout(element, axTimeout)

@@ -559,6 +559,81 @@ private func testWinTapRecheck() {
            "Caps Lock key with no light change (fed as a key) cancels")
 }
 
+// MARK: - Code review chunk 2 re-check (hover)
+
+private func testHoverRecheck() {
+    let point = CGPoint(x: 100, y: 100)
+    var check = HoverCommitCheck(livePointer: point, receivingWindowID: 7)
+    check.freshDecision = .raise(windowID: 7, pid: 42)
+    check.now = 10
+    check.deadline = 11
+    expect(check.allowsCommit(of: 7, pid: 42, restingAt: point), "in time, gate still says raise: commit")
+
+    // Item 2: the answer arrives after the absolute deadline even though the
+    // watchdog has not run yet.
+    var late = check
+    late.now = 11.5
+    expect(!late.allowsCommit(of: 7, pid: 42, restingAt: point), "past the deadline: no raise")
+    late.now = 11
+    expect(late.allowsCommit(of: 7, pid: 42, restingAt: point), "exactly at the deadline: still in time")
+
+    // Item 3: the gate run again on fresh state.
+    var stale = check
+    stale.freshDecision = .skip(.frontmostExcluded)
+    expect(!stale.allowsCommit(of: 7, pid: 42, restingAt: point), "excluded app came to the front meanwhile: no raise")
+    stale.freshDecision = .skip(.frontmostFullScreen)
+    expect(!stale.allowsCommit(of: 7, pid: 42, restingAt: point), "full-screen app came to the front: no raise")
+    stale.freshDecision = .skip(.excludedApp)
+    expect(!stale.allowsCommit(of: 7, pid: 42, restingAt: point), "target excluded meanwhile: no raise")
+    stale.freshDecision = .skip(.displayNotEnabled)
+    expect(!stale.allowsCommit(of: 7, pid: 42, restingAt: point), "display switched off meanwhile: no raise")
+    stale.freshDecision = .raise(windowID: 8, pid: 42)
+    expect(!stale.allowsCommit(of: 7, pid: 42, restingAt: point), "gate now names another window: no raise")
+    stale.freshDecision = .raise(windowID: 7, pid: 43)
+    expect(!stale.allowsCommit(of: 7, pid: 42, restingAt: point), "gate now names another app: no raise")
+    stale.freshDecision = nil
+    expect(!stale.allowsCommit(of: 7, pid: 42, restingAt: point), "gate not read: no raise")
+    var moved = check
+    moved.receivingWindowID = 9
+    expect(!moved.allowsCommit(of: 7, pid: 42, restingAt: point), "the old pointer checks still apply")
+
+    // The fresh gate on a real input: an excluded terminal now in front.
+    var input = HoverFocusInput()
+    input.ownPID = 1
+    input.target = HoverWindowInfo(windowID: 7, ownerPID: 42, layer: 0, bounds: CGRect(x: 0, y: 0, width: 500, height: 500))
+    input.targetBundleID = "com.example.Editor"
+    input.frontmostPID = 50
+    input.frontmostBundleID = "com.apple.Terminal"
+    input.excludedBundleIDs = BundleIDList.matchSet(["com.apple.Terminal"])
+    expect(HoverFocusGate.decide(input) == .skip(.frontmostExcluded), "fresh gate sees the excluded front app")
+
+    // Item 1: worker slots.
+    var ledger = HoverWorkerLedger()
+    let first = ledger.start()
+    expect(first != nil, "first job starts")
+    let second = ledger.start()
+    expect(second != nil, "second job starts beside a stuck first one")
+    expect(ledger.start() == nil, "third refused: at most two outstanding, nothing queued")
+    expect(!ledger.canStart, "no free slot")
+    ledger.cancel(first!)
+    expect(!ledger.shouldContinue(first!), "cancelled job stops at its next step")
+    expect(ledger.shouldContinue(second!), "the other job carries on")
+    expect(!ledger.canStart, "a cancelled job keeps its slot until it returns")
+    ledger.finish(first!)
+    expect(ledger.canStart, "slot free once the stuck job returns")
+    let third = ledger.start()!
+    ledger.cancelAll()
+    expect(!ledger.shouldContinue(second!) && !ledger.shouldContinue(third), "switching off cancels everything")
+    ledger.finish(second!)
+    ledger.finish(third)
+    expect(ledger.outstanding.isEmpty, "all slots free")
+    ledger.cancel(99)
+    let fourth = ledger.start()!
+    expect(ledger.shouldContinue(fourth), "cancelling an unknown id does nothing")
+    ledger.finish(fourth)
+    expect(!ledger.shouldContinue(fourth), "a finished job never runs again")
+}
+
 @main
 enum FocusAndWinTapTests {
     static func main() {
@@ -577,6 +652,7 @@ enum FocusAndWinTapTests {
         testWinTapEvents()
         testWinKeyActions()
         testWinTapRecheck()
+        testHoverRecheck()
 
         if failures == 0 {
             print("PASS: \(checks) checks")

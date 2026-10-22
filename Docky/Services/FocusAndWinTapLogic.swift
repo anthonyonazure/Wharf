@@ -356,6 +356,76 @@ nonisolated struct HoverCommitCheck {
         // and unsure means no raise.
         return receivingWindowID == windowID
     }
+
+    // Code review chunk 2 re-check, items 2 and 3.
+
+    /// The monotonic clock (`systemUptime`) now, and the lookup's absolute
+    /// deadline on the same clock. An answer that arrives after it is
+    /// dropped even when the watchdog has not run yet (a busy main thread
+    /// can deliver both out of order).
+    var now: TimeInterval = 0
+    var deadline: TimeInterval = .infinity
+    /// The gate run again on fresh state right before raising: the app in
+    /// front now (excluded or full screen since the lookup began?), the
+    /// target's exclusion, the display selection, menus and modifiers. Nil
+    /// when it could not be read, which means no raise.
+    var freshDecision: HoverFocusDecision?
+
+    /// Everything in `allowsRaise`, plus the deadline and the fresh gate,
+    /// which must still name this very window of this very app.
+    func allowsCommit(of windowID: CGWindowID, pid: pid_t, restingAt point: CGPoint) -> Bool {
+        guard now <= deadline, freshDecision == .raise(windowID: windowID, pid: pid) else { return false }
+        return allowsRaise(of: windowID, restingAt: point)
+    }
+}
+
+/// Code review chunk 2 re-check, item 1: who is using the hover lookup
+/// workers. A ticket (`HoverLookupTicket`) says whether an answer is still
+/// wanted; this says how many lookups are still running, answered or not, so
+/// a stuck Accessibility call holds one slot instead of a queue. A job that
+/// was cancelled before it started never runs, and one cancelled midway
+/// stops at its next step. Not thread safe by itself: the service wraps it
+/// in a lock so the worker threads can ask.
+nonisolated struct HoverWorkerLedger: Equatable {
+    /// One stuck lookup plus one live one. With both slots taken, a resting
+    /// pointer waits instead of piling more calls onto a busy app.
+    static let maximumOutstanding = 2
+
+    private(set) var outstanding: Set<UInt64> = []
+    private var cancelled: Set<UInt64> = []
+    private var last: UInt64 = 0
+
+    var canStart: Bool { outstanding.count < Self.maximumOutstanding }
+
+    /// A new job's id, or nil when every slot is taken.
+    mutating func start() -> UInt64? {
+        guard canStart else { return nil }
+        last &+= 1
+        outstanding.insert(last)
+        return last
+    }
+
+    /// The answer is no longer wanted. The slot stays taken until the job
+    /// actually returns (`finish`).
+    mutating func cancel(_ id: UInt64) {
+        if outstanding.contains(id) { cancelled.insert(id) }
+    }
+
+    /// For switching the feature off: nothing running may raise anything.
+    mutating func cancelAll() {
+        cancelled.formUnion(outstanding)
+    }
+
+    /// Asked by the worker before each step.
+    func shouldContinue(_ id: UInt64) -> Bool {
+        outstanding.contains(id) && !cancelled.contains(id)
+    }
+
+    /// The job returned, whatever it found: its slot is free again.
+    mutating func finish(_ id: UInt64) {
+        outstanding.remove(id)
+        cancelled.remove(id)
+    }
 }
 
 // MARK: - Fixed Space order

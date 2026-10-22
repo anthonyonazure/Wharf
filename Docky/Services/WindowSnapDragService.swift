@@ -66,8 +66,8 @@ final class WindowSnapDragService {
     private init() {}
 
     func start() {
-        // A hung app must not stall Wharf's main thread on a hit test.
-        AXUIElementSetMessagingTimeout(systemWide, 0.25)
+        // No messaging timeout is set here: on the system-wide element it
+        // would apply to every AX call Wharf makes, not just this hit test.
         observeChanges { [weak self] in
             _ = DockyPreferences.shared.windowSnapEnabled
             _ = DockyPreferences.shared.windowSnapEdgeDragEnabled

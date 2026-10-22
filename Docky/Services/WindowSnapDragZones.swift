@@ -346,7 +346,7 @@ nonisolated enum WindowSnapDragZones {
 
     /// Whether macOS's own edge tiling is on. Its switches read as on while
     /// their preference was never written. With Separate Spaces off they are
-    /// greyed out and inert, so they do not count then.
+    /// grayed out and inert, so they do not count then.
     static func systemTilingEnabled(valueFor: (String) -> Bool?, displaysSpan: Bool) -> Bool {
         if displaysSpan { return false }
         return systemTilingKeys.contains { valueFor($0) ?? true }

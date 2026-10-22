@@ -196,11 +196,20 @@ final class SpacesOrderService {
             return
         }
         restartAttempts += 1
+        let oldPIDs = Set(docks.map(\.processIdentifier))
         if !docks.map({ $0.forceTerminate() }).contains(true) {
             NSLog("[Wharf] Fixed Space order: the Dock refused to quit (attempt \(restartAttempts)).")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self, self.preferences.spacesOrderDockRestartPending else { return }
+            // A Dock under a new process ID is a restarted Dock, whether or
+            // not its launch notification arrived. Never restart it twice.
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: SpacesOrderPlan.dockDomain)
+            if running.contains(where: { !oldPIDs.contains($0.processIdentifier) }) {
+                self.preferences.spacesOrderDockRestartPending = false
+                self.restartAttempts = 0
+                return
+            }
             guard self.restartAttempts < Self.maximumRestartAttempts else {
                 NSLog("[Wharf] Fixed Space order: the Dock did not restart after \(self.restartAttempts) attempts; it picks up the change when it next starts.")
                 return

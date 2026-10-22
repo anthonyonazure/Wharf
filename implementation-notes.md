@@ -769,3 +769,92 @@ expressions, and a watchdog thread that fails the run after 20 seconds.
 - Spotlight speed and result quality with a broad "contains" search on the
   whole local disk were not measured; a short query may take a moment.
 - The Option-Space registration failure path was not triggered.
+
+## 2026-10-22, Stage 3b review fixes
+
+Two independent adversarial reviews of Stage 3b (Codex and Gemini) were
+checked claim by claim against the code. Every claim on the consolidated
+list was confirmed by reading the code; none was disproved. Fixes:
+
+1. **Hover focus no longer freezes Wharf.** The Accessibility calls
+   (which window the front app has focused, and finding the target
+   window's element) run one at a time on a worker queue with a 0.25 s
+   timeout per message and at most 64 windows read. The registry's cached
+   snapshot is used first, at no Accessibility cost. A lookup answering
+   after 1 s is dropped. Right before raising, the main thread reads
+   everything fresh (`HoverCommitCheck`): feature still on and permitted,
+   pointer still where it rested, the same window still under it, no menu
+   open, no button or modifier held, evaluation not stale.
+2. **Moving into Wharf cancels a pending hover.** A local event monitor
+   resets the pending rest; the live pointer check covers Wharf windows
+   that do not report mouse moves.
+3. **Fixed Space order is crash safe.** A journal (what to put back plus a
+   phase: pendingHold, held, pendingRelease) is saved, flushed and read
+   back before the Dock preference is touched. The Dock write is flushed
+   and read back; the journal is cleared only after a restore reads back
+   correctly. A pending Dock restart is recorded first and cleared when a
+   Dock under a new process ID appears (or its launch notification
+   arrives); otherwise retried up to 3 times per launch, then logged. A
+   restart still pending at launch is retried. Markers from the earlier
+   build (no phase) are read as held.
+4. **Changes made in System Settings are noticed while Wharf runs.** The
+   preference is checked again when System Settings is left or quit and
+   when the Dock starts. A held setting turned back on there makes Wharf
+   let go and the switch turn off.
+5. **Win key tap:** respects the exclusion list (checked on every event,
+   so a press begun elsewhere cannot finish in an excluded app), and is
+   cancelled by a scroll wheel event (now in the tap mask) or by any mouse
+   button held at Command press or release. Command+Q and other chords
+   still cancel.
+6. **Win+Shift+S works in excluded apps.** The two reviews disagreed here
+   (Codex saw the old behavior as intended for remote desktop apps); the
+   consolidated list was followed. The Excluded Apps footer now says so.
+7. **Bundle IDs ignore case** in both exclusion lists: adding, duplicate
+   checks, the running apps menu and run time matching. The spelling first
+   added is shown. The Focus Follows Mouse list drops case duplicates on
+   load. The editor list is a LazyVStack.
+8. **Reset Behavior and the full reset include these features.** The
+   Space order switch goes off first and the journal is left for the
+   service's normal release, which restores the Dock preference.
+9. **The clamped hover delay is saved,** and an out of range or malformed
+   stored value is rewritten at launch.
+10. **Keyboard tap teardown race fixed.** The tap, its runloop source and
+    runloop are behind the existing lock, held through the whole teardown
+    and through the tap thread's re-enable.
+
+`scripts/test-focus-and-wintap.sh` now prints `PASS: 109 checks`, with new
+checks for every journal phase, case-insensitive bundle IDs (including the
+hover gate), the stored delay, the commit check, and tap cancel on scroll,
+on a held mouse button and on Command+Q. All other check scripts still
+pass; the Debug build succeeds.
+
+### Deviations
+
+- **No polling for external Space order changes.** Rechecks happen on
+  System Settings deactivate or quit and on Dock launch. A change made by
+  `defaults write` in Terminal is noticed only at the next of those or at
+  the next launch.
+- **Held mouse is sampled from the hardware state** at Command press and
+  release (`CGEventSource.buttonState`) rather than tracked from mouse up
+  events, so a button release the tap never saw cannot leave it stuck.
+- **Own window lookup instead of `WindowRegistry.liveWindows`.** The
+  registry is main actor isolated, so the worker reads the app's windows
+  itself and hands the element back. `focus()` still runs on the main
+  thread; its Accessibility calls use the element's 0.25 s timeout.
+- **Failed hold turns the switch off.** If the journal cannot be saved,
+  the Dock is not touched; if the Dock write does not read back, the
+  switch goes off and the normal step undoes whatever landed.
+- **Not addressed:** Gemini's guess that these settings might be shadowed
+  for an app group (no app group is used; labeled unverified by Gemini),
+  and Codex's Mission Control and other event tap notes (flagged by Codex
+  as unverified risks, not failures).
+
+### Unverified
+
+- The app was not launched, so none of this was seen working at run time:
+  hover raising, the local monitor, the Dock restart and its confirmation,
+  the System Settings recheck, and the Win tap with scroll or a drag.
+- Crash windows in the Space order journal were reasoned through and unit
+  checked, not fault injected.
+- Whether `CFPreferencesAppSynchronize` reports failures in practice, and
+  whether the Dock always comes back under a new process ID within 5 s.

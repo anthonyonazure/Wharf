@@ -1033,3 +1033,36 @@ as before). The test run needs default signing; with
 - The first frame of a bound dock with an autohide override (the window is
   built before it knows its display, then settles) was not watched for a
   brief flash.
+
+## Stage 4b and 5 review fixes (2026-10-22)
+
+Fixes for defects found by two independent reviews (Codex and Gemini) of Stage 4b (preview card buttons, Layouts menus) and Stage 5 (multi-row dock, per-display settings). Each claim was checked against the code before changing anything.
+
+Fixed:
+
+1. Dock editor on a side-dock override. The editor now takes the owning dock's resolved edge (DockContext.resolvedPosition) for both its window inset and its layout, instead of the global edge. Before, a Left override with a global Bottom measured the side dock's height and left the editor a sliver.
+2. Close on a preview card. The card now stays until the window has left the live window list. The list is checked at 0.25, 0.75, 1.5 and 3 seconds; if the window is still there (for example a save sheet the user cancelled), the card stays. New outcome removeCardOnceGone.
+3. Layouts submenu Option handling. The dock menus now use native alternate items, like the menu bar item: each layout is a pair, and AppKit swaps the row while Option is held. The captured-or-current OR is gone, so the label and the action always agree. ContextAction gained an optional alternateModifiers field.
+4. Dock context menu Hiding and Position. They now read this dock's resolved values and write to its display override when that display is customized (position, size or hiding set), otherwise to the global setting it inherits. A theme or float offset alone does not count, matching the Displays toggle.
+5. Magnification eligibility now compares the magnified size against this dock's own resting size (the same value the magnification model and MainWindow headroom use), so a smaller per-display tile size still magnifies.
+6. Snap menu (and any menu opened from the preview). Opening it cancels a pending dismissal, and requestDismiss refuses while it is open. On close, the pointer is checked: over the preview keeps it, over the dock leaves it to the tile hover, anywhere else starts the normal dismissal grace.
+7. Layout restore with no recorded display UUID. The frame is kept only when it is fully on a screen today; otherwise it is clamped onto the screen it overlaps most, or the main screen. The XCTest that pinned the old raw-frame behavior was replaced with two tests.
+8. Save name collision. The replace check now reads the layout names again after the modal alert returns.
+
+Regression checks added: scripts/test-preview-actions.sh (close outcome, live-list match, menu-close decision), scripts/test-perscreen.sh (which store the dock menu edits, magnification room), scripts/test-dock-rows.sh (6 items in 4 rows), WharfTests WorkspaceLayoutModelTests (nil UUID restore).
+
+### Deviations
+
+- Gemini A5 (Snap from a card targets the pointer's display): disproved. WindowSnapService.perform picks the screen with the largest overlap of the window's live frame and uses NSScreen.main only when the window overlaps no screen. No change.
+- Gemini B1 (row math leaves rows empty): disproved as a defect. 6 items in 4 rows gives ceil(6/4) = 2 per row, so 3 full rows. The documented contract is "at most rowCount rows", and the drawing (sectionTilesView) and measuring (sectionExtent) both call the same chunk, so they cannot disagree. Pinned with a check.
+- Gemini B2 (divider resize feedback loop): disproved. A divider's extent comes from TileContainerView.size(for:), which is tileSize * 0.5 by tileHeight, both inputs, never the rendered bounds.
+- Gemini A3 follow-on (case-insensitive replace check vs exact capture match): not a defect. replacesExisting already matches exactly, and an existing check pins that.
+- Gemini B3, B4, B5 were outside this fix list and were not changed.
+- Magnification fix has no standalone check beyond the comparison helper, since the eligibility lives in a SwiftUI view.
+
+### Unverified
+
+- The editor on a display with a side-edge override (no live UI run).
+- Close with an unsaved document and a cancelled save sheet.
+- Snap menu dismissal timing during real menu tracking.
+- Live Option switching inside the dock's cartouche menu (the private popup path); the menu bar item uses the same pattern and works.

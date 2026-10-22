@@ -194,6 +194,11 @@ final class WindowSnapService {
             ))
         }
 
+        let commandBar = CommandBarPreferences.shared
+        if commandBar.enabled, commandBar.shortcut.isValid {
+            reserved.append(("the Command Bar shortcut", commandBar.shortcut))
+        }
+
         var assigned: [WindowSnapAction: KeyboardShortcut] = [:]
         for other in WindowSnapAction.allCases {
             if let existing = preferences.windowSnapShortcut(for: other) { assigned[other] = existing }

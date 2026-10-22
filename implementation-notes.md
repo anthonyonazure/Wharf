@@ -371,7 +371,7 @@ Focus follows mouse and fixed Space order are adapted from Vorssaint
   it), `SpacesOrderPlan.step` (what to write to `mru-spaces` and what to put
   back), `CommandTapDetector` (lone Command tap), `WinKeyTapAction`.
 - `Tests/FocusAndWinTap/FocusAndWinTapTests.swift` with
-  `scripts/test-focus-and-wintap.sh`: prints `PASS: 66 checks`.
+  `scripts/test-focus-and-wintap.sh`: prints `PASS: 67 checks`.
 - `Docky/Services/BehaviorExtrasPreferences.swift`: the preferences for all
   three features (see Deviations). Keys: `wharf.focusFollowsMouse.enabled`
   (off), `.delayMilliseconds` (300, clamped 100 to 2000), `.displayUUIDs`
@@ -409,6 +409,16 @@ Focus follows mouse and fixed Space order are adapted from Vorssaint
   `BehaviorSettingsView.swift` (one line in each of two sections),
   `AppDelegate.swift` (two `start()` lines). `DockyPreferences.swift` is
   untouched.
+
+### Read-only probe
+
+A scratch script (no windows touched) confirmed two things the hover path
+rests on: `NSWindow.windowNumber(at:belowWindowWithWindowNumber:)` returns
+another app's window (a Brave window on the second display), and the y flip
+against the main screen lines up with `kCGWindowBounds`. It also showed the
+pointer itself listed as a small Window Server window at the cursor level on
+top of everything, so the fallback path (used when AppKit has no answer) now
+looks through it.
 
 ### Unverified
 

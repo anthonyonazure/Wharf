@@ -105,6 +105,9 @@ nonisolated struct HoverWindowInfo: Equatable {
 nonisolated enum HoverWindowScan {
     /// Menus, pop-up lists and context menus all sit at this level while open.
     static let popUpMenuLayer = 101
+    /// The pointer itself is a small window server window at this level,
+    /// always on top of whatever it points at.
+    static let cursorLayer = 2_147_483_630
 
     /// One `CGWindowListCopyWindowInfo` entry, or nil when it lacks the
     /// fields the gate needs or is fully transparent.
@@ -130,7 +133,7 @@ nonisolated enum HoverWindowScan {
         if let pointerWindowID, pointerWindowID != 0 {
             return windows.first { $0.windowID == pointerWindowID && $0.bounds.contains(point) }
         }
-        return windows.first { $0.bounds.contains(point) }
+        return windows.first { $0.layer < cursorLayer && $0.bounds.contains(point) }
     }
 
     /// True while any menu is open anywhere: the menu bar, a context menu or

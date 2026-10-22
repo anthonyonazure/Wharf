@@ -99,6 +99,11 @@ private func testScan() {
     expect(HoverWindowScan.target(in: windows, at: CGPoint(x: 500, y: 500), pointerWindowID: nil) == nil,
            "empty desktop has no target")
 
+    let cursor = HoverWindowInfo(windowID: 2, ownerPID: 99, layer: HoverWindowScan.cursorLayer,
+                                 bounds: CGRect(x: 55, y: 55, width: 20, height: 20))
+    expect(HoverWindowScan.target(in: [cursor] + windows, at: CGPoint(x: 60, y: 60), pointerWindowID: nil)?.windowID == 1,
+           "the pointer's own window is looked through")
+
     let menu = HoverWindowInfo(windowID: 7, ownerPID: 30, layer: HoverWindowScan.popUpMenuLayer, bounds: .zero)
     expect(HoverWindowScan.isMenuOpen(in: windows + [menu]), "a pop-up menu layer window means a menu is open")
     expect(!HoverWindowScan.isMenuOpen(in: windows), "no menu window, no menu")

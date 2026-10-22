@@ -246,6 +246,18 @@ private func testBundleIDList() {
     expect(L.validationError("com.apple/Terminal") != nil, "slash refused")
     expect(L.validationError("com.äpple") != nil, "non ASCII letters refused")
 
+    // Code review chunk 2 re-check, item 9: a bare program name, for the
+    // Windows keyboard list only (it matches apps without a bundle ID by
+    // executable name).
+    expect(L.validationError("alacritty", allowsExecutableName: true) == nil, "program name accepted where allowed")
+    expect(L.validationError("my_term-2", allowsExecutableName: true) == nil, "underscores and hyphens in a program name")
+    expect(L.validationError("alacritty") != nil, "program name still refused by other lists")
+    expect(L.validationError("bin/sh", allowsExecutableName: true) != nil, "slash refused in a program name")
+    expect(L.validationError("a:b", allowsExecutableName: true) != nil, "colon refused in a program name")
+    expect(L.validationError("   ", allowsExecutableName: true) != nil, "empty refused with the flag too")
+    expect(L.validationError("com.apple.Terminal", allowsExecutableName: true) == nil, "bundle ID still accepted")
+    expect(L.validationError("com..apple", allowsExecutableName: true) != nil, "dotted entries keep bundle ID rules")
+
     // Apps without a bundle ID fall back to their executable's name.
     expect(L.matchKey(bundleID: "COM.A", executableName: "a") == "com.a", "bundle ID wins")
     expect(L.matchKey(bundleID: nil, executableName: "MyTool") == "mytool", "executable name fallback")

@@ -88,9 +88,23 @@ nonisolated enum BundleIDList {
     /// bundle ID is reverse DNS: two or more parts separated by dots, each
     /// made of letters, digits and hyphens. Underscores are refused, as
     /// Apple's rules for the key refuse them.
-    static func validationError(_ typed: String) -> String? {
+    ///
+    /// `allowsExecutableName` is for a list whose service also matches an
+    /// app without a bundle ID by its executable's name (`matchKey`): there
+    /// a name without dots is taken as that program name, so `alacritty` or
+    /// `xterm` can be added. It may hold letters, digits, spaces, hyphens and
+    /// underscores, never a slash or a colon. Other lists refuse it, since
+    /// such an entry would never match there.
+    static func validationError(_ typed: String, allowsExecutableName: Bool = false) -> String? {
         let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Type a bundle ID." }
+        if trimmed.isEmpty { return allowsExecutableName ? "Type a bundle ID or a program name." : "Type a bundle ID." }
+        if allowsExecutableName, !trimmed.contains(".") {
+            let program = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+            if trimmed.unicodeScalars.contains(where: { !program.contains($0) }) {
+                return "A program name uses only letters, digits, spaces, hyphens and underscores."
+            }
+            return nil
+        }
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
         if trimmed.unicodeScalars.contains(where: { !allowed.contains($0) }) {
             return "A bundle ID uses only letters, digits, dots and hyphens."

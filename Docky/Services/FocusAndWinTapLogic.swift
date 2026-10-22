@@ -16,7 +16,8 @@
 //  (vorssaint/vorssaint-utils, GPL-3.0): FocusFollowsMouseSupport.swift and
 //  SpacesOrderHold.swift.
 //
-//  Foundation and CoreGraphics only.
+//  Foundation and CoreGraphics only. Every type is nonisolated: the Win key
+//  detector runs on the keyboard tap thread, not the main actor.
 //
 
 import CoreGraphics
@@ -24,7 +25,7 @@ import Foundation
 
 // MARK: - Focus follows mouse: timing
 
-enum FocusFollowsMouseTiming {
+nonisolated enum FocusFollowsMouseTiming {
     static let defaultDelayMilliseconds = 300
     static let delayRange = 100...2_000
 
@@ -33,7 +34,7 @@ enum FocusFollowsMouseTiming {
     }
 }
 
-struct HoverDwellEvaluation: Equatable {
+nonisolated struct HoverDwellEvaluation: Equatable {
     let point: CGPoint
     let generation: UInt64
 }
@@ -42,7 +43,7 @@ struct HoverDwellEvaluation: Equatable {
 /// pointer crosses on its way somewhere else are not reshuffled. Any movement
 /// restarts the wait. Once an attempt finishes, nothing happens again until
 /// the pointer moves.
-struct HoverDwellState: Equatable {
+nonisolated struct HoverDwellState: Equatable {
     private enum Phase: Equatable {
         case pending, evaluating, finished
     }
@@ -94,14 +95,14 @@ struct HoverDwellState: Equatable {
 // MARK: - Focus follows mouse: which window
 
 /// The parts of one window server entry the gate needs.
-struct HoverWindowInfo: Equatable {
+nonisolated struct HoverWindowInfo: Equatable {
     let windowID: CGWindowID
     let ownerPID: pid_t
     let layer: Int
     let bounds: CGRect
 }
 
-enum HoverWindowScan {
+nonisolated enum HoverWindowScan {
     /// Menus, pop-up lists and context menus all sit at this level while open.
     static let popUpMenuLayer = 101
 
@@ -139,7 +140,7 @@ enum HoverWindowScan {
     }
 }
 
-enum HoverSkipReason: Equatable {
+nonisolated enum HoverSkipReason: Equatable {
     case menuOpen
     case buttonOrModifierHeld
     case displayNotEnabled
@@ -151,12 +152,12 @@ enum HoverSkipReason: Equatable {
     case alreadyFocused
 }
 
-enum HoverFocusDecision: Equatable {
+nonisolated enum HoverFocusDecision: Equatable {
     case raise(windowID: CGWindowID, pid: pid_t)
     case skip(HoverSkipReason)
 }
 
-struct HoverFocusInput {
+nonisolated struct HoverFocusInput {
     var menuOpen = false
     var mouseButtonsDown = false
     var modifiersHeld = false
@@ -170,7 +171,7 @@ struct HoverFocusInput {
     var focusedWindowID: CGWindowID?
 }
 
-enum HoverFocusGate {
+nonisolated enum HoverFocusGate {
     static let dockBundleID = "com.apple.dock"
 
     /// Whether the window under a resting pointer should be raised. Ordered
@@ -204,7 +205,7 @@ enum HoverFocusGate {
 
 /// How the Dock arranges Spaces, as its `mru-spaces` preference reads. A
 /// missing key is the system default, which rearranges by most recent use.
-enum SpacesRearrangeSetting: Equatable {
+nonisolated enum SpacesRearrangeSetting: Equatable {
     case absent, on, off
     /// Forced by a management profile or stored as something other than a
     /// Boolean. Wharf never writes over it.
@@ -218,7 +219,7 @@ enum SpacesRearrangeSetting: Equatable {
     }
 }
 
-enum SpacesOrderStep: Equatable {
+nonisolated enum SpacesOrderStep: Equatable {
     /// Nothing to change.
     case none
     /// Save `marker`, then turn rearranging off and refresh the Dock.
@@ -237,7 +238,7 @@ enum SpacesOrderStep: Equatable {
     case letGo
 }
 
-enum SpacesOrderPlan {
+nonisolated enum SpacesOrderPlan {
     static let dockDomain = "com.apple.dock"
     static let preferenceKey = "mru-spaces"
     /// Marker values saved in Wharf's defaults: what to put back.
@@ -270,7 +271,7 @@ enum SpacesOrderPlan {
 /// Recognizes a lone tap of the Win key, which macOS delivers as Command:
 /// pressed and released with no other key, no click and no other modifier in
 /// between, and not held so long that it reads as an abandoned shortcut.
-struct CommandTapDetector {
+nonisolated struct CommandTapDetector {
     static let maximumHoldSeconds: TimeInterval = 0.8
 
     enum Input {
@@ -313,7 +314,7 @@ struct CommandTapDetector {
 }
 
 /// What a Win key tap opens.
-enum WinKeyTapAction: String, CaseIterable, Identifiable {
+nonisolated enum WinKeyTapAction: String, CaseIterable, Identifiable {
     case off
     case startMenu
     case launchpad

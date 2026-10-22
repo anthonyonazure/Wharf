@@ -19,6 +19,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case behaviorPlacement
     case behaviorVisibility
     case behaviorWindowsKeyboard
+    case behaviorFocusFollowsMouse
     case behaviorTaskbar
     case behaviorStacking
     case layouts
@@ -56,6 +57,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorPlacement: "Placement"
         case .behaviorVisibility: "Visibility"
         case .behaviorWindowsKeyboard: "Windows Keyboard"
+        case .behaviorFocusFollowsMouse: "Focus Follows Mouse"
         case .behaviorTaskbar: "Taskbar"
         case .behaviorStacking: "Stacking"
         case .layouts: "Layouts"
@@ -93,6 +95,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorPlacement: "arrow.up.and.down.and.arrow.left.and.right"
         case .behaviorVisibility: "eye"
         case .behaviorWindowsKeyboard: "keyboard"
+        case .behaviorFocusFollowsMouse: "cursorarrow.motionlines"
         case .behaviorTaskbar: "rectangle.grid.1x2"
         case .behaviorStacking: "square.3.layers.3d"
         case .layouts: "square.grid.3x3.topleft.filled"
@@ -130,6 +133,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .behaviorPlacement: .teal
         case .behaviorVisibility: .cyan
         case .behaviorWindowsKeyboard: .indigo
+        case .behaviorFocusFollowsMouse: .orange
         case .behaviorTaskbar: .teal
         case .behaviorStacking: .brown
         case .layouts: .pink
@@ -177,6 +181,7 @@ private let settingsSections: [SettingsSection] = [
         .behaviorPlacement,
         .behaviorVisibility,
         .behaviorWindowsKeyboard,
+        .behaviorFocusFollowsMouse,
         .behaviorTaskbar,
         .behaviorStacking,
         .layouts,
@@ -398,6 +403,8 @@ private struct SettingsDetailView: View {
             BehaviorSettingsView(subsection: .visibility)
         case .behaviorWindowsKeyboard:
             BehaviorSettingsView(subsection: .windowsKeyboard)
+        case .behaviorFocusFollowsMouse:
+            FocusFollowsMouseSettingsView()
         case .behaviorTaskbar:
             BehaviorSettingsView(subsection: .taskbar)
         case .behaviorStacking:

@@ -8,7 +8,8 @@
 //  Alt becomes Option. That means Win+C copies and Ctrl+C does nothing, which
 //  is backwards from every Windows reflex. This service rewrites Control into
 //  Command for the standard editing shortcuts, and turns Win+Shift+S into a
-//  region capture on the clipboard, the way the Windows snip works.
+//  region capture on the clipboard, the way the Windows snip works. A lone
+//  tap of the Win key can open the Start Menu or Launchpad, as on Windows.
 //
 
 import AppKit
@@ -41,6 +42,7 @@ final class WindowsKeyboardService {
     private let stateLock = NSLock()
     private var _snipEnabled = false
     private var _excludedBundleIDs: Set<String> = []
+    private var _winTapAction: WinKeyTapAction = .off
 
     /// Frontmost bundle ID, cached. The exclusion check runs on every
     /// keystroke, and asking NSWorkspace each time would put a cross-process
@@ -58,6 +60,15 @@ final class WindowsKeyboardService {
         set { stateLock.lock(); _snipEnabled = newValue; stateLock.unlock() }
     }
 
+    private var winTapAction: WinKeyTapAction {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _winTapAction }
+        set { stateLock.lock(); _winTapAction = newValue; stateLock.unlock() }
+    }
+
+    /// Watches for a lone Win key tap. Touched only from the tap thread, so
+    /// it needs no lock.
+    private var winTapDetector = CommandTapDetector()
+
     private var excludedBundleIDs: Set<String> {
         get { stateLock.lock(); defer { stateLock.unlock() }; return _excludedBundleIDs }
         set { stateLock.lock(); _excludedBundleIDs = newValue; stateLock.unlock() }
@@ -69,6 +80,7 @@ final class WindowsKeyboardService {
     private func refreshSnapshot() {
         snipEnabled = DockyPreferences.shared.windowsKeyboardSnipShortcut
         excludedBundleIDs = Set(DockyPreferences.shared.windowsKeyboardExcludedBundleIDs)
+        winTapAction = BehaviorExtrasPreferences.shared.winTapAction
     }
 
     /// Guards against autorepeat launching a second region capture while the
@@ -178,6 +190,10 @@ final class WindowsKeyboardService {
         withObservationTracking {
             _ = DockyPreferences.shared.windowsKeyboardMode
             _ = DockyPreferences.shared.windowsKeyboardSnipShortcut
+            // The exclusion list is edited in Settings now, so edits must
+            // reach the tap without toggling the mode off and on.
+            _ = DockyPreferences.shared.windowsKeyboardExcludedBundleIDs
+            _ = BehaviorExtrasPreferences.shared.winTapAction
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -204,7 +220,13 @@ final class WindowsKeyboardService {
     private func installTapIfNeeded() {
         guard eventTap == nil else { return }
 
+        // Modifier changes and clicks are watched only to recognize a lone
+        // Win key tap; they always pass through untouched.
         let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+            | (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
 
         // `.cgSessionEventTap` at `.headInsertEventTap` so the rewrite happens
         // before any application sees the keystroke. The tap must be active
@@ -280,6 +302,8 @@ final class WindowsKeyboardService {
             return Unmanaged.passUnretained(event)
         }
 
+        trackWinTap(type: type, event: event)
+
         guard type == .keyDown || type == .keyUp else {
             return Unmanaged.passUnretained(event)
         }
@@ -333,6 +357,41 @@ final class WindowsKeyboardService {
 
         event.flags = flags.subtracting(.maskControl).union(.maskCommand)
         return Unmanaged.passUnretained(event)
+    }
+
+    /// Feeds the Win key tap detector and opens the chosen overlay when a
+    /// tap completes. Never changes or swallows the event: Command still
+    /// reaches the app, so Command shortcuts keep working.
+    private func trackWinTap(type: CGEventType, event: CGEvent) {
+        let action = winTapAction
+        guard action != .off else {
+            winTapDetector = CommandTapDetector()
+            return
+        }
+        let input: CommandTapDetector.Input
+        switch type {
+        case .flagsChanged:
+            let flags = event.flags
+            input = .flagsChanged(
+                command: flags.contains(.maskCommand),
+                otherModifiers: !flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
+                time: ProcessInfo.processInfo.systemUptime
+            )
+        case .keyDown:
+            input = .keyDown
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            input = .mouseDown
+        default:
+            return
+        }
+        guard winTapDetector.handle(input) else { return }
+        DispatchQueue.main.async {
+            switch action {
+            case .startMenu: StartMenuService.shared.toggle()
+            case .launchpad: LaunchpadOverlayService.shared.toggle()
+            case .off: break
+            }
+        }
     }
 
     /// False inside terminals, where Control must keep its Unix meaning.

@@ -46,6 +46,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         DockBadgeService.shared.start()
         WindowsKeyboardService.shared.start()
         WindowSnapService.shared.start()
+        FocusFollowsMouseService.shared.start()
+        SpacesOrderService.shared.start()
         AppActivityService.shared.start()
         SystemLoadService.shared.start()
         WharfMenuBarController.shared.start()

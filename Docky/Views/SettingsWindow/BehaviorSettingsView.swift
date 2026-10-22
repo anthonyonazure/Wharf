@@ -379,6 +379,8 @@ struct BehaviorSettingsView: View {
         } header: {
             Text("Windows Keyboard")
         }
+
+        WindowsKeyboardExtrasSections()
     }
 
     @ViewBuilder
@@ -670,6 +672,8 @@ struct BehaviorSettingsView: View {
             }
             .padding(.vertical, 4)
         }
+
+        FixedSpaceOrderSection()
     }
 
     @ViewBuilder

@@ -207,6 +207,7 @@ final class CommandBarService: ObservableObject {
 
     private func queryDidChange() {
         showsActions = false
+        selectedIndex = 0
         recompute()
         scheduleFileSearch()
     }
@@ -231,55 +232,87 @@ final class CommandBarService: ObservableObject {
         rows += files.prefix(max(0, limit - rows.count))
 
         results = Array(rows.prefix(limit))
+        // Results that arrive later (menus, files) keep the user's place.
         selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
-        if !text.isEmpty { selectedIndex = 0 }
+    }
+
+    /// What is ranked: cheap to build for every app and window. Rows (with
+    /// their icons and actions) are only built for the winners.
+    private enum Candidate {
+        case app(AppCandidate)
+        case window(AppWindow)
+        case menu(CommandBarMenuItem, index: Int)
+        case snap(WindowSnapAction)
     }
 
     /// Apps, windows, menu commands and snap layouts, ranked together.
     private func rankedLocalRows(query: String, limit: Int) -> [CommandBarResult] {
-        var candidates: [CommandBarResult] = []
-        candidates += appCandidates.map(appRow)
+        var candidates: [Candidate] = appCandidates.map { .app($0) }
         if preferences.isOn(.windows) {
             candidates += WindowRegistry.shared.windows
                 .filter { $0.bundleIdentifier != Bundle.main.bundleIdentifier }
-                .map(windowRow)
+                .map { .window($0) }
         }
         if preferences.isOn(.menus) {
-            candidates += menuItems.enumerated().map { menuRow($1, index: $0) }
+            candidates += menuItems.enumerated().map { .menu($1, index: $0) }
         }
         if preferences.isOn(.snap) {
-            candidates += WindowSnapAction.allCases.map(snapRow)
+            candidates += WindowSnapAction.allCases.map { .snap($0) }
         }
 
-        return CommandBarRanking.rank(
+        let targetBundleID = targetApp?.bundleIdentifier ?? "unknown"
+        let winners = CommandBarRanking.rank(
             candidates,
             query: query,
             limit: limit,
             recency: preferences.recency,
             now: Date(),
-            title: \.title,
-            keywords: { Self.keywords(for: $0) },
-            key: { $0.recencyKey ?? $0.id },
-            weight: { Self.weight(for: $0.kind) }
+            title: { candidate in
+                switch candidate {
+                case .app(let app): app.name
+                case .window(let window): window.windowTitle.isEmpty ? window.appDisplayName : window.windowTitle
+                case .menu(let item, _): item.title
+                case .snap(let action): action.title
+                }
+            },
+            keywords: { candidate in
+                switch candidate {
+                case .app: []
+                case .window(let window): [window.appDisplayName]
+                case .menu(let item, _): [item.path.joined(separator: " ")]
+                case .snap(let action): ["snap", "window", action.group.title]
+                }
+            },
+            key: { candidate in
+                switch candidate {
+                case .app(let app): "app:\(app.bundleIdentifier)"
+                case .window(let window): "window:\(window.id.stableString)"
+                case .menu(let item, _): Self.menuKey(item, bundleID: targetBundleID)
+                case .snap(let action): "snap:\(action.rawValue)"
+                }
+            },
+            // Small tie breakers so an app outranks a menu item of the same name.
+            weight: { candidate in
+                switch candidate {
+                case .app: 30
+                case .window: 20
+                case .menu: 10
+                case .snap: 0
+                }
+            }
         )
-    }
-
-    private static func keywords(for result: CommandBarResult) -> [String] {
-        switch result.kind {
-        case .window, .menu: [result.subtitle]
-        case .snap: ["snap", "window", result.subtitle]
-        default: []
+        return winners.map { candidate in
+            switch candidate {
+            case .app(let app): appRow(app)
+            case .window(let window): windowRow(window)
+            case .menu(let item, let index): menuRow(item, index: index)
+            case .snap(let action): snapRow(action)
+            }
         }
     }
 
-    /// Small tie breakers so an app outranks a menu item of the same name.
-    private static func weight(for kind: CommandBarResult.Kind) -> Int {
-        switch kind {
-        case .app: 30
-        case .window: 20
-        case .menu: 10
-        default: 0
-        }
+    private static func menuKey(_ item: CommandBarMenuItem, bundleID: String) -> String {
+        "menu:\(bundleID):\(item.path.joined(separator: " > ")) > \(item.title)"
     }
 
     private func calculationRow(_ calc: CommandBarCalculator.Result, expression: String) -> CommandBarResult {
@@ -389,7 +422,7 @@ final class CommandBarService: ObservableObject {
             icon: nil,
             symbolName: "filemenu.and.selection",
             accessory: item.shortcut,
-            recencyKey: "menu:\(bundleID):\(path) > \(item.title)",
+            recencyKey: Self.menuKey(item, bundleID: bundleID),
             actions: [
                 .init(title: "Run Command", symbolName: "return") { CommandBarMenus.press(item) },
             ]

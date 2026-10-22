@@ -1762,3 +1762,109 @@ AXModal read, settings text).
   value is treated as a doubt.
 - No live run: the tap, the HUD and quit on close were not driven against
   real apps in this pass.
+
+## 2026-10-22, Code review chunk 2 patches (focus and Space order)
+
+Branch `cr3-focus-spaces` from `feature/vorssaint-parity` (655ea5f). Every
+claim was checked against the code first; all ten held.
+
+### What changed
+1. Hover lookup watchdog. A ticket (`HoverLookupTicket`) replaces the
+   in-flight flag; a main-thread watchdog settles a lookup at the 1 s
+   deadline, finishes the evaluation and restarts the timer, and a late
+   answer is ignored. Every element in the scan loop gets the 0.25 s timeout
+   before it is asked anything.
+2. Raise off the main thread: partial. The worker now proves the window
+   answers (one position read) before anything is raised; the raise itself
+   (`WindowRegistry.focus`) stays on main and the header comment says so,
+   with its bound (0.25 s per call for an element found here, the
+   process-wide 1 s for a registry element).
+3. Fixed Space order failures never turn the switch off. The step logic now
+   runs in a pure `SpacesOrderRunner` that reports `failed(reason)`; the
+   service keeps the user's choice, retries at 5, 30 and 120 s, and shows the
+   state in the Spaces section. The preference observation is registered
+   again before `apply`, so a change `apply` makes itself (let go) runs the
+   step once more. Reset Behavior shows an orange note while the old value
+   is not back yet (journal left in place).
+4. The section shows managed and unsupported value states separately with
+   plain messages, from observable state refreshed on appear, on toggle and
+   on every `apply` (Dock launch, System Settings left or quit).
+5. Dock restart is recorded with the Dock process IDs, the time and an
+   attempt count kept across launches (cap 3). A launch restarts the Dock
+   only when the same Dock is still running and no reboot happened since.
+   New `DockRestartGate` is the one door for Wharf's Dock restarts; a request
+   while a restart is under way (old Dock still quitting or none running
+   yet) rides on it, while a Dock that already came back is restarted again.
+6. The journal check uses the result of `CFPreferencesAppSynchronize` and a
+   read of both keys through `CFPreferencesCopyAppValue`; the comment now
+   says this proves cfprefsd has the record, not that the file is on disk.
+7. Menu detection skips Wharf's own windows and counts a menu level window
+   only when its owner is the frontmost app or a background or accessory
+   app (menu bar extras). Wharf's own menus are known from in-process
+   `NSMenu` tracking notifications instead.
+8. Hover focus is skipped when the frontmost app is on the excluded list or
+   shows an ordinary window covering a whole display.
+9. Focus follows mouse installs only when a saved display is connected, and
+   re-checks on every display change (an observer kept while uninstalled).
+   Saved but unplugged displays are listed as "Display not connected" with a
+   Remove button; nothing is pruned silently.
+10. `HoverCommitCheck.allowsRaise` needs AppKit to name the same window;
+    unknown means no raise.
+
+Regression checks: `Tests/FocusAndWinTap/FocusSpacesSafetyTests.swift` (74
+checks: journal phases with failure injection, process ID compare and the
+shared gate, menu detection, commit check, display logic, lookup ticket,
+retry schedule, availability), run as a second binary by
+`scripts/test-focus-and-wintap.sh`. Build succeeded; every
+`scripts/test-*.sh` passes.
+
+### Deviations
+- New pure logic lives in a new file, `FocusAndSpacesSafetyLogic.swift`, and
+  its checks in a new test file with its own entry point, so the shared
+  `FocusAndWinTapTests.swift` (Win key tests belong to another agent) was not
+  edited. The hover parts of `FocusAndWinTapLogic.swift` were edited in place.
+- `FixedSpaceOrderSection` sits in `BehaviorExtrasSections.swift`, owned by
+  another agent. Only that struct's body changed, to one line rendering the
+  new `FixedSpaceOrderSectionBody.swift`; nothing above it was touched.
+- The Reset Behavior note is one additive line in `BehaviorSettingsView.swift`
+  (`SpacesOrderRestoreNote()`), shown under the reset button. The dialog
+  itself is unchanged.
+- Item 2: the raise was not moved off the main thread. It shares the
+  registry's state and the private SkyLight helpers are main actor bound;
+  instead the worker proves the window answers first and the comment states
+  the bound. Moving SLPS off main was judged not worth the risk.
+- Item 5: `SystemDockVisibilityService.restartDock` now calls the shared
+  gate (one line). The AppDelegate terminate path needed no change: it goes
+  through `restore()`, which uses that same method. `DockEditorService` was
+  left alone (it has a test seam and no overlap was reported); routing it
+  through the gate later is a one line change.
+- Item 5: a pending restart recorded by an earlier build (no process IDs)
+  is cleared without a restart: when unsure, do nothing.
+- Item 7: no Wharf panel is set to the menu level (101) in the source
+  (`grep popUpMenu`); the levels used are mainMenu (24) and a few above it.
+  The own-window exclusion was added as asked, but the reported "Wharf's
+  own panels block hover" case could not be confirmed from the code.
+- Item 7: "menu-like ownership" is interpreted as frontmost app or
+  non-regular activation policy. A regular app that is not in front and
+  shows a menu bar extra menu is not counted, so hovering could close that
+  menu.
+- Item 8: full screen means a layer 0 window of the frontmost app whose
+  bounds equal a display's bounds. A borderless window sized to the display
+  counts too, which is the safe direction.
+- The hover items share files, so items 1, 2 and 7 to 10 are one commit and
+  items 3 to 6 another, rather than one commit per item.
+
+### Unverified
+- That `NSMenu.didBeginTrackingNotification` fires for Wharf's context menus
+  and its menu bar extra menu, not only the main menu. If it does not, a
+  hover could close one of Wharf's own menus.
+- That a menu bar extra's menu window is owned by the extra's process (and
+  that process is accessory or background), and that menu bar menus belong
+  to the frontmost app.
+- No live run: hover focus, a stalled app, a Dock restart, a failed Dock
+  write and Reset Behavior with a failed restore were not driven on a real
+  Mac in this pass. The failure paths are covered only by the in-memory
+  runner checks.
+- Whether a Dock already respawning when a second restart request is
+  coalesced has read the preferences before the second writer flushed. The
+  window is tiny; a Dock already up is always restarted again.

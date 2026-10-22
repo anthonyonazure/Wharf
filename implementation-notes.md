@@ -1392,3 +1392,108 @@ locale-aware number parsing, and the file path filter.
 - The new conflict check turns the hot key off on a conflict. Wharf's own
   defaults (Launchpad unset, Window Switcher Option-Tab) do not collide with
   the bar's Option-Space, so a fresh install is unaffected.
+
+## 2026-10-22, Code review chunk 1 patches (quit guard)
+
+Patches from the BMAD adversarial review of the Window Behavior chunk, for
+Command-Q and Command-W protection and quit on close. The green button items
+were handled separately. Rule followed throughout: when unsure, never swallow
+input and never quit or close anything. Branch `cr1-quit-guard`.
+
+What changed, by review item:
+
+1. A hold no longer confirms from time alone. When the hold ends, Wharf asks
+   whether the key and Command are still physically down; if either was let
+   go unseen, the hold cancels.
+2. When macOS briefly turns the key watcher off mid-press, keys Wharf already
+   held back stay held, and a repeat of a protected shortcut with Command is
+   swallowed until a key-up or a fresh press. Held keys are forgotten after
+   10 seconds of silence, so a release missed under Secure Input cannot leave
+   the guard stuck.
+3. After turning the watcher back on, Wharf checks it really is on. If not,
+   it rebuilds it (0.5, 1, 2, 4, 8 seconds apart, at most 5 tries, the count
+   starting fresh after a quiet minute) and the pane shows an orange
+   "Protection is inactive" line while it is down.
+4. Keyboard layouts that type no Latin letters (Russian, Greek, Hebrew) now
+   match Command-Q and Command-W by key position, as macOS does.
+5. Shift-Command-Q (Log Out) and Control-Command-Q (Lock Screen) always pass
+   through to macOS.
+6. Wharf also asks Accessibility which app owns the keyboard (cached, read off
+   the key path when Command goes down and after each app switch). If that is
+   not the app in front (a Spotlight style panel, or an app switch not yet
+   announced), the shortcut passes untouched. Right before acting, a fresh
+   read must also agree.
+7. Close tells apart "the app has no window in front" (its own message,
+   nothing closed) from "the app cannot be asked at all" (Command-W is sent,
+   as it would be without Wharf).
+8. About half a second after sending Command-W, Wharf looks again (window
+   gone, title changed as when a tab closes, window count changed). If
+   nothing at all changed, the HUD says it could not confirm anything closed.
+9. Quit on close: an app asked to quit once (and kept open, say from a save
+   prompt) is armed again by any window it shows after the user brings it
+   forward, and a window's subrole is read again half a second later. When a
+   listed app is left running because a window is still there, the pane says
+   so ("skipped, window still present").
+10. The HUD shows on the screen of the target app's front window, and long app
+    names wrap onto more lines instead of being cut off.
+11. Bundle id lists are written back sanitized from the pane on every add and
+    remove, and per-app protection keys are normalized (one entry per bundle
+    id ignoring case, display spelling kept, first in sorted order wins).
+12. The reset confirmation now lists everything it resets, read from the real
+    default values.
+13. `start()` on QuitGuardService and QuitOnCloseService is now safe to call
+    twice. Before, a second call added duplicate observers (wasted work, no
+    wrong behavior, since the tap and observers were already guarded).
+
+Checks: `scripts/test-window-behavior.sh` now also builds and runs
+`Tests/WindowBehavior/QuitGuardReviewTests.swift` (66 checks, in its own file
+so the green button work does not collide), plus source guards for the
+service-side fixes (key recheck, tap health check, focus owner check, no
+clipped HUD text, run-once start). Three existing checks were updated for the
+new layout and system chord rules. Build succeeded; all eight
+`scripts/test-*.sh` pass.
+
+### Deviations
+
+- Item 4: the fallback to key position applies only when the typed character
+  has no ASCII in it, not whenever it is "not an ASCII letter". On Dvorak the
+  US Q key types an apostrophe, and Command-' is a real, different shortcut;
+  falling back there would hold back Command-' and then quit the app.
+- Item 5: passing the system chords alone would leave Command-Q unconfirmable
+  in Extra Modifier mode with Shift (the default) or Control, and the HUD
+  would tell the user to press Log Out. So Command-Q now always confirms with
+  Option-Command-Q, whatever extra modifier is chosen; Command-W keeps the
+  chosen one. The pane text says so.
+- Item 1: "still down" accepts Control in place of Command when the press
+  arrived through Windows keyboard translation (Control-Q turned into
+  Command-Q in flight), since physical Command is never down then.
+- Item 6: a failed or not-yet-returned focus read counts as "unknown" and does
+  not override the app-in-front tracking. Treating unknown as "pass" would
+  switch protection off whenever Accessibility is slow.
+- Item 9: "re-arm on a fresh windowless period after activation" is done as:
+  after an activation, any window counts as the start of a fresh stretch.
+  Quit on close also keeps looking for the whole round after an early look
+  sees a window (it still never quits that round) so the last look can say
+  whether the window stayed; quitting behavior is unchanged.
+- Item 11, partial: `storeList` lives in WindowBehaviorPreferences.swift, which
+  this pass was not allowed to edit. The pane now always writes sanitized
+  lists, but a list edited any other way can still differ between memory and
+  disk. One-line fix for whoever merges: in `storeList`'s `didSet`, assign
+  the sanitized value back to the property (as the hold slider clamp does).
+  Duplicate override keys already on disk still show twice in the pane, but
+  matching uses one of them deterministically.
+- Item 13: GreenButtonMaximizeService was left to the other agent, as agreed.
+
+### Unverified
+
+- No live key presses were driven. Not checked against real apps: the
+  physical key read under Secure Input, the tap death and rebuild path (it
+  cannot be forced on demand), whether Spotlight's panel reports itself as
+  the focused application, the Command-W confirmation on browsers and apps
+  with save sheets, the HUD on a second display, and quit on close with apps
+  that keep invisible windows.
+- Whether `CGEventSource.keyState` with the combined session state reflects
+  keys remapped by tools such as Karabiner. If it does not, a hold cancels
+  (the safe direction).
+- The "could not confirm" note may show for an app that handles Command-W
+  without any visible change Accessibility can see.

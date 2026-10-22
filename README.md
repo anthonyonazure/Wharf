@@ -50,6 +50,7 @@ These already work, courtesy of upstream:
 
 - **Tiles and layout** — apps, widgets, Smart Stacks, folders, spacers, dividers
 - **Live window switcher** — Cmd-Tab style with live previews, plus per-tile hover previews
+- **Preview actions** — snap, minimize and close buttons on each hover preview card
 - **Launchpad** — fullscreen, searchable, keyboard navigable
 - **Widgets** — Calendar, Reminders, Batteries, System, Weather, Now Playing, Audio
   (volume, mute and output device), stackable
@@ -120,7 +121,9 @@ order is in **Settings → Behavior → Visibility**.
       `wharf://layout/restore?name=Work&launch=1`
 - [x] Windows whose display is gone come back on-screen instead of being sent
       to coordinates no monitor occupies
-- [ ] Trigger layouts from the dock itself rather than Settings or a URL
+- [x] Trigger layouts from the dock itself rather than Settings or a URL: a
+      Layouts submenu in the dock's right-click menu and the Wharf menu bar
+      item, with Save Current Layout (hold Option to also open missing apps)
 
 In **Settings → Layouts**. Verified restoring a window across displays.
 
@@ -216,6 +219,9 @@ restore), focus follows mouse and fixed Space order are adapted from
 
 The Command Bar (menu command search, the calculator's strict rules and the unit
 lexicon) is adapted from Vorssaint's command bar as well.
+
+The close, minimize and snap buttons on hover preview cards follow Vorssaint's
+dock preview (GPL-3.0).
 
 Licensed under the [GNU General Public License v3.0](LICENSE). Because Wharf derives
 from GPL-3.0 code, it and any distributed derivative must remain open source under

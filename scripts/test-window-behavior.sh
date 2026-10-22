@@ -30,4 +30,17 @@ if grep -n 'AXUIElement' "$OUT.handle"; then
     echo "FAIL: the green button tap path calls Accessibility"
     exit 1
 fi
+# A timeout set on the system wide element changes the default for every
+# element in Wharf, so the green button must not touch that element at all.
+if grep -n 'AXUIElementCreateSystemWide' "$GREEN"; then
+    echo "FAIL: the green button uses the system wide Accessibility element"
+    exit 1
+fi
+# A click the green button held back must go back to the app when Wharf does
+# nothing with it: every give-up path calls replay.
+REPLAYS=$(grep -c 'replay(click, release: release)' "$GREEN")
+if [ "$REPLAYS" -lt 5 ]; then
+    echo "FAIL: expected the held click to be replayed on every give-up path, found $REPLAYS"
+    exit 1
+fi
 echo "PASS: service source guards"

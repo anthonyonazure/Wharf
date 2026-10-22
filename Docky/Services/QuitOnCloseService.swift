@@ -146,9 +146,6 @@ final class QuitOnCloseService {
             // Something is still there: stop this round. The next close
             // starts a new one.
             rounds[pid] = nil
-            if facts.accessibilityWindowCount > 0 || facts.serverWindowCount > 0 {
-                hasWindowNow.insert(pid)
-            }
             return
         }
         guard isFinalLook else { return }

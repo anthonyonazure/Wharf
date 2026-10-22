@@ -450,3 +450,14 @@ How each works:
   runs second, a Control-W it rewrites is not protected.
 - Restore after a green button maximize relies on WindowSnapService's history;
   a window maximized by other means is left as is on the second click.
+
+Follow-up fixes in the same stage: quit on close no longer re-arms its checks
+after a look finds a window (that made apps which hide their window on close
+get re-checked on every window change anywhere), and quit protection steps
+aside while Wharf's own window switcher is open, since the switcher uses W
+under the Command chord to close the selected window. The green button match
+uses `AppWindow.cgWindowID`, which WindowRegistry fills from
+`_AXUIElementGetWindow`, the same number the window server scan returns.
+Unverified: after a declined "Save changes?" prompt, closing that sheet could
+count as another last-window close and ask the app to quit again; WindowRegistry
+only filters floating subroles, not dialogs.

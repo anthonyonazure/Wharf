@@ -111,6 +111,12 @@ final class QuitGuardService {
             return Unmanaged.passUnretained(event)
         }
 
+        // Wharf's own window switcher uses Q and W under the Command chord to
+        // act on its selection; those keys belong to it while it is open.
+        if WindowSwitcherService.shared.isPresented, !machine.hasPressInFlight {
+            return Unmanaged.passUnretained(event)
+        }
+
         let flags = event.flags
         switch type {
         case .keyDown:

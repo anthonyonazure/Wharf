@@ -67,27 +67,63 @@ nonisolated enum TrafficLightHitTest {
         rightToLeft: Bool = false,
         pidIsEligible: (Int32) -> Bool = { _ in true }
     ) -> TrafficLightCandidate? {
+        guard let front = frontWindow(in: windows, at: point, ownProcessID: ownProcessID),
+              pidIsEligible(front.pid),
+              contains(point, inTrafficLightAreaOf: front.frame, button: button, rightToLeft: rightToLeft)
+        else { return nil }
+        return front
+    }
+
+    /// The ordinary app window in front at `point`, or nil when anything else
+    /// is in front there. Only a fully transparent window is seen through.
+    /// Menus, popovers, floating panels, small windows and Wharf's own windows
+    /// all end the scan with nil: the click is theirs, never the window's
+    /// behind them.
+    static func frontWindow(
+        in windows: [[String: Any]],
+        at point: CGPoint,
+        ownProcessID: Int32
+    ) -> TrafficLightCandidate? {
         for window in windows {
-            guard let bounds = bounds(from: window),
-                  bounds.width >= 80,
-                  bounds.height >= 80,
-                  bounds.contains(point)
-            else { continue }
+            guard let bounds = bounds(from: window), bounds.contains(point) else { continue }
+            guard (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0 else { continue }
 
             guard let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue,
                   layer == 0,
-                  (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
+                  bounds.width >= 80,
+                  bounds.height >= 80,
                   let ownerPID = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
                   ownerPID != ownProcessID,
                   let number = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value
-            else { continue }
-
-            guard pidIsEligible(ownerPID),
-                  contains(point, inTrafficLightAreaOf: bounds, button: button, rightToLeft: rightToLeft)
             else { return nil }
             return TrafficLightCandidate(pid: ownerPID, windowID: number, frame: bounds)
         }
         return nil
+    }
+
+    /// Frames of the ordinary app windows in a list, kept between pointer
+    /// moves so a click far from every title bar is let by without reading
+    /// the window list again.
+    static func titleBarWindowFrames(in windows: [[String: Any]], ownProcessID: Int32) -> [CGRect] {
+        windows.compactMap { window in
+            guard let bounds = bounds(from: window),
+                  bounds.width >= 80, bounds.height >= 80,
+                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
+                  (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value != ownProcessID
+            else { return nil }
+            return bounds
+        }
+    }
+
+    /// Whether `point` is in the button area of any of `frames`.
+    static func mayHit(
+        _ point: CGPoint,
+        frames: [CGRect],
+        button: TrafficLightButton,
+        rightToLeft: Bool = false
+    ) -> Bool {
+        frames.contains { contains(point, inTrafficLightAreaOf: $0, button: button, rightToLeft: rightToLeft) }
     }
 
     /// A generous box around where each button sits, measured from the
@@ -137,6 +173,59 @@ nonisolated enum GreenButtonLogic {
             && abs(current.minY - target.minY) <= tolerance
             && abs(current.width - target.width) <= tolerance
             && abs(current.height - target.height) <= tolerance
+    }
+
+    /// The window server level of app modal panels (NSModalPanelWindowLevel).
+    static let modalPanelLayer = 8
+
+    /// Whether the app has a modal panel on screen. Its other windows then
+    /// take no clicks, so the green button is left to the app.
+    static func hasModalPanel(in windows: [[String: Any]], pid: Int32) -> Bool {
+        windows.contains { window in
+            (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid
+                && (window[kCGWindowLayer as String] as? NSNumber)?.intValue == modalPanelLayer
+                && (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0
+        }
+    }
+
+    /// Where the green button sits after its window moved from `old` to
+    /// `new`: the same offset from the window's top leading corner.
+    static func shiftedButton(_ button: CGRect, from old: CGRect, to new: CGRect, rightToLeft: Bool = false) -> CGRect {
+        let dx = rightToLeft ? new.maxX - old.maxX : new.minX - old.minX
+        return button.offsetBy(dx: dx, dy: new.minY - old.minY)
+    }
+}
+
+/// Throttles the pointer move lookups, keeping the last move of a burst:
+/// a move inside the interval schedules one trailing check instead of
+/// being dropped, so the lookup still runs where the pointer came to rest.
+nonisolated struct GreenButtonMoveThrottle {
+    enum Decision: Equatable {
+        case runNow
+        case runAfter(TimeInterval)
+        case alreadyScheduled
+    }
+
+    let interval: TimeInterval
+    private var lastRun: TimeInterval?
+    private var trailingScheduled = false
+
+    init(interval: TimeInterval) { self.interval = interval }
+
+    mutating func moved(at now: TimeInterval) -> Decision {
+        if let lastRun, now - lastRun < interval {
+            if trailingScheduled { return .alreadyScheduled }
+            trailingScheduled = true
+            return .runAfter(interval - (now - lastRun))
+        }
+        lastRun = now
+        trailingScheduled = false
+        return .runNow
+    }
+
+    mutating func trailingRan(at now: TimeInterval) {
+        lastRun = now
+        trailingScheduled = false
     }
 }
 

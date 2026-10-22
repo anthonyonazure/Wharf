@@ -220,11 +220,21 @@ final class WindowSnapService {
 
     // MARK: - Hot keys
 
+    /// True while the settings pane records a shortcut. The hot keys are
+    /// released meanwhile, otherwise pressing an assigned combination to
+    /// re-record it would snap the Settings window instead.
+    @ObservationIgnored var isRecordingShortcut = false {
+        didSet {
+            guard isRecordingShortcut != oldValue else { return }
+            registerHotKeys()
+        }
+    }
+
     private func registerHotKeys() {
         unregisterHotKeys()
         var unavailable: Set<WindowSnapAction> = []
 
-        if preferences.windowSnapEnabled {
+        if preferences.windowSnapEnabled, !isRecordingShortcut {
             for action in WindowSnapAction.allCases {
                 guard let shortcut = preferences.windowSnapShortcut(for: action), shortcut.isValid else { continue }
                 var ref: EventHotKeyRef?

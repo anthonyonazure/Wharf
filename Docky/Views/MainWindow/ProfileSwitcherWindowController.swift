@@ -22,7 +22,7 @@ final class ProfileSwitcherWindowController: NSWindowController {
     private let preferences = DockyPreferences.shared
     private let profileService = ProfileService.shared
     private let dockSettings = DockSettingsService.shared
-    private let hostingController: NSHostingController<ProfileSwitcherButtonView>
+    private let hostingController: NSHostingController<AnyView>
     private let chromeGap: CGFloat = 8
     /// Whether we've called `mainWindow.beginInteraction()` without a
     /// matching `endInteraction()` yet. Keeps the count balanced when
@@ -42,7 +42,8 @@ final class ProfileSwitcherWindowController: NSWindowController {
             availableLength: Self.availableLength(for: position, mainFrame: mainWindow.frame),
             onActiveChange: { _ in }
         )
-        let hosting = NSHostingController(rootView: rootView)
+        .environmentObject(mainWindow.dockContext)
+        let hosting = NSHostingController(rootView: AnyView(rootView))
         self.hostingController = hosting
 
         let companion = ProfileSwitcherCompanionWindow()
@@ -50,13 +51,14 @@ final class ProfileSwitcherWindowController: NSWindowController {
         super.init(window: companion)
 
         // Wire the callback now that `self` exists.
-        hosting.rootView = ProfileSwitcherButtonView(
+        hosting.rootView = AnyView(ProfileSwitcherButtonView(
             dockPosition: position,
             availableLength: Self.availableLength(for: position, mainFrame: mainWindow.frame),
             onActiveChange: { [weak self] active in
                 self?.applySwitcherActive(active)
             }
         )
+        .environmentObject(mainWindow.dockContext))
 
         prepareWindow()
         observeMainWindow()
@@ -180,13 +182,14 @@ final class ProfileSwitcherWindowController: NSWindowController {
         let position = preferences.windowPosition
             .resolved(systemOrientation: dockSettings.orientation)
         let mainFrame = mainWindow.frame
-        hostingController.rootView = ProfileSwitcherButtonView(
+        hostingController.rootView = AnyView(ProfileSwitcherButtonView(
             dockPosition: position,
             availableLength: Self.availableLength(for: position, mainFrame: mainFrame),
             onActiveChange: { [weak self] active in
                 self?.applySwitcherActive(active)
             }
         )
+        .environmentObject(mainWindow.dockContext))
         hostingController.view.layoutSubtreeIfNeeded()
         let size = hostingController.view.fittingSize
         guard size.width > 0, size.height > 0 else { return }

@@ -411,8 +411,6 @@ final class CommandBarService: ObservableObject {
         rows += files.prefix(max(0, limit - rows.count))
 
         results = Array(rows.prefix(limit))
-        // Anything that changed under a pending confirmation cancels it.
-        pendingConfirmation = nil
         // Selection follows the row's identity, so results arriving later
         // (menus, files) never slide another action under the user's finger.
         let resolved = CommandBarSelection.resolve(
@@ -420,6 +418,9 @@ final class CommandBarService: ObservableObject {
             rows: results.map { CommandBarSelection.Row(id: $0.id, isDefaultable: $0.isDefaultable) }
         )
         if resolved != selectedID { showsActions = false }
+        // A pending confirmation only survives while its own row is still
+        // the selected one.
+        if pendingConfirmation?.resultID != resolved { pendingConfirmation = nil }
         selectedID = resolved
         selectedIndex = resolved.flatMap { id in results.firstIndex { $0.id == id } }
     }

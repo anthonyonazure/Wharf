@@ -1129,3 +1129,101 @@ pass; the Debug build succeeds.
   checked, not fault injected.
 - Whether `CFPreferencesAppSynchronize` reports failures in practice, and
   whether the Dock always comes back under a new process ID within 5 s.
+
+## 2026-10-22, Command Bar review fixes
+
+Two independent adversarial reviews of the Stage 4a Command Bar (Codex and
+Gemini) were checked claim by claim against the code. Every claim on the fix
+list was confirmed by reading the code; none was disproved. Fixes:
+
+1. **Destructive commands need a second Return.** Menu commands whose titles
+   say Quit, Force Quit, Log Out, Sign Out, Delete, Erase, Empty Trash, Move
+   to Trash, Shut Down, Restart, Remove, Discard, Reset, Revert, Clear, Close
+   All and similar (`CommandBarSafety`), plus an app's Quit action and a
+   window's Close action, show in red, are never selected by default, and
+   the first Return or click only shows a red "Press Return again" line;
+   the second one runs it. Escape, moving the selection, typing, or that row
+   leaving the list cancels it. The application menu's Quit is left out of
+   the menu results entirely (the app row's Tab actions still offer Quit,
+   behind the same confirmation).
+2. **Selection follows the row, not the row number.** Late menu and file
+   results keep the selected row selected; if it disappears, selection falls
+   to the first row that is safe to preselect, or to nothing at all.
+   The action list closes when its row goes away.
+3. **Nothing cached runs without a recheck.** Menu commands: the app in
+   front must still be the one the bar opened over; then, off the main
+   thread with a 0.25 s timeout, the item must still belong to that process,
+   carry the same title and be enabled (an unreadable enabled state counts
+   as disabled). Window actions and snaps: the app must still run under the
+   same bundle identifier and the window number must still exist and belong
+   to that process (window server lookup, no Accessibility call). A failure
+   keeps the bar open and says why in it. History is recorded only after an
+   action reports success.
+4. **Off the main thread, with timeouts:** the focused window read when the
+   bar opens (only when snapping is on), the whole menu walk, the menu
+   recheck and the menu press. Every menu element read gets its own short
+   timeout, since a timeout set on the app element does not carry over.
+5. **The bar closes when another app comes to the front**, as well as when
+   it stops being key.
+6. **File results are tied to their query.** They are dropped on every
+   keystroke, only shown while their exact query is still typed, and their
+   row IDs include the query.
+7. **History holds no document names.** Menu commands are not remembered at
+   all, and any menu entries an earlier build stored are dropped on load.
+   Loaded history is checked: counts clamped to 0 to 1000, keys over 256
+   bytes dropped, at most the newest 200 kept; counting saturates, so a
+   damaged store cannot crash Wharf.
+8. **Menu walk budget:** at most 2500 nodes visited (disabled items count),
+   1.5 s, children fetched in bounded batches, one walk at a time on a
+   serial queue, and an older walk is cancelled when a new one starts.
+9. **Spotlight:** only the home folder (skipped when it is on a network
+   volume) and /Applications; Library and anything with a hidden (dot)
+   folder or name is filtered out. Partial results show as they gather; the
+   query stops when it has enough, finishes, or hits a 1 s deadline, and
+   only a bounded prefix of hits is ever examined.
+10. **Query size is capped at entry** (256 Unicode scalars, 1024 bytes)
+    before any trimming or folding, and the ranking folds the query once per
+    keystroke instead of once per candidate.
+11. **Numbers are parsed strictly.** Grouping commas must form real groups
+    and may not follow a decimal point (1.2,345 is refused in the converter
+    too). Where the comma is the decimal mark, a comma in a number, or a dot
+    followed by exactly three digits, shows an "Ambiguous number" row with
+    nothing to run instead of a guess.
+12. **Shortcut conflicts stay current.** The bar re-checks its shortcut
+    whenever Windows Keyboard Mode, the snip shortcut, the Launchpad or
+    Window Switcher shortcut or any snap shortcut changes. A conflict turns
+    the bar's hot key off and the settings pane says why.
+
+Checks added to `scripts/test-command-bar.sh` (now 359): destructive
+classification, ID-based selection, hostile and oversized history, saturating
+counts, query limits against a two million mark grapheme, strict and
+locale-aware number parsing, and the file path filter.
+
+### Deviations
+
+- Ambiguous numbers are refused with a note rather than parsed by locale.
+  The calculator only reads dots as decimals, so guessing in a comma locale
+  could still be wrong. In those locales "1,5 + 1" now shows the note too.
+- Window actions (focus, minimize, close, snap) still run on the main thread
+  through WindowRegistry and WindowSnapService, which own their state on the
+  main thread; they stay bounded by Wharf's existing 1 s global Accessibility
+  timeout. Only the bar's own Accessibility calls named in the fix list were
+  moved.
+- The window read at open no longer re-syncs the registry: a focused window
+  the registry has not tracked yet gives no snap target ("There is no window
+  in front to snap") instead of a sync on the main thread.
+- A menu command is pressed after the bar closes (as before, so it lands on
+  the app's own window); if the press itself then fails, Wharf beeps, since
+  the bar is gone.
+- The destructive word list is English only.
+- Not on the fix list and left alone: the bar opening on the display under
+  the pointer rather than the active window's, and the snap shortcut
+  recorder not knowing the bar's shortcut (Gemini 8 and 9).
+
+### Unverified
+
+- Behavior against live apps: a hung app, a menu that changes while the bar
+  is open, Command-Tab closing the bar, the confirmation line, and Spotlight
+  partial results and deadline timing. Only the build and the logic checks
+  were run.
+- A network home folder (no test machine has one).

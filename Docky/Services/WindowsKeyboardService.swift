@@ -32,16 +32,39 @@ final class WindowsKeyboardService {
     /// off, and half of them mangled with it on.
     ///
     /// A dedicated thread means the input path no longer waits on drawing.
-    private var tapThread: Thread?
+    ///
+    /// One installed tap: the port, its runloop source, the thread and
+    /// runloop that service it, the mask it was created with (a tap's mask
+    /// cannot change) and its generation. While a tap is being replaced two
+    /// exist for a moment; only the one whose generation is current acts on
+    /// events, the other passes everything through untouched.
+    private struct InstalledTap {
+        let tap: CFMachPort
+        let source: CFRunLoopSource
+        let runLoop: CFRunLoop
+        let thread: Thread
+        let mask: CGEventMask
+        let generation: UInt
+    }
+
+    /// What the C callback gets as its user info. Never released: a callback
+    /// already running on a retired tap's thread may still read it, and one
+    /// is made only per install (a few bytes per settings change).
+    private final class TapContext {
+        unowned let service: WindowsKeyboardService
+        let generation: UInt
+        init(service: WindowsKeyboardService, generation: UInt) {
+            self.service = service
+            self.generation = generation
+        }
+    }
 
     /// Everything the callback needs, behind a lock, so it never reaches into
-    /// main-actor state from the tap thread. The tap, its source and its
-    /// runloop are behind it too: the tap thread re-enables the tap while
-    /// the main thread may be tearing it down.
+    /// main-actor state from the tap thread. The installed tap is behind it
+    /// too: the tap thread re-enables the tap while the main thread may be
+    /// replacing or tearing it down.
     private let stateLock = NSLock()
-    private var _eventTap: CFMachPort?
-    private var _runLoopSource: CFRunLoopSource?
-    private var _tapRunLoop: CFRunLoop?
+    private var _current: InstalledTap?
     private var _snipEnabled = false
     private var _excludedBundleIDs: Set<String> = []
     private var _winTapAction: WinKeyTapAction = .off
@@ -77,9 +100,17 @@ final class WindowsKeyboardService {
     /// a previous tap.
     private var _tapStatePending = false
 
-    /// The mask the current tap was created with. A tap's mask cannot change,
-    /// so a different wanted mask means a reinstall.
-    private var _installedMask: CGEventMask?
+    /// Held for the whole callback. Only ever contended in the moment two
+    /// taps overlap during a replacement, when it keeps the old and the new
+    /// thread from touching the detector at once.
+    private let callbackLock = NSLock()
+
+    /// Main thread only: the last generation handed out, and the bounded
+    /// retry after a tap could not be created.
+    private var lastGeneration: UInt = 0
+    private var retryAttempt = 0
+    private var retryWork: DispatchWorkItem?
+    private static let retryDelays: [TimeInterval] = [2, 10, 30, 60]
 
     /// Everything one event needs, read under a single lock.
     private struct Snapshot {
@@ -88,6 +119,8 @@ final class WindowsKeyboardService {
         let snipInExcludedApps: Bool
         let frontmostExcluded: Bool
         let resetTapState: Bool
+        /// The generation of the tap that should act, 0 for none.
+        let currentGeneration: UInt
     }
 
     private func snapshot() -> Snapshot {
@@ -100,7 +133,8 @@ final class WindowsKeyboardService {
             snipEnabled: _snipEnabled,
             snipInExcludedApps: _snipInExcludedApps,
             frontmostExcluded: _frontmostBundleID.map { _excludedBundleIDs.contains($0) } ?? false,
-            resetTapState: reset
+            resetTapState: reset,
+            currentGeneration: _current?.generation ?? 0
         )
     }
 
@@ -272,19 +306,28 @@ final class WindowsKeyboardService {
 
     // MARK: - Event tap
 
+    /// Installs the tap the settings call for. When one with another mask is
+    /// running, the replacement is built first and handed over only once it
+    /// is serviced; if it cannot be built, the running tap stays (so Control
+    /// keeps translating), the failure goes to the status file, and a
+    /// bounded retry follows.
     private func installTapIfNeeded() {
         // Modifier changes, clicks, scrolls and media keys are watched only
         // to recognize a lone Win key tap, and only while a tap can open
         // something; they always pass through untouched.
         let mask = WinTapEvents.mask(for: winTapAction)
         stateLock.lock()
-        let installed = _eventTap != nil
-        let installedMask = _installedMask
+        let current = _current
         stateLock.unlock()
-        if installed {
-            guard installedMask != mask else { return }
-            removeTap()
+        if let current, current.mask == mask {
+            cancelRetry()
+            return
         }
+
+        lastGeneration &+= 1
+        if lastGeneration == 0 { lastGeneration = 1 }
+        let generation = lastGeneration
+        let context = Unmanaged.passRetained(TapContext(service: self, generation: generation))
 
         // `.cgSessionEventTap` at `.headInsertEventTap` so the rewrite happens
         // before any application sees the keystroke. The tap must be active
@@ -296,35 +339,33 @@ final class WindowsKeyboardService {
             eventsOfInterest: mask,
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
-                let service = Unmanaged<WindowsKeyboardService>.fromOpaque(refcon).takeUnretainedValue()
-                return service.handle(type: type, event: event)
+                let context = Unmanaged<TapContext>.fromOpaque(refcon).takeUnretainedValue()
+                return context.service.handle(type: type, event: event, generation: context.generation)
             },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
+            userInfo: context.toOpaque()
         ) else {
             NSLog("[Wharf] Windows keyboard mode: failed to create event tap (Accessibility permission missing?)")
+            installFailed(keepingCurrent: current != nil, reason: "could not create the event tap")
             return
         }
-
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        stateLock.lock()
-        _eventTap = tap
-        _runLoopSource = source
-        _installedMask = mask
-        _tapStatePending = true
-        stateLock.unlock()
+        // Not serviced by any runloop yet: off until the handover, so no
+        // event waits on it.
+        CGEvent.tapEnable(tap: tap, enable: false)
 
         // Onto its own thread, not the main runloop. Keystrokes must not wait
-        // behind the dock's drawing; see the note on `tapThread`.
+        // behind the dock's drawing; see `InstalledTap`.
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            installFailed(keepingCurrent: current != nil, reason: "could not attach the event tap")
+            return
+        }
+        final class RunLoopBox: @unchecked Sendable { var runLoop: CFRunLoop? }
+        let box = RunLoopBox()
         let ready = DispatchSemaphore(value: 0)
-        let thread = Thread { [weak self] in
+        let thread = Thread {
             let runLoop = CFRunLoopGetCurrent()
-            if let self {
-                self.stateLock.lock()
-                self._tapRunLoop = runLoop
-                self.stateLock.unlock()
-            }
             CFRunLoopAddSource(runLoop, source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
+            box.runLoop = runLoop
             ready.signal()
             // A source alone does not keep a runloop alive; the port does.
             while !Thread.current.isCancelled {
@@ -334,51 +375,91 @@ final class WindowsKeyboardService {
         thread.name = "wharf.windows-keyboard.tap"
         thread.qualityOfService = .userInteractive
         thread.start()
-        tapThread = thread
-        _ = ready.wait(timeout: .now() + 2)
+        guard ready.wait(timeout: .now() + 2) == .success, let runLoop = box.runLoop else {
+            thread.cancel()
+            CFMachPortInvalidate(tap)
+            installFailed(keepingCurrent: current != nil, reason: "the event tap thread did not start")
+            return
+        }
+
+        // The handover: the new tap becomes the one that acts, starting
+        // from a clean detector, and only then is the old one retired.
+        let installed = InstalledTap(tap: tap, source: source, runLoop: runLoop, thread: thread,
+                                     mask: mask, generation: generation)
+        stateLock.lock()
+        _current = installed
+        _tapStatePending = true
+        stateLock.unlock()
+        CGEvent.tapEnable(tap: tap, enable: true)
+        if let current { retire(current) }
+        cancelRetry()
         writeStatus("ACTIVE: event tap installed; Control translates to Command, terminals excluded.")
     }
 
-    /// The references are taken out under the lock and torn down after it is
-    /// released, so the tap thread never waits on CoreFoundation teardown.
-    /// `handle` only ever uses a reference it copied under the lock, which
-    /// keeps the tap alive while it does; re-enabling a tap that is then
-    /// invalidated is harmless.
-    private func removeTap() {
-        stateLock.lock()
-        let eventTap = _eventTap
-        let runLoopSource = _runLoopSource
-        let tapRunLoop = _tapRunLoop
-        _tapRunLoop = nil
-        _eventTap = nil
-        _runLoopSource = nil
-        _installedMask = nil
-        stateLock.unlock()
-
-        if let eventTap {
-            CGEvent.tapEnable(tap: eventTap, enable: false)
-            if let runLoopSource, let tapRunLoop {
-                CFRunLoopRemoveSource(tapRunLoop, runLoopSource, .commonModes)
-            }
-            CFMachPortInvalidate(eventTap)
+    /// Keeps whatever tap is running and tries again later, a few times.
+    private func installFailed(keepingCurrent: Bool, reason: String) {
+        let retrying = retryAttempt < Self.retryDelays.count
+        let what = keepingCurrent
+            ? "DEGRADED: \(reason) for the new Win key setting; the previous tap keeps translating Control to Command, but the Win key tap setting has not taken effect."
+            : "FAILED: \(reason); Control is not translated."
+        writeStatus(what + (retrying
+            ? " Retrying in \(Int(Self.retryDelays[retryAttempt])) s."
+            : " Gave up retrying; change the setting or relaunch Wharf to try again."))
+        guard retrying else { return }
+        let delay = Self.retryDelays[retryAttempt]
+        retryAttempt += 1
+        retryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.retryWork = nil
+            self.syncTapState()
         }
-        tapThread?.cancel()
-        if let tapRunLoop { CFRunLoopWakeUp(tapRunLoop) }
-        tapThread = nil
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func cancelRetry() {
+        retryWork?.cancel()
+        retryWork = nil
+        retryAttempt = 0
+    }
+
+    /// The installed tap is taken out under the lock and torn down after it
+    /// is released, so the tap thread never waits on CoreFoundation
+    /// teardown. `handle` only ever uses a reference it copied under the
+    /// lock, which keeps the tap alive while it does; re-enabling a tap that
+    /// is then invalidated is harmless.
+    private func removeTap() {
+        cancelRetry()
+        stateLock.lock()
+        let current = _current
+        _current = nil
+        stateLock.unlock()
+        if let current { retire(current) }
+    }
+
+    private func retire(_ installed: InstalledTap) {
+        CGEvent.tapEnable(tap: installed.tap, enable: false)
+        CFRunLoopRemoveSource(installed.runLoop, installed.source, .commonModes)
+        CFMachPortInvalidate(installed.tap)
+        installed.thread.cancel()
+        CFRunLoopWakeUp(installed.runLoop)
     }
 
     // MARK: - Translation
 
-    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    private func handle(type: CGEventType, event: CGEvent, generation: UInt) -> Unmanaged<CGEvent>? {
+        callbackLock.lock()
+        defer { callbackLock.unlock() }
         // The system disables a tap that takes too long or that the user
         // revoked permission for. Re-arm rather than silently going dead.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             stateLock.lock()
-            let eventTap = _eventTap
+            let current = _current
             stateLock.unlock()
-            if let eventTap {
-                CGEvent.tapEnable(tap: eventTap, enable: true)
-            }
+            // Only the tap that acts is re-armed; a retired one stays off.
+            guard let current, current.generation == generation else { return Unmanaged.passUnretained(event) }
+            CGEvent.tapEnable(tap: current.tap, enable: true)
             // Events were missed while it was off: a release seen now may
             // belong to a press that had a key in between.
             resetTapThreadState()
@@ -386,7 +467,12 @@ final class WindowsKeyboardService {
         }
 
         let state = snapshot()
+        // Whichever tap reads the pending reset carries it out: the detector
+        // is shared, and the callback lock keeps the two threads apart.
         if state.resetTapState { resetTapThreadState() }
+        // A tap being replaced, or the replacement before the handover:
+        // everything passes through untouched.
+        guard state.currentGeneration == generation else { return Unmanaged.passUnretained(event) }
 
         trackWinTap(type: type, event: event, state: state)
 

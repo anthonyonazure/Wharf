@@ -24,7 +24,7 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String, lin
 }
 
 private func calc(_ input: String) -> Double? {
-    CommandBarCalculator.value(of: input)
+    CommandBarCalculator.value(of: input, locale: posix)
 }
 
 private func expectCalc(_ input: String, _ expected: Double, line: Int = #line) {
@@ -219,7 +219,7 @@ private func ranked(_ items: [Item], _ query: String, recency: CommandBarRecency
 }
 
 private func testRanking() {
-    let s = CommandBarRanking.matchScore
+    let s: (String, String) -> Int? = { CommandBarRanking.matchScore(query: $0, text: $1) }
     expect(s("safari", "Safari")! > s("saf", "Safari")!, "exact beats prefix")
     expect(s("saf", "Safari")! > s("saf", "Open Safari Window")!, "prefix beats word prefix")
     expect(s("vsc", "Visual Studio Code") == 500, "initials match")
@@ -266,6 +266,133 @@ private func testRanking() {
     expect(ranked(snapTitles, "next disp").first == "Next Display", "next display")
 }
 
+// MARK: - Review fixes
+
+private let german = Locale(identifier: "de_DE")
+
+private func testNumberParsing() {
+    // Grouping that cannot be a real group, or that follows the decimal point.
+    for input in ["1.2,345 + 1", "1,2.345 + 1", "1234,567 + 1", "1,23 + 1", "12,3456 + 1", "1,234.5,6 + 1"] {
+        expectNoCalc(input)
+        expect(CommandBarCalculator.value(of: input, locale: german) == nil, "\(input) refused in de_DE")
+    }
+    expect(CommandBarUnits.convert("1.2,345 m to cm", locale: posix) == nil, "converter refuses grouping after the decimal point")
+    expect(CommandBarUnits.convert("1,2.345 m to cm", locale: posix) == nil, "converter refuses a broken group")
+    expectCalc("1,234.5 + 0", 1234.5)
+
+    // Where the comma is the decimal mark, a comma can never silently scale a value.
+    expect(CommandBarCalculator.value(of: "1,234 + 1", locale: german) == nil, "1,234 is ambiguous in de_DE")
+    expect(CommandBarCalculator.evaluation(of: "1,234 + 1", locale: german) == .ambiguous, "and is reported as ambiguous")
+    expect(CommandBarCalculator.evaluation(of: "1.234 + 1", locale: german) == .ambiguous, "a dot grouping is ambiguous in de_DE")
+    expect(CommandBarCalculator.evaluation(of: "1,5 + 1", locale: german) == .ambiguous, "any comma is ambiguous in de_DE")
+    expect(CommandBarCalculator.evaluation(of: "1,234 apples", locale: german) == nil, "not math stays a search, not an ambiguity")
+    expect(CommandBarCalculator.value(of: "0.125 + 1", locale: german) == 1.125, "a leading zero cannot be a group")
+    expect(CommandBarCalculator.value(of: "1.5 + 1", locale: german) == 2.5, "one or two fraction digits are not ambiguous")
+    expect(CommandBarUnits.convert("1,234 m to cm", locale: german) == nil, "converter refuses 1,234 in de_DE")
+    expect(CommandBarUnits.conversion(of: "1,234 m to cm", locale: german) == .ambiguous, "and reports it")
+    expect(CommandBarUnits.conversion(of: "1,234 zz to cm", locale: german) == nil, "unknown unit is not a conversion at all")
+    expectUnit("1,234 m to cm", 123_400, symbol: "cm")
+}
+
+private func testQueryLimits() {
+    let combining = "a" + String(repeating: "\u{0301}", count: 2_000_000)
+    expect(combining.count == 1, "one grapheme")
+    var clamped = ""
+    expectFast("clamp a huge grapheme", limit: 2) { clamped = CommandBarQueryLimit.clamp(combining) }
+    expect(clamped.unicodeScalars.count <= CommandBarQueryLimit.maximumScalars, "scalar cap")
+    expect(clamped.utf8.count <= CommandBarQueryLimit.maximumBytes, "byte cap")
+    let emoji = String(repeating: "\u{1F600}", count: 1000)
+    expect(CommandBarQueryLimit.clamp(emoji).utf8.count <= CommandBarQueryLimit.maximumBytes, "four byte scalars are capped by bytes")
+    expect(CommandBarQueryLimit.clamp("safari") == "safari", "short queries pass unchanged")
+    expectFast("rank with a huge grapheme", limit: 1) {
+        let items = (0..<500).map { Item(title: "Item \($0)", keywords: ["keyword \($0)"]) }
+        _ = ranked(items, combining)
+    }
+    expectFast("calculator with a huge grapheme", limit: 1) { expectNoCalc(combining) }
+    expectFast("units with a huge grapheme", limit: 1) {
+        expect(CommandBarUnits.convert(combining + " km to mi", locale: posix) == nil, "huge unit input refused")
+    }
+}
+
+private func testDestructive() {
+    for title in ["Quit Safari", "Force Quit\u{2026}", "Log Out Anthony...", "Delete", "Move to Trash", "Empty Trash\u{2026}",
+                  "Erase", "Shut Down\u{2026}", "Restart\u{2026}", "Sign Out", "Close All", "Revert To Saved", "Clear History"] {
+        expect(CommandBarSafety.isDestructive(title), "\(title) is destructive")
+    }
+    for title in ["New Window", "Copy", "Paste", "Show Sidebar", "Quietly Save", "Deleted Items Folder View", "Save", ""] {
+        expect(!CommandBarSafety.isDestructive(title), "\(title) is not destructive")
+    }
+}
+
+private func testSelection() {
+    typealias Row = CommandBarSelection.Row
+    let safe = Row(id: "window:notes", isDefaultable: true)
+    let delete = Row(id: "menu:delete", isDefaultable: false)
+    let other = Row(id: "app:x", isDefaultable: true)
+    expect(CommandBarSelection.resolve(previousID: nil, rows: [delete, safe]) == safe.id, "a destructive top row is never the default")
+    expect(CommandBarSelection.resolve(previousID: safe.id, rows: [delete, other, safe]) == safe.id,
+           "a late result above the selection does not move it")
+    expect(CommandBarSelection.resolve(previousID: "gone", rows: [delete, other]) == other.id, "a vanished selection falls to the first safe row")
+    expect(CommandBarSelection.resolve(previousID: nil, rows: [delete]) == nil, "nothing is selected when every row is destructive")
+    expect(CommandBarSelection.resolve(previousID: delete.id, rows: [safe, delete]) == delete.id, "an explicit choice is kept")
+    expect(CommandBarSelection.resolve(previousID: nil, rows: []) == nil, "empty")
+}
+
+private func decodeRecency(_ json: String) -> CommandBarRecency? {
+    try? JSONDecoder().decode(CommandBarRecency.self, from: Data(json.utf8))
+}
+
+private func testRecencyValidation() {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    guard var hostile = decodeRecency("""
+    {"entries":{"app:min":{"count":-9223372036854775808,"lastUsed":0},
+                "app:max":{"count":9223372036854775807,"lastUsed":0},
+                "menu:com.x:File > Open Recent > Secret.pdf":{"count":3,"lastUsed":0},
+                "\(String(repeating: "k", count: 5000))":{"count":1,"lastUsed":0}}}
+    """) else {
+        expect(false, "hostile history should decode")
+        return
+    }
+    expect(hostile.entries["app:min"]?.count == 0, "negative count clamped")
+    expect(hostile.entries["app:max"]?.count == CommandBarRecency.maximumCount, "huge count clamped")
+    expect(!hostile.entries.keys.contains { $0.hasPrefix("menu:") }, "stored menu paths are dropped on load")
+    expect(hostile.entries.count == 2, "overlong key dropped")
+    expect(hostile.bonus(for: "app:min", now: now) >= 0, "bonus on a clamped minimum")
+    expect(hostile.bonus(for: "app:max", now: now) <= 200, "bonus on a clamped maximum")
+    hostile.record("app:max", at: now)
+    expect(hostile.entries["app:max"]?.count == CommandBarRecency.maximumCount, "saturating increment")
+    hostile.record("menu:anything", at: now)
+    expect(hostile.entries["menu:anything"] == nil, "menu keys are never recorded")
+    hostile.record(String(repeating: "x", count: 300), at: now)
+    expect(hostile.entries.count == 2, "overlong keys are never recorded")
+
+    let many = (0..<500).map { "\"app:\($0)\":{\"count\":1,\"lastUsed\":\($0)}" }.joined(separator: ",")
+    let capped = decodeRecency("{\"entries\":{\(many)}}")
+    expect(capped?.entries.count == CommandBarRecency.limit, "decoded history is capped at the limit")
+    expect(capped?.entries["app:499"] != nil && capped?.entries["app:0"] == nil, "the newest entries are the ones kept")
+
+    var roundTrip = CommandBarRecency()
+    roundTrip.record("app:com.apple.Safari", at: now)
+    let data = try? JSONEncoder().encode(roundTrip)
+    expect(data.flatMap { try? JSONDecoder().decode(CommandBarRecency.self, from: $0) } == roundTrip, "round trip keeps entries")
+}
+
+private func testFileFilter() {
+    let roots = ["/Users/me", "/Applications"]
+    let excluded = ["/Users/me/Library"]
+    let allowed = { CommandBarFileFilter.isAllowed(path: $0, roots: roots, excluded: excluded) }
+    expect(allowed("/Users/me/Documents/tax.pdf"), "a document at home")
+    expect(allowed("/Applications/Utilities/readme.txt"), "under Applications")
+    expect(!allowed("/Users/me/.ssh/id_rsa"), "hidden folder")
+    expect(!allowed("/Users/me/Documents/.secret"), "hidden file")
+    expect(!allowed("/Users/me/Library/Mail/x.emlx"), "excluded Library")
+    expect(!allowed("/Users/meanwhile/file.txt"), "a sibling with the same prefix")
+    expect(!allowed("/Users/other/file.txt"), "another account")
+    expect(!allowed("/Volumes/Share/file.txt"), "a mounted volume")
+    expect(!allowed("/Users/me/../other/file.txt"), "dot dot is refused")
+    expect(!allowed("relative/file.txt"), "relative path")
+}
+
 // MARK: - Run
 
 @main
@@ -282,6 +409,12 @@ enum CommandBarCoreTests {
         testHostileCalculator()
         testUnits()
         testRanking()
+        testNumberParsing()
+        testQueryLimits()
+        testDestructive()
+        testSelection()
+        testRecencyValidation()
+        testFileFilter()
 
         if failures == 0 {
             print("PASS: \(checks) checks")

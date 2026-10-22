@@ -46,16 +46,6 @@ nonisolated enum CommandBarNumberFormat {
         return formatter.string(from: NSNumber(value: normalized))
     }
 
-    /// True when the comma at `index` is followed by exactly three digits.
-    static func isGroupingComma(at index: Int, in characters: [Character]) -> Bool {
-        for offset in 1...3 {
-            let position = index + offset
-            guard position < characters.count, characters[position].isASCII, characters[position].isNumber else { return false }
-        }
-        let after = index + 4
-        return after >= characters.count || !(characters[after].isASCII && characters[after].isNumber)
-    }
-
     /// The value as plain ASCII, for copying back into a field.
     static func plain(_ value: Double) -> String {
         let rounded = significantRounded(value)
@@ -134,27 +124,55 @@ nonisolated enum CommandBarCalculator {
         case plus, minus, times, divide, power, percent, open, close
     }
 
+    /// What the bar shows for a calculation: an answer, or a note that a
+    /// number in it could be read two ways in this locale.
+    enum Evaluation: Equatable {
+        case result(Result)
+        case ambiguous
+    }
+
     static func evaluate(_ input: String, locale: Locale = .current) -> Result? {
-        guard let value = value(of: input),
-              let formatted = CommandBarNumberFormat.string(value, locale: locale) else { return nil }
-        return Result(value: value, formatted: formatted)
+        guard case .result(let result) = evaluation(of: input, locale: locale) else { return nil }
+        return result
     }
 
-    /// The numeric value, or nil when the input is not a complete,
-    /// finite calculation.
-    static func value(of input: String) -> Double? {
+    static func evaluation(of input: String, locale: Locale = .current) -> Evaluation? {
+        guard let checked = checkedValue(of: input, locale: locale) else { return nil }
+        if checked.ambiguous { return .ambiguous }
+        guard let formatted = CommandBarNumberFormat.string(checked.value, locale: locale) else { return nil }
+        return .result(Result(value: checked.value, formatted: formatted))
+    }
+
+    /// The numeric value, or nil when the input is not a complete, finite
+    /// calculation or one of its numbers is ambiguous in `locale`.
+    static func value(of input: String, locale: Locale = .current) -> Double? {
+        guard let checked = checkedValue(of: input, locale: locale), !checked.ambiguous else { return nil }
+        return checked.value
+    }
+
+    private static func checkedValue(of input: String, locale: Locale) -> (value: Double, ambiguous: Bool)? {
+        // Bounded before trimming, so a huge paste costs nothing.
+        guard input.utf8.count <= CommandBarQueryLimit.maximumBytes else { return nil }
         var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text.count <= maximumInputLength else { return nil }
+        guard !text.isEmpty, text.unicodeScalars.count <= maximumInputLength else { return nil }
         if text.hasSuffix("=") { text.removeLast() }
-        guard let tokens = tokenize(text), !tokens.isEmpty else { return nil }
-        var parser = Parser(tokens: tokens)
+        guard let scanned = scan(text, locale: locale), !scanned.tokens.isEmpty else { return nil }
+        var parser = Parser(tokens: scanned.tokens)
         guard let value = parser.parse(), parser.sawOperation, value.isFinite else { return nil }
-        return value == 0 ? 0 : value
+        return (value == 0 ? 0 : value, scanned.ambiguous)
     }
 
-    static func tokenize(_ text: String) -> [Token]? {
+    static func tokenize(_ text: String, locale: Locale = Locale(identifier: "en_US_POSIX")) -> [Token]? {
+        scan(text, locale: locale)?.tokens
+    }
+
+    /// Tokens, plus whether any number could be read two ways. An ambiguous
+    /// number still tokenizes (as the dot-decimal reading) so the caller can
+    /// tell "ambiguous math" from "not math at all".
+    private static func scan(_ text: String, locale: Locale) -> (tokens: [Token], ambiguous: Bool)? {
         let characters = Array(text)
         var tokens: [Token] = []
+        var ambiguous = false
         var index = 0
 
         while index < characters.count {
@@ -168,40 +186,38 @@ nonisolated enum CommandBarCalculator {
 
             if character.isASCII, character.isNumber || character == "." {
                 let start = index
-                var sawDot = false
-                var sawDigit = false
-                while index < characters.count {
-                    let c = characters[index]
-                    if c.isASCII, c.isNumber {
-                        sawDigit = true
-                    } else if c == "." {
-                        if sawDot { return nil }
-                        sawDot = true
-                    } else if c == "," {
-                        // A grouping comma (1,000) only. "1,5" is refused
-                        // rather than read as 15 where comma is the decimal mark.
-                        guard sawDigit, !sawDot, CommandBarNumberFormat.isGroupingComma(at: index, in: characters) else { return nil }
-                    } else {
-                        break
-                    }
+                while index < characters.count, CommandBarNumberLiteral.isLiteralCharacter(characters[index]) {
                     index += 1
                 }
+                guard index - start <= maximumNumberLength else { return nil }
+                let plain: String
+                switch CommandBarNumberLiteral.parse(String(characters[start..<index]), locale: locale) {
+                case .plain(let text):
+                    plain = text
+                case .ambiguous(let text):
+                    plain = text
+                    ambiguous = true
+                case .invalid:
+                    return nil
+                }
                 // Optional exponent: 1e5, 2.5E-3.
-                if index < characters.count, characters[index] == "e" || characters[index] == "E", sawDigit {
+                var exponent = ""
+                if index < characters.count, characters[index] == "e" || characters[index] == "E" {
                     var lookahead = index + 1
                     if lookahead < characters.count, characters[lookahead] == "+" || characters[lookahead] == "-" {
                         lookahead += 1
                     }
                     if lookahead < characters.count, characters[lookahead].isASCII, characters[lookahead].isNumber {
+                        let exponentStart = index
                         index = lookahead
                         while index < characters.count, characters[index].isASCII, characters[index].isNumber {
                             index += 1
                         }
+                        exponent = String(characters[exponentStart..<index])
                     }
                 }
-                guard sawDigit, index - start <= maximumNumberLength else { return nil }
-                let literal = String(characters[start..<index]).replacingOccurrences(of: ",", with: "")
-                guard let number = Double(literal), number.isFinite else { return nil }
+                guard index - start <= maximumNumberLength,
+                      let number = Double(plain + exponent), number.isFinite else { return nil }
                 tokens.append(.number(number))
                 continue
             }
@@ -244,7 +260,7 @@ nonisolated enum CommandBarCalculator {
             index += 1
         }
         guard tokens.count <= maximumTokens else { return nil }
-        return tokens
+        return (tokens, ambiguous)
     }
 
     /// Recursive descent. Every function either consumes a token or fails,
@@ -478,10 +494,22 @@ nonisolated enum CommandBarUnits {
         return map
     }()
 
+    enum Conversion: Equatable {
+        case result(Result)
+        case ambiguous
+    }
+
     static func convert(_ input: String, locale: Locale = .current) -> Result? {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !text.isEmpty, text.count <= maximumInputLength else { return nil }
-        let characters = Array(text)
+        guard case .result(let result) = conversion(of: input, locale: locale) else { return nil }
+        return result
+    }
+
+    static func conversion(of input: String, locale: Locale = .current) -> Conversion? {
+        // Length is checked before any trimming or case folding.
+        guard input.utf8.count <= CommandBarQueryLimit.maximumBytes else { return nil }
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.unicodeScalars.count <= maximumInputLength else { return nil }
+        let characters = Array(trimmed.lowercased())
 
         // Leading number, optionally signed: "-40", "2.5", "1,000".
         var index = 0
@@ -489,17 +517,21 @@ nonisolated enum CommandBarUnits {
             index += 1
         }
         let numberStart = index
-        while index < characters.count {
-            let c = characters[index]
-            if c == "," {
-                guard index > numberStart, CommandBarNumberFormat.isGroupingComma(at: index, in: characters) else { return nil }
-            } else if !(c.isASCII && c.isNumber) && c != "." {
-                break
-            }
+        while index < characters.count, CommandBarNumberLiteral.isLiteralCharacter(characters[index]) {
             index += 1
         }
         guard index > numberStart, index - numberStart <= 24 else { return nil }
-        var literal = String(characters[numberStart..<index]).replacingOccurrences(of: ",", with: "")
+        var literal: String
+        var ambiguous = false
+        switch CommandBarNumberLiteral.parse(String(characters[numberStart..<index]), locale: locale) {
+        case .plain(let text):
+            literal = text
+        case .ambiguous(let text):
+            literal = text
+            ambiguous = true
+        case .invalid:
+            return nil
+        }
         if numberStart > 0 { literal = "-" + literal }
         guard let value = Double(literal), value.isFinite, abs(value) <= maximumMagnitude else { return nil }
 
@@ -513,10 +545,161 @@ nonisolated enum CommandBarUnits {
               source.family == destination.family,
               type(of: source.unit) == type(of: destination.unit)
         else { return nil }
+        if ambiguous { return .ambiguous }
 
         let converted = Measurement(value: value, unit: source.unit).converted(to: destination.unit).value
         guard converted.isFinite, let formatted = CommandBarNumberFormat.string(converted, locale: locale) else { return nil }
-        return Result(value: converted, formatted: "\(formatted) \(destination.symbol)", unitSymbol: destination.symbol)
+        return .result(Result(value: converted, formatted: "\(formatted) \(destination.symbol)", unitSymbol: destination.symbol))
+    }
+}
+
+// MARK: - Number literals
+
+/// One strict reader for the numbers typed into the calculator and the
+/// converter. Grouping commas must form real groups (1,234,567) and never
+/// follow the decimal point. Where the comma is the decimal mark, "1,234"
+/// means one point two three four, so any comma is refused as ambiguous
+/// there, and so is a dot followed by exactly three digits (1.234), since the
+/// dot is those locales' grouping mark.
+nonisolated enum CommandBarNumberLiteral {
+    enum Outcome: Equatable {
+        /// ASCII digits with at most one dot, ready for Double().
+        case plain(String)
+        /// Readable two ways; carries the reading with a dot as the decimal mark.
+        case ambiguous(String)
+        case invalid
+    }
+
+    static func isLiteralCharacter(_ character: Character) -> Bool {
+        (character.isASCII && character.isNumber) || character == "." || character == ","
+    }
+
+    static func usesDecimalComma(_ locale: Locale) -> Bool {
+        locale.decimalSeparator == ","
+    }
+
+    static func parse(_ literal: String, locale: Locale) -> Outcome {
+        let characters = Array(literal)
+        guard !characters.isEmpty,
+              characters.allSatisfy(isLiteralCharacter),
+              characters.contains(where: { $0.isNumber }),
+              characters.filter({ $0 == "." }).count <= 1 else { return .invalid }
+
+        let dot = characters.firstIndex(of: ".")
+        let integer = dot.map { Array(characters[..<$0]) } ?? characters
+        let fraction = dot.map { Array(characters[($0 + 1)...]) } ?? []
+        // A grouping separator after the decimal point (1.2,345) is malformed.
+        guard !fraction.contains(",") else { return .invalid }
+
+        var ambiguous = false
+        if integer.contains(",") {
+            let groups = integer.split(separator: ",", omittingEmptySubsequences: false)
+            let isGrouping = groups.first.map { (1...3).contains($0.count) } == true
+                && groups.dropFirst().allSatisfy({ $0.count == 3 })
+            if usesDecimalComma(locale) {
+                // "1,5" is a decimal there, but the bar parses dots only, so
+                // it is flagged rather than guessed at.
+                if !isGrouping {
+                    guard groups.count == 2, dot == nil, groups.allSatisfy({ !$0.isEmpty }) else { return .invalid }
+                    return .ambiguous(String(groups[0]) + "." + String(groups[1]))
+                }
+                ambiguous = true
+            } else if !isGrouping {
+                return .invalid
+            }
+        } else if dot != nil, usesDecimalComma(locale),
+                  fraction.count == 3, (1...3).contains(integer.count), integer.first != "0" {
+            ambiguous = true
+        }
+
+        let digits = String(integer.filter { $0 != "," })
+        let plain = dot == nil ? digits : digits + "." + String(fraction)
+        return ambiguous ? .ambiguous(plain) : .plain(plain)
+    }
+}
+
+// MARK: - Query limits
+
+/// Caps what the bar will process, in Unicode scalars and UTF-8 bytes, before
+/// any trimming or folding. A single grapheme can hold millions of combining
+/// marks, so a character count alone bounds nothing.
+nonisolated enum CommandBarQueryLimit {
+    static let maximumScalars = 256
+    static let maximumBytes = 1024
+
+    static func clamp(_ text: String) -> String {
+        if text.utf8.count <= maximumBytes, text.unicodeScalars.count <= maximumScalars { return text }
+        var kept = String.UnicodeScalarView()
+        var bytes = 0
+        var count = 0
+        for scalar in text.unicodeScalars {
+            let size = scalar.value < 0x80 ? 1 : scalar.value < 0x800 ? 2 : scalar.value < 0x10000 ? 3 : 4
+            guard count < maximumScalars, bytes + size <= maximumBytes else { break }
+            kept.append(scalar)
+            bytes += size
+            count += 1
+        }
+        return String(kept)
+    }
+}
+
+// MARK: - Safety and selection
+
+/// Menu commands and actions that lose work or end a session. They are never
+/// selected by default and need a second Return. Matches English titles only.
+nonisolated enum CommandBarSafety {
+    static let destructivePhrases: [[String]] = [
+        ["quit"], ["force", "quit"], ["log", "out"], ["logout"], ["sign", "out"],
+        ["delete"], ["erase"], ["empty", "trash"], ["move", "to", "trash"], ["shut", "down"],
+        ["shutdown"], ["restart"], ["reboot"], ["remove"], ["discard"], ["uninstall"],
+        ["reset"], ["revert"], ["format"], ["wipe"], ["destroy"], ["purge"], ["terminate"],
+        ["kill"], ["close", "all"], ["clear"], ["overwrite"], ["replace", "all"],
+    ]
+
+    static func isDestructive(_ title: String) -> Bool {
+        let cleaned = title
+            .replacingOccurrences(of: "\u{2026}", with: " ")
+            .replacingOccurrences(of: "...", with: " ")
+        let words = CommandBarRanking.words(CommandBarRanking.normalized(String(cleaned.prefix(200)))).map(String.init)
+        guard !words.isEmpty else { return false }
+        return destructivePhrases.contains { phrase in
+            guard phrase.count <= words.count else { return false }
+            return (0...(words.count - phrase.count)).contains { start in
+                Array(words[start..<(start + phrase.count)]) == phrase
+            }
+        }
+    }
+}
+
+/// Selection follows a result's identity, not its row number, so results that
+/// arrive late can never slide a different action under the user's finger.
+nonisolated enum CommandBarSelection {
+    struct Row: Equatable {
+        let id: String
+        /// False for destructive rows and rows with nothing to run.
+        let isDefaultable: Bool
+    }
+
+    /// Keeps `previousID` while it is still listed; otherwise the first row
+    /// that is safe to select by default, or nil when there is none.
+    static func resolve(previousID: String?, rows: [Row]) -> String? {
+        if let previousID, rows.contains(where: { $0.id == previousID }) { return previousID }
+        return rows.first(where: \.isDefaultable)?.id
+    }
+}
+
+// MARK: - File results
+
+/// Which Spotlight hits the bar may show: under one of `roots`, outside every
+/// `excluded` folder, and with no hidden (dot) component anywhere in the path.
+nonisolated enum CommandBarFileFilter {
+    static func isAllowed(path: String, roots: [String], excluded: [String] = []) -> Bool {
+        func isInside(_ folder: String) -> Bool {
+            let prefix = folder.hasSuffix("/") ? folder : folder + "/"
+            return path == folder || path.hasPrefix(prefix)
+        }
+        guard path.hasPrefix("/"), roots.contains(where: isInside), !excluded.contains(where: isInside) else { return false }
+        return !path.split(separator: "/").contains { $0.hasPrefix(".") }
     }
 }
 
@@ -537,8 +720,25 @@ nonisolated enum CommandBarRanking {
         text.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
     }
 
+    /// The query clamped, folded and split once per keystroke, not once per
+    /// candidate and keyword.
+    struct PreparedQuery {
+        let text: String
+        let words: [Substring]
+
+        init(_ raw: String) {
+            let bounded = String(CommandBarQueryLimit.clamp(raw).prefix(CommandBarRanking.maximumQueryLength))
+            text = CommandBarRanking.normalized(bounded)
+            words = CommandBarRanking.words(text)
+        }
+    }
+
     static func matchScore(query rawQuery: String, text rawText: String) -> Int? {
-        let query = normalized(String(rawQuery.prefix(maximumQueryLength)))
+        matchScore(prepared: PreparedQuery(rawQuery), text: rawText)
+    }
+
+    static func matchScore(prepared: PreparedQuery, text rawText: String) -> Int? {
+        let query = prepared.text
         let text = normalized(rawText)
         guard !query.isEmpty, !text.isEmpty else { return nil }
 
@@ -547,7 +747,7 @@ nonisolated enum CommandBarRanking {
             return 800 + max(0, 50 - (text.count - query.count))
         }
         let textWords = words(text)
-        let queryWords = words(query)
+        let queryWords = prepared.words
         if textWords.contains(where: { $0.hasPrefix(query) }) { return 600 }
         if queryWords.count > 1,
            queryWords.allSatisfy({ queryWord in textWords.contains { $0.hasPrefix(queryWord) } }) {
@@ -565,9 +765,13 @@ nonisolated enum CommandBarRanking {
     /// The best of the title and its keywords; keywords count a little less
     /// so a real title match wins a tie.
     static func score(query: String, title: String, keywords: [String] = []) -> Int? {
-        var best = matchScore(query: query, text: title)
+        score(prepared: PreparedQuery(query), title: title, keywords: keywords)
+    }
+
+    static func score(prepared: PreparedQuery, title: String, keywords: [String] = []) -> Int? {
+        var best = matchScore(prepared: prepared, text: title)
         for keyword in keywords {
-            if let score = matchScore(query: query, text: keyword) {
+            if let score = matchScore(prepared: prepared, text: keyword) {
                 best = max(best ?? Int.min, score - 100)
             }
         }
@@ -605,6 +809,7 @@ nonisolated enum CommandBarRanking {
     ) -> [T] {
         guard limit > 0 else { return [] }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prepared = PreparedQuery(trimmed)
         var scored: [(item: T, score: Int, title: String)] = []
         scored.reserveCapacity(items.count)
         for item in items {
@@ -613,7 +818,7 @@ nonisolated enum CommandBarRanking {
             if trimmed.isEmpty {
                 guard bonus > 0 else { continue }
                 scored.append((item, bonus, itemTitle))
-            } else if let match = score(query: trimmed, title: itemTitle, keywords: keywords(item)) {
+            } else if let match = score(prepared: prepared, title: itemTitle, keywords: keywords(item)) {
                 scored.append((item, match + bonus + weight(item), itemTitle))
             }
         }
@@ -626,7 +831,8 @@ nonisolated enum CommandBarRanking {
 }
 
 /// How often and how recently each result was chosen. Keys are opaque
-/// strings like "app:com.apple.Safari". Bounded so it never grows forever.
+/// strings like "app:com.apple.Safari". Bounded so it never grows forever,
+/// and checked on load so a damaged or hand-edited store cannot trap.
 nonisolated struct CommandBarRecency: Codable, Equatable {
     struct Entry: Codable, Equatable {
         var count: Int
@@ -634,14 +840,47 @@ nonisolated struct CommandBarRecency: Codable, Equatable {
     }
 
     static let limit = 200
+    static let maximumCount = 1000
+    static let maximumKeyLength = 256
+    /// Earlier builds stored menu paths, which can hold document names.
+    static let droppedKeyPrefixes = ["menu:"]
 
     private(set) var entries: [String: Entry] = [:]
 
+    private enum CodingKeys: String, CodingKey {
+        case entries
+    }
+
     init() {}
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decodeIfPresent([String: Entry].self, forKey: .entries) ?? [:]
+        entries = Self.sanitized(raw)
+    }
+
+    static func isAcceptableKey(_ key: String) -> Bool {
+        !key.isEmpty && key.utf8.count <= maximumKeyLength && !droppedKeyPrefixes.contains(where: { key.hasPrefix($0) })
+    }
+
+    /// Valid keys only, counts clamped, dates finite, newest `limit` kept.
+    static func sanitized(_ raw: [String: Entry]) -> [String: Entry] {
+        var kept: [(key: String, entry: Entry)] = []
+        for (key, entry) in raw where isAcceptableKey(key) && entry.lastUsed.timeIntervalSinceReferenceDate.isFinite {
+            kept.append((key, Entry(count: min(max(entry.count, 0), maximumCount), lastUsed: entry.lastUsed)))
+        }
+        if kept.count > limit {
+            kept.sort { $0.entry.lastUsed > $1.entry.lastUsed }
+            kept = Array(kept.prefix(limit))
+        }
+        return Dictionary(kept.map { ($0.key, $0.entry) }, uniquingKeysWith: { first, _ in first })
+    }
+
     mutating func record(_ key: String, at date: Date) {
+        guard Self.isAcceptableKey(key) else { return }
         var entry = entries[key] ?? Entry(count: 0, lastUsed: date)
-        entry.count = min(entry.count + 1, 1000)
+        // Clamped before adding, so even a stored Int.max cannot overflow.
+        entry.count = min(max(entry.count, 0), Self.maximumCount - 1) + 1
         entry.lastUsed = date
         entries[key] = entry
         if entries.count > Self.limit {
@@ -655,9 +894,10 @@ nonisolated struct CommandBarRecency: Codable, Equatable {
     /// text match still beats a weak one that was used yesterday.
     func bonus(for key: String, now: Date) -> Int {
         guard let entry = entries[key] else { return 0 }
-        let frequency = min(entry.count, 10) * 10
+        let frequency = min(max(entry.count, 0), 10) * 10
         let hours = max(0, now.timeIntervalSince(entry.lastUsed) / 3600)
-        let freshness = Int(100 / (1 + hours / 24))
-        return frequency + max(0, min(100, freshness))
+        let freshness = 100 / (1 + hours / 24)
+        guard freshness.isFinite else { return frequency }
+        return frequency + Int(max(0, min(100, freshness)))
     }
 }

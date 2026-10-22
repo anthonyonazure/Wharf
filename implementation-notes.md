@@ -2076,3 +2076,8 @@ a refusal.
   pure test; it is covered by the build and by reading.
 - Whether `CGEventSource.keyState` reads stay cheap on every Mac; modifier
   changes are rare, so the cost is bounded either way.
+- The held-key scan trusts the hardware key table. A driver or virtual
+  keyboard that left a key reading as down would stop every Win key tap;
+  the status file names the cause only when the release is what stops it.
+- A settings change resets the retry count, so after the four retries run
+  out, changing the Win tap setting starts a fresh round.

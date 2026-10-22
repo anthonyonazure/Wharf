@@ -278,6 +278,8 @@ final class WindowsKeyboardService {
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
+                // A settings change earns a fresh round of retries.
+                self.retryAttempt = 0
                 self.syncTapState()
                 self.observePreference()
             }

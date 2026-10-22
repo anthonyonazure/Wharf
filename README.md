@@ -173,7 +173,8 @@ Some planned behavior is informed by
 which solved per-window taskbar cards and blink-free fullscreen transitions.
 
 Window snapping (halves, thirds, quarters, sixths, corners, display moves and
-restore) is adapted from **[Vorssaint](https://github.com/vorssaint/vorssaint-utils)**
+restore), green button maximize, quit on close, and Command-Q and Command-W
+protection are adapted from **[Vorssaint](https://github.com/vorssaint/vorssaint-utils)**
 (GPL-3.0).
 
 Licensed under the [GNU General Public License v3.0](LICENSE). Because Wharf derives

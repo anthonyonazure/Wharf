@@ -1936,6 +1936,73 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         windowSnapEnabled = DefaultValues.windowSnapEnabled
         windowSnapGap = DefaultValues.windowSnapGap
         windowSnapShortcutOverrides = DefaultValues.windowSnapShortcutOverrides
+        resetWindowSnapDragToDefaults()
+    }
+
+    /// Snap a window by dragging it to a screen edge or corner. See
+    /// `WindowSnapDragService`.
+    var windowSnapEdgeDragEnabled: Bool {
+        didSet {
+            guard windowSnapEdgeDragEnabled != oldValue else { return }
+            defaults.set(windowSnapEdgeDragEnabled, forKey: Keys.windowSnapDragEdgeEnabled)
+        }
+    }
+
+    /// Snap a window by dragging it with `windowSnapDragModifiers` held.
+    var windowSnapModifierDragEnabled: Bool {
+        didSet {
+            guard windowSnapModifierDragEnabled != oldValue else { return }
+            defaults.set(windowSnapModifierDragEnabled, forKey: Keys.windowSnapDragModifierEnabled)
+        }
+    }
+
+    /// Points from a screen edge that count as reaching it. Clamped to
+    /// `WindowSnapDragZones.hitZoneRange`.
+    var windowSnapDragHitZone: Double {
+        didSet {
+            let clamped = Double(WindowSnapDragZones.clampedHitZone(windowSnapDragHitZone))
+            if clamped != windowSnapDragHitZone {
+                windowSnapDragHitZone = clamped
+                return
+            }
+            guard windowSnapDragHitZone != oldValue else { return }
+            defaults.set(windowSnapDragHitZone, forKey: Keys.windowSnapDragHitZone)
+        }
+    }
+
+    /// Seconds the pointer rests in an edge zone before the preview shows.
+    /// Clamped to `WindowSnapDragZones.dwellRange`.
+    var windowSnapDragDwell: Double {
+        didSet {
+            let clamped = WindowSnapDragZones.clampedDwell(windowSnapDragDwell)
+            if clamped != windowSnapDragDwell {
+                windowSnapDragDwell = clamped
+                return
+            }
+            guard windowSnapDragDwell != oldValue else { return }
+            defaults.set(windowSnapDragDwell, forKey: Keys.windowSnapDragDwell)
+        }
+    }
+
+    /// The modifier set for modifier drags. Always usable: an unusable value
+    /// falls back to Control Option.
+    var windowSnapDragModifiers: WindowSnapDragModifiers {
+        didSet {
+            if !windowSnapDragModifiers.isUsable {
+                windowSnapDragModifiers = .defaultValue
+                return
+            }
+            guard windowSnapDragModifiers != oldValue else { return }
+            defaults.set(Int(windowSnapDragModifiers.rawValue), forKey: Keys.windowSnapDragModifiers)
+        }
+    }
+
+    func resetWindowSnapDragToDefaults() {
+        windowSnapEdgeDragEnabled = DefaultValues.windowSnapEdgeDragEnabled
+        windowSnapModifierDragEnabled = DefaultValues.windowSnapModifierDragEnabled
+        windowSnapDragHitZone = DefaultValues.windowSnapDragHitZone
+        windowSnapDragDwell = DefaultValues.windowSnapDragDwell
+        windowSnapDragModifiers = DefaultValues.windowSnapDragModifiers
     }
 
     /// Whether running apps show their notification badge (the red count,
@@ -3829,6 +3896,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let windowSnapEnabled = "wharf.windowSnapEnabled"
         static let windowSnapGap = "wharf.windowSnapGap"
         static let windowSnapShortcuts = "wharf.windowSnapShortcuts"
+        static let windowSnapDragEdgeEnabled = "wharf.windowSnapDragEdgeEnabled"
+        static let windowSnapDragModifierEnabled = "wharf.windowSnapDragModifierEnabled"
+        static let windowSnapDragHitZone = "wharf.windowSnapDragHitZone"
+        static let windowSnapDragDwell = "wharf.windowSnapDragDwell"
+        static let windowSnapDragModifiers = "wharf.windowSnapDragModifiers"
         static let showsAppBadges = "docky.showsAppBadges"
         static let folderBadgeMode = "docky.folderBadgeMode"
         static let folderBadgePreviewStyle = "docky.folderBadgePreviewStyle"
@@ -3963,6 +4035,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let windowSnapEnabled = true
         static let windowSnapGap: Double = 0
         static let windowSnapShortcutOverrides: [String: KeyboardShortcut] = [:]
+        static let windowSnapEdgeDragEnabled = false
+        static let windowSnapModifierDragEnabled = false
+        static let windowSnapDragHitZone: Double = WindowSnapDragZones.defaultHitZone
+        static let windowSnapDragDwell: Double = WindowSnapDragZones.defaultDwell
+        static let windowSnapDragModifiers: WindowSnapDragModifiers = .defaultValue
         /// Terminals, where Control keeps its Unix meaning.
         static let windowsKeyboardExcludedBundleIDs: [String] = [
             "com.apple.Terminal",
@@ -4121,6 +4198,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         let storedWindowSnapEnabled = defaults.object(forKey: Keys.windowSnapEnabled) as? Bool
         let storedWindowSnapGap = defaults.object(forKey: Keys.windowSnapGap) as? Double
         let storedWindowSnapShortcuts = defaults.data(forKey: Keys.windowSnapShortcuts)
+        let storedWindowSnapDragEdgeEnabled = defaults.object(forKey: Keys.windowSnapDragEdgeEnabled) as? Bool
+        let storedWindowSnapDragModifierEnabled = defaults.object(forKey: Keys.windowSnapDragModifierEnabled) as? Bool
+        let storedWindowSnapDragHitZone = defaults.object(forKey: Keys.windowSnapDragHitZone) as? Double
+        let storedWindowSnapDragDwell = defaults.object(forKey: Keys.windowSnapDragDwell) as? Double
+        let storedWindowSnapDragModifiers = defaults.object(forKey: Keys.windowSnapDragModifiers) as? Int
         let storedShowsAppBadges = defaults.object(forKey: Keys.showsAppBadges) as? Bool
         let storedFolderBadgeMode = defaults.string(forKey: Keys.folderBadgeMode)
         let storedFolderBadgePreviewStyle = defaults.string(forKey: Keys.folderBadgePreviewStyle)
@@ -4262,6 +4344,16 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.windowSnapShortcutOverrides = storedWindowSnapShortcuts
             .flatMap { try? JSONDecoder().decode([String: KeyboardShortcut].self, from: $0) }
             ?? DefaultValues.windowSnapShortcutOverrides
+        self.windowSnapEdgeDragEnabled = storedWindowSnapDragEdgeEnabled ?? DefaultValues.windowSnapEdgeDragEnabled
+        self.windowSnapModifierDragEnabled = storedWindowSnapDragModifierEnabled
+            ?? DefaultValues.windowSnapModifierDragEnabled
+        self.windowSnapDragHitZone = Double(WindowSnapDragZones.clampedHitZone(
+            storedWindowSnapDragHitZone ?? DefaultValues.windowSnapDragHitZone
+        ))
+        self.windowSnapDragDwell = WindowSnapDragZones.clampedDwell(
+            storedWindowSnapDragDwell ?? DefaultValues.windowSnapDragDwell
+        )
+        self.windowSnapDragModifiers = WindowSnapDragModifiers(storedValue: storedWindowSnapDragModifiers)
         self.showsAppBadges = storedShowsAppBadges ?? DefaultValues.showsAppBadges
         self.folderBadgeMode = storedFolderBadgeMode
             .flatMap(FolderBadgeMode.init(rawValue:))

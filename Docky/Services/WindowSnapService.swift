@@ -50,15 +50,18 @@ final class WindowSnapService {
             self?.registerHotKeys()
         }
         .store(in: &cancellables)
+        WindowSnapDragService.shared.start()
     }
 
     // MARK: - Snapping
 
     /// Applies `action` to `window`, or to the frontmost window when nil.
+    /// `screen` picks the display to tile on (a drag names the one under the
+    /// pointer); nil means the display the window overlaps most.
     /// Returns false when there is no window, no permission, or nothing to do
     /// (Restore with no history, a display move with one display).
     @discardableResult
-    func perform(_ action: WindowSnapAction, on window: AppWindow? = nil) -> Bool {
+    func perform(_ action: WindowSnapAction, on window: AppWindow? = nil, screen: NSScreen? = nil) -> Bool {
         guard AXIsProcessTrusted() else {
             PermissionsService.shared.presentPermissionAlert(for: .accessibility, actionTitle: "snap windows")
             return false
@@ -70,7 +73,8 @@ final class WindowSnapService {
 
         let current = WindowSnapGeometry.flipY(axFrame, primaryHeight: primaryHeight)
         let screens = NSScreen.screens
-        guard let screenIndex = WindowSnapGeometry.indexOfLargestOverlap(current, in: screens.map(\.frame))
+        guard let screenIndex = screen.flatMap({ screens.firstIndex(of: $0) })
+                ?? WindowSnapGeometry.indexOfLargestOverlap(current, in: screens.map(\.frame))
                 ?? NSScreen.main.flatMap({ screens.firstIndex(of: $0) })
         else { return false }
         let area = usableArea(of: screens[screenIndex])

@@ -357,3 +357,99 @@ never sees it.
   window under the pointer instead.
 - Hot keys are released while the pane records (`isRecordingShortcut`); a drag
   monitor should respect `windowSnapEnabled` the same way.
+
+## 2026-10-22, Stage 2: drag triggers for window snapping
+
+Two ways to snap with the mouse, both inside the existing Window Snapping
+pane under a new "Drag Triggers" section, both off by default, both inert
+while `windowSnapEnabled` is off. Adapted from Vorssaint's edge snapping
+(`WindowGestureSupport.swift`, `WindowLayoutService.swift`). Files:
+
+- `Docky/Services/WindowSnapDragZones.swift`: pure logic (Foundation and
+  CoreGraphics only). Pointer to edge action (`edgeHit`), pointer to modifier
+  zone (`modifierAction`, `modifierZones`), drag classification (`classify`,
+  `startsAtResizeHandle`), the dwell (`WindowSnapDragDwell`), pointer speed
+  (`WindowSnapDragPointerTrail`), the modifier set
+  (`WindowSnapDragModifiers`) and the macOS tiling check.
+- `Docky/Services/WindowSnapDragService.swift`: global NSEvent monitors
+  (listen-only), the AX hit test, the drag state machine, the snap on release.
+  Started from `WindowSnapService.start()`, so `AppDelegate.swift` is untouched.
+- `Docky/Views/WindowSnapDragOverlay.swift`: click-through panel that draws
+  the preview rect and, for a modifier drag, the zone map.
+- `Docky/Views/SettingsWindow/WindowSnapDragSettingsSection.swift`: the
+  section, inserted with one line into `WindowSnappingSettingsView`.
+- `WindowRegistry.window(for:pid:)`: maps the AX window under the pointer to
+  an `AppWindow`.
+- `WindowSnapService.perform(_:on:screen:)`: new optional `screen`, default
+  nil keeps the Stage 1 behavior; the hot key path is unchanged.
+- Prefs (all `wharf.windowSnapDrag*`): `EdgeEnabled` (off), `ModifierEnabled`
+  (off), `HitZone` (12 pt, 2 to 40), `Dwell` (0.15 s, 0 to 1), `Modifiers`
+  (Control Option, stored as the NSEvent flag bits). Reset Window Snapping
+  also resets these.
+
+How a drag is recognized: on mouse down the AX element under the pointer is
+walked up to its window; Wharf's own process, full-screen windows and presses
+on a resize border are skipped. After 6 points of travel the window's live
+frame is compared with the pointer: only when the window follows the pointer
+(same direction, similar distance, size unchanged or restored) is it a window
+move. A content drag is dropped after 80 points with the window still, a
+resize as soon as an edge stays anchored. This is what makes it "the window
+being dragged" by its title bar, without guessing title bar heights.
+
+Edge mapping: left and right edges are halves, top edge maximize, bottom edge
+bottom half, corners the quarters. The top edge starts at the bottom of the
+menu bar. Corners reach 18 percent along each edge (96 to 180 points across,
+80 to 160 points down). An edge shared with another display only counts while
+the pointer moves across it slower than 400 points per second, so a window
+can still be dragged to the next display. The preview appears after the
+dwell; the window snaps on the display the pointer chose.
+
+Modifier zones over the usable area (dock strip and menu bar excluded):
+middle band left half, left third, center third, right third, right half
+(columns at 20 percent steps); top band top-left quarter, top half,
+top-right quarter; bottom band the same for the bottom (rows at 25 and 75
+percent). The overlay shows all zones, the lit one, and the exact target.
+
+Run the zone checks with `scripts/test-snap-zones.sh` (101 checks).
+
+### Deviations
+
+- **Listen-only, so macOS tiling is warned about, not suppressed.** Vorssaint
+  uses an active event tap to nudge the pointer off the top row so the
+  system's top-edge window overview does not open. Wharf only observes
+  events, as the brief asked. When macOS's own edge tiling is on, the pane
+  shows an orange line and a button to Desktop & Dock settings.
+- **No AX messaging timeout.** Setting one on the system-wide element would
+  shorten every AX call Wharf makes, not just the drag hit test, so it is left
+  at the default. A hung app could stall a click for that default timeout
+  while a drag trigger is on.
+- **Restore after a drag snap returns to the drop spot,** at the window's
+  pre-drag size, not to where the drag started: `perform` records the frame
+  at release.
+- **Modifiers can be pressed after the drag starts.** Holding Control before
+  the press turns it into a right click in many apps, so the window may never
+  move. The pane says so.
+- **The modifier zone grid is Wharf's own design.** Vorssaint has no
+  modifier zone overlay; its edge zones are configurable per part, which was
+  not ported.
+- **Escape cancels a pending snap** (not in the brief); it needs the global
+  key monitor, which is why `.keyDown` is in the monitor mask.
+- **Not ported:** Vorssaint's per-edge zone editor, split edges, and its
+  top-edge pointer nudge.
+
+### Unverified
+
+- Nothing was run against a real window, for the same reason as Stage 1: a
+  second Wharf would put a second set of docks on screen. No drag, preview,
+  zone map or snap has been seen.
+- Whether title bar drags of other apps deliver `leftMouseDragged` to a
+  global NSEvent monitor on this macOS (Rectangle relies on it).
+- Whether adding `.keyDown` to the global mask raises an Input Monitoring
+  prompt when a switch is turned on.
+- The overlay panel level (`.floating`) against the dragged window and
+  against Wharf's dock.
+- The per-click cost of the AX hit test while a switch is on.
+- Apps that draw their own title bar (Chrome tabs, Electron) were not tried;
+  the follow-the-pointer test should cover them.
+- The macOS tiling warning reads `com.apple.WindowManager` defaults; whether
+  those keys are still the ones macOS 27 uses was not checked.

@@ -12,3 +12,11 @@ xcrun swiftc -O \
     "$ROOT/Tests/FocusAndWinTap/FocusAndWinTapTests.swift" \
     -o "$OUT"
 "$OUT"
+
+# Code review chunk 2 safety checks (focus follows mouse, fixed Space order).
+xcrun swiftc -O \
+    "$ROOT/Docky/Services/FocusAndWinTapLogic.swift" \
+    "$ROOT/Docky/Services/FocusAndSpacesSafetyLogic.swift" \
+    "$ROOT/Tests/FocusAndWinTap/FocusSpacesSafetyTests.swift" \
+    -o "$OUT-safety"
+"$OUT-safety"

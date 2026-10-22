@@ -29,6 +29,12 @@ final class BehaviorExtrasPreferences {
         static let spacesOrderPhase = "wharf.spacesOrder.phase"
         /// Set before Wharf restarts the Dock, cleared once it is back.
         static let spacesOrderDockRestartPending = "wharf.spacesOrder.dockRestartPending"
+        /// The Dock process IDs Wharf asked to quit, when it asked, and how
+        /// many restarts this change has cost so far (across launches), so a
+        /// later launch compares instead of restarting the Dock blindly.
+        static let spacesOrderDockRestartPIDs = "wharf.spacesOrder.dockRestartPIDs"
+        static let spacesOrderDockRestartRequestedAt = "wharf.spacesOrder.dockRestartRequestedAt"
+        static let spacesOrderDockRestartAttempts = "wharf.spacesOrder.dockRestartAttempts"
         static let winTapAction = "wharf.windowsKeyboardWinTap.action"
         static let snipInExcludedApps = "wharf.windowsKeyboardSnip.inExcludedApps"
     }
@@ -109,6 +115,28 @@ final class BehaviorExtrasPreferences {
     @ObservationIgnored var spacesOrderDockRestartPending: Bool {
         get { defaults.bool(forKey: Keys.spacesOrderDockRestartPending) }
         set { defaults.set(newValue, forKey: Keys.spacesOrderDockRestartPending) }
+    }
+
+    @ObservationIgnored var spacesOrderDockRestartPIDs: Set<pid_t> {
+        get { Set((defaults.array(forKey: Keys.spacesOrderDockRestartPIDs) as? [Int] ?? []).map { pid_t($0) }) }
+        set { defaults.set(newValue.map { Int($0) }.sorted(), forKey: Keys.spacesOrderDockRestartPIDs) }
+    }
+
+    /// Seconds since 1970, or nil when no restart is recorded.
+    @ObservationIgnored var spacesOrderDockRestartRequestedAt: Date? {
+        get { (defaults.object(forKey: Keys.spacesOrderDockRestartRequestedAt) as? Double).map(Date.init(timeIntervalSince1970:)) }
+        set {
+            if let newValue {
+                defaults.set(newValue.timeIntervalSince1970, forKey: Keys.spacesOrderDockRestartRequestedAt)
+            } else {
+                defaults.removeObject(forKey: Keys.spacesOrderDockRestartRequestedAt)
+            }
+        }
+    }
+
+    @ObservationIgnored var spacesOrderDockRestartAttempts: Int {
+        get { defaults.integer(forKey: Keys.spacesOrderDockRestartAttempts) }
+        set { defaults.set(newValue, forKey: Keys.spacesOrderDockRestartAttempts) }
     }
 
     /// Back to defaults, for Reset Behavior and the full reset. Fixed Space

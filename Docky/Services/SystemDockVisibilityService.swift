@@ -155,9 +155,9 @@ final class SystemDockVisibilityService {
     }
 
     private func restartDock() {
-        NSRunningApplication
-            .runningApplications(withBundleIdentifier: "com.apple.dock")
-            .forEach { $0.forceTerminate() }
+        // Shared with Fixed Space order, so the two never restart the Dock
+        // twice in a row (see DockRestartGate).
+        DockRestartGate.shared.restart(reason: "system Dock visibility")
     }
 
     private var stateFileURL: URL? {

@@ -40,6 +40,11 @@ struct FocusFollowsMouseSettingsView: View {
                     if preferences.focusFollowsMouseEnabled, preferences.focusFollowsMouseDisplays.isEmpty {
                         Text("No display is turned on below, so nothing happens yet.")
                             .foregroundStyle(.orange)
+                    } else if preferences.focusFollowsMouseEnabled,
+                              !FocusDisplaySelection.hasConnectedMatch(
+                                saved: preferences.focusFollowsMouseDisplays, connected: screens.map(\.key)) {
+                        Text("None of the displays turned on below is connected, so nothing happens until one is.")
+                            .foregroundStyle(.orange)
                     }
                 }
                 .padding(.vertical, 4)
@@ -79,10 +84,27 @@ struct FocusFollowsMouseSettingsView: View {
                 ForEach(screens) { screen in
                     Toggle(screen.name, isOn: displayBinding(for: screen.key))
                 }
+                // Saved displays that are unplugged now. They are kept so the
+                // feature comes back when the display does, and shown so they
+                // can be removed by hand; nothing is pruned silently.
+                ForEach(disconnectedKeys, id: \.self) { key in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Display not connected")
+                            Text(key)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Remove") {
+                            preferences.focusFollowsMouseDisplays.removeAll { $0 == key }
+                        }
+                    }
+                }
             } header: {
                 Text("Displays")
             } footer: {
-                Text("Off for every display until you turn one on, so a shared desk keeps macOS's click to focus where you want it.")
+                Text("Off for every display until you turn one on, so a shared desk keeps macOS's click to focus where you want it. A display that is turned on but not connected stays on the list and works again when you plug it back in; it alone does not keep Focus Follows Mouse running.")
                     .foregroundStyle(.secondary)
             }
             .disabled(!preferences.focusFollowsMouseEnabled)
@@ -104,6 +126,10 @@ struct FocusFollowsMouseSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             screens = ScreenChoice.current()
         }
+    }
+
+    private var disconnectedKeys: [String] {
+        FocusDisplaySelection.disconnected(saved: preferences.focusFollowsMouseDisplays, connected: screens.map(\.key))
     }
 
     private func displayBinding(for key: String) -> Binding<Bool> {

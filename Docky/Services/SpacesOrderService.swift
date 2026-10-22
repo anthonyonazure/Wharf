@@ -10,50 +10,85 @@
 //
 //  Adapted from Vorssaint's SpacesOrderHold (vorssaint/vorssaint-utils,
 //  GPL-3.0), including the idea of its Dock restart journal. The decisions
-//  live in FocusAndWinTapLogic.swift (SpacesOrderPlan).
+//  live in FocusAndWinTapLogic.swift (SpacesOrderPlan) and
+//  FocusAndSpacesSafetyLogic.swift (SpacesOrderRunner, DockRestartPlan).
 //
 //  Order of writes, so a crash at any point can be finished or undone on the
-//  next launch: the journal (what to put back, and a pending phase) is saved,
-//  flushed to disk and read back first; only then is the Dock preference
-//  written, flushed and read back; only then is the journal marked held (or,
-//  on release, cleared). A Dock restart is recorded before it is attempted
-//  and cleared only when the Dock is seen launching again.
+//  next launch: the journal (what to put back, and a pending phase) is saved
+//  and confirmed first; only then is the Dock preference written and read
+//  back; only then is the journal marked held (or, on release, cleared). A
+//  failure never turns the user's switch off: it is shown in Settings and
+//  tried again a few times, further apart each time. A Dock restart is
+//  recorded with the Dock's process IDs, so a later launch restarts the Dock
+//  only when that same Dock is still running, and only a few times in all.
 //
 
 import AppKit
 import Foundation
+import Observation
 
+@Observable
 final class SpacesOrderService {
     static let shared = SpacesOrderService()
 
-    private let preferences = BehaviorExtrasPreferences.shared
-    private static let domain = SpacesOrderPlan.dockDomain as CFString
-    private static let key = SpacesOrderPlan.preferenceKey as CFString
-    private static let systemSettingsBundleID = "com.apple.systempreferences"
-    private static let maximumRestartAttempts = 3
+    // What Settings shows.
 
-    private var restartAttempts = 0
-    private var observers: [NSObjectProtocol] = []
+    /// Whether Wharf may write the Dock's value at all.
+    private(set) var availability: SpacesOrderAvailability = .available
+    /// The last change that did not take, while it is being retried.
+    private(set) var lastFailure: SpacesOrderFailure?
+    /// The retries ran out; the next launch, Dock start or toggle tries again.
+    private(set) var retriesExhausted = false
+    /// The switch is off but the old value is not back yet (journal kept).
+    private(set) var restorePending = false
+    /// The Dock did not restart after several attempts.
+    private(set) var dockRestartGaveUp = false
+
+    @ObservationIgnored private let preferences = BehaviorExtrasPreferences.shared
+    @ObservationIgnored private static let domain = SpacesOrderPlan.dockDomain as CFString
+    @ObservationIgnored private static let key = SpacesOrderPlan.preferenceKey as CFString
+    @ObservationIgnored private static let systemSettingsBundleID = "com.apple.systempreferences"
+    /// How long after a restart the Dock is checked for a new process.
+    @ObservationIgnored private static let restartCheckDelay: TimeInterval = 5
+
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var retryAttempt = 0
+    @ObservationIgnored private var retryWork: DispatchWorkItem?
+    @ObservationIgnored private var restartedDuringApply = false
 
     private init() {}
 
     func start() {
         observePreference()
         observeExternalChanges()
-        // Read before `apply`, which may restart the Dock itself and set it.
-        let restartWasPending = preferences.spacesOrderDockRestartPending
+        // Decide about a restart recorded by an earlier run before `apply`,
+        // which may record a new one.
+        let owed = launchRestartDecision()
+        switch owed {
+        case .clear:
+            clearRestartRecord()
+        case .giveUp:
+            giveUpRestart()
+        case .nothing, .restart:
+            break
+        }
+        restartedDuringApply = false
         apply()
-        if restartWasPending, restartAttempts == 0 {
-            // The last run changed the preference but never saw the Dock
-            // come back, so it may still be using the old value.
+        if owed == .restart, !restartedDuringApply {
+            // The last run changed the preference and the Dock it asked to
+            // quit is still the one running, so it may still use the old value.
             restartDock()
         }
     }
 
-    /// True when a management profile forces the preference, so Wharf
-    /// cannot change it. The settings switch says so.
-    var isManaged: Bool {
-        CFPreferencesAppValueIsForced(Self.key, Self.domain)
+    /// Reads the Dock's value again for Settings, which calls this when the
+    /// section appears. Also runs on every `apply`.
+    func refreshStatus() {
+        CFPreferencesAppSynchronize(Self.domain)
+        availability = SpacesOrderAvailability.from(
+            raw: CFPreferencesCopyAppValue(Self.key, Self.domain),
+            isForced: CFPreferencesAppValueIsForced(Self.key, Self.domain))
+        restorePending = !preferences.spacesOrderFixed && preferences.spacesOrderJournal != nil
     }
 
     private func observePreference() {
@@ -61,8 +96,14 @@ final class SpacesOrderService {
             _ = preferences.spacesOrderFixed
         } onChange: { [weak self] in
             DispatchQueue.main.async {
-                self?.apply()
-                self?.observePreference()
+                guard let self else { return }
+                // Registered again before `apply`, so a change `apply` makes
+                // itself (letting go) runs the step again too.
+                self.observePreference()
+                // A toggle is a fresh start for the retries.
+                self.retryAttempt = 0
+                self.retriesExhausted = false
+                self.apply()
             }
         }
     }
@@ -77,8 +118,9 @@ final class SpacesOrderService {
             forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let self, Self.bundleID(in: note) == SpacesOrderPlan.dockDomain else { return }
-            self.preferences.spacesOrderDockRestartPending = false
-            self.restartAttempts = 0
+            self.clearRestartRecord()
+            self.retryAttempt = 0
+            self.retriesExhausted = false
             self.apply()
         })
         for name in [NSWorkspace.didDeactivateApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
@@ -97,7 +139,17 @@ final class SpacesOrderService {
         CFPreferencesAppSynchronize(Self.domain)
         return SpacesRearrangeSetting.from(
             raw: CFPreferencesCopyAppValue(Self.key, Self.domain),
-            isForced: isManaged
+            isForced: CFPreferencesAppValueIsForced(Self.key, Self.domain)
+        )
+    }
+
+    private var runner: SpacesOrderRunner {
+        SpacesOrderRunner(
+            journal: { [preferences] in preferences.spacesOrderJournal },
+            saveJournal: { [weak self] in self?.saveJournal($0) ?? false },
+            current: { [weak self] in self?.currentSetting() ?? .unsupported },
+            writeDock: { [weak self] in self?.writeDock($0) ?? false },
+            restartDock: { [weak self] in self?.restartDock() }
         )
     }
 
@@ -105,72 +157,55 @@ final class SpacesOrderService {
     /// which is how a change the user made in System Settings while Wharf was
     /// quit, or a change cut off by a crash, gets noticed.
     private func apply() {
-        let step = SpacesOrderPlan.step(
-            wanted: preferences.spacesOrderFixed,
-            current: currentSetting(),
-            journal: preferences.spacesOrderJournal
-        )
-        switch step {
-        case .none:
-            break
-        case let .hold(restore):
-            hold(restore: restore)
-        case .confirmHold:
-            if let journal = preferences.spacesOrderJournal {
-                saveJournal(SpacesOrderJournal(restore: journal.restore, phase: .held))
-            }
-        case .remember:
-            saveJournal(SpacesOrderJournal(restore: SpacesOrderPlan.restoreOff, phase: .held))
-        case let .release(removeKey):
-            release(removeKey: removeKey)
-        case .forget:
-            saveJournal(nil)
+        retryWork?.cancel()
+        retryWork = nil
+        let outcome = runner.run(wanted: preferences.spacesOrderFixed)
+        switch outcome {
+        case .done:
+            lastFailure = nil
+            retryAttempt = 0
+            retriesExhausted = false
         case .letGo:
-            // Their choice stands; the switch follows it.
-            saveJournal(nil)
+            // Their choice stands; the switch follows it. The observation
+            // runs `apply` once more, which then finds nothing to do.
+            lastFailure = nil
             preferences.spacesOrderFixed = false
+        case let .failed(failure):
+            // The user's choice is kept as it is: no silent switch flip.
+            lastFailure = failure
+            NSLog("[Wharf] Fixed Space order: \(failure); keeping the setting and trying again later.")
+            scheduleRetry()
         }
+        refreshStatus()
     }
 
-    private func hold(restore: String) {
-        guard saveJournal(SpacesOrderJournal(restore: restore, phase: .pendingHold)) else {
-            // Without a durable record of what to put back, the Dock is not
-            // touched at all.
-            NSLog("[Wharf] Fixed Space order: could not save the restore record; leaving the Dock alone.")
-            preferences.spacesOrderFixed = false
+    private func scheduleRetry() {
+        retryAttempt += 1
+        guard let delay = SpacesOrderRetryPolicy.delay(forAttempt: retryAttempt) else {
+            retriesExhausted = true
+            NSLog("[Wharf] Fixed Space order: retries used up; trying again at the next launch, Dock start or toggle.")
             return
         }
-        guard writeDock(false) else {
-            // Turning the switch off runs the step again: it puts the old
-            // value back if the write half landed, or just forgets.
-            NSLog("[Wharf] Fixed Space order: the Dock preference did not take; turning the feature off.")
-            preferences.spacesOrderFixed = false
-            return
-        }
-        saveJournal(SpacesOrderJournal(restore: restore, phase: .held))
-        restartDock()
+        let work = DispatchWorkItem { [weak self] in self?.apply() }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    private func release(removeKey: Bool) {
-        guard let journal = preferences.spacesOrderJournal else { return }
-        saveJournal(SpacesOrderJournal(restore: journal.restore, phase: .pendingRelease))
-        guard writeDock(removeKey ? nil : true) else {
-            // The journal stays, so the next launch or the next toggle tries
-            // again instead of losing what to put back.
-            NSLog("[Wharf] Fixed Space order: restoring the Dock preference failed; will retry.")
-            return
-        }
-        saveJournal(nil)
-        restartDock()
-    }
-
-    /// Saves the journal in Wharf's defaults, flushes them to disk and reads
-    /// the value back. False when any of that fails.
-    @discardableResult
+    /// Saves the journal in Wharf's defaults and confirms it. The signal is
+    /// the result of CFPreferencesAppSynchronize (cfprefsd accepted the
+    /// write; it puts it on disk itself), plus a read of both keys back
+    /// through CFPreferences to check the values under the right keys. This
+    /// proves the preferences daemon has the record, not that the file on
+    /// disk was written yet. False when either check fails.
     private func saveJournal(_ journal: SpacesOrderJournal?) -> Bool {
         preferences.spacesOrderJournal = journal
-        guard CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication) else { return false }
-        return preferences.spacesOrderJournal == journal
+        let app = kCFPreferencesCurrentApplication
+        guard CFPreferencesAppSynchronize(app) else { return false }
+        typealias Keys = BehaviorExtrasPreferences.Keys
+        let restore = CFPreferencesCopyAppValue(Keys.spacesOrderRestoreMarker as CFString, app) as? String
+        let phase = CFPreferencesCopyAppValue(Keys.spacesOrderPhase as CFString, app) as? String
+        guard let journal else { return restore == nil && phase == nil }
+        return restore == journal.restore && phase == journal.phase.rawValue
     }
 
     /// Writes `mru-spaces` (nil removes the key, the system default), flushes
@@ -183,40 +218,66 @@ final class SpacesOrderService {
         return currentSetting() == expected
     }
 
-    /// Restarts the Dock so it reads the new value, the same way
-    /// SystemDockVisibilityService applies its Dock changes. The system
-    /// starts the Dock again at once; its launch notification clears the
-    /// pending mark. A Dock that does not come back is retried a few times,
-    /// then reported in the log and left for the next launch.
+    // MARK: - Dock restart
+
+    private func launchRestartDecision() -> DockRestartDecision {
+        let requestedAt = preferences.spacesOrderDockRestartRequestedAt
+        // Longer ago than the Mac has been up: it restarted since.
+        let rebooted = requestedAt.map { Date().timeIntervalSince($0) > ProcessInfo.processInfo.systemUptime } ?? false
+        return DockRestartPlan.decide(
+            pending: preferences.spacesOrderDockRestartPending,
+            killedPIDs: preferences.spacesOrderDockRestartPIDs,
+            runningPIDs: DockRestartGate.runningDockPIDs(),
+            rebootedSince: rebooted,
+            attempts: preferences.spacesOrderDockRestartAttempts)
+    }
+
+    /// Restarts the Dock so it reads the new value, through the gate shared
+    /// with SystemDockVisibilityService. The record (pending, process IDs,
+    /// time, attempts) is saved before the Dock is asked to quit; the Dock's
+    /// launch notification, or a new process seen a few seconds later,
+    /// clears it.
     private func restartDock() {
+        restartedDuringApply = true
         preferences.spacesOrderDockRestartPending = true
+        preferences.spacesOrderDockRestartPIDs = Set(DockRestartGate.runningDockPIDs())
+        preferences.spacesOrderDockRestartRequestedAt = Date()
+        preferences.spacesOrderDockRestartAttempts += 1
         CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
-        let docks = NSRunningApplication.runningApplications(withBundleIdentifier: SpacesOrderPlan.dockDomain)
-        guard !docks.isEmpty else {
+        let killed = DockRestartGate.shared.restart(reason: "Fixed Space order")
+        guard !killed.isEmpty else {
             // Not running: it reads the preference when it next starts.
-            preferences.spacesOrderDockRestartPending = false
+            clearRestartRecord()
             return
         }
-        restartAttempts += 1
-        let oldPIDs = Set(docks.map(\.processIdentifier))
-        if !docks.map({ $0.forceTerminate() }).contains(true) {
-            NSLog("[Wharf] Fixed Space order: the Dock refused to quit (attempt \(restartAttempts)).")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            guard let self, self.preferences.spacesOrderDockRestartPending else { return }
-            // A Dock under a new process ID is a restarted Dock, whether or
-            // not its launch notification arrived. Never restart it twice.
-            let running = NSRunningApplication.runningApplications(withBundleIdentifier: SpacesOrderPlan.dockDomain)
-            if running.contains(where: { !oldPIDs.contains($0.processIdentifier) }) {
-                self.preferences.spacesOrderDockRestartPending = false
-                self.restartAttempts = 0
-                return
+        preferences.spacesOrderDockRestartPIDs = killed
+        CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.restartCheckDelay) { [weak self] in
+            guard let self else { return }
+            switch self.launchRestartDecision() {
+            case .nothing:
+                break
+            case .clear:
+                self.clearRestartRecord()
+            case .restart:
+                self.restartDock()
+            case .giveUp:
+                self.giveUpRestart()
             }
-            guard self.restartAttempts < Self.maximumRestartAttempts else {
-                NSLog("[Wharf] Fixed Space order: the Dock did not restart after \(self.restartAttempts) attempts; it picks up the change when it next starts.")
-                return
-            }
-            self.restartDock()
         }
+    }
+
+    private func clearRestartRecord() {
+        preferences.spacesOrderDockRestartPending = false
+        preferences.spacesOrderDockRestartPIDs = []
+        preferences.spacesOrderDockRestartRequestedAt = nil
+        preferences.spacesOrderDockRestartAttempts = 0
+        dockRestartGaveUp = false
+    }
+
+    private func giveUpRestart() {
+        NSLog("[Wharf] Fixed Space order: the Dock did not restart after \(preferences.spacesOrderDockRestartAttempts) attempts; it picks up the change when it next starts.")
+        clearRestartRecord()
+        dockRestartGaveUp = true
     }
 }

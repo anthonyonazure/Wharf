@@ -32,6 +32,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
     case startMenu
     case windowManagement
     case windowSnapping
+    case windowBehavior
     case actions
     case externalWidgets
     case behaviorLaunch
@@ -70,6 +71,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .startMenu: "Start Menu"
         case .windowManagement: "Window Management"
         case .windowSnapping: "Window Snapping"
+        case .windowBehavior: "Window Behavior"
         case .actions: "Actions"
         case .externalWidgets: "Widget Store"
         case .behaviorLaunch: "Launch"
@@ -108,6 +110,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .startMenu: "square.grid.2x2"
         case .windowManagement: "rectangle.on.rectangle"
         case .windowSnapping: "rectangle.split.2x1"
+        case .windowBehavior: "macwindow"
         case .actions: "list.bullet.rectangle"
         case .externalWidgets: "bag"
         case .behaviorLaunch: "power"
@@ -146,6 +149,7 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .startMenu: .mint
         case .windowManagement: .blue
         case .windowSnapping: .teal
+        case .windowBehavior: .indigo
         case .actions: .red
         case .externalWidgets: .purple
         case .behaviorLaunch: .green
@@ -196,6 +200,7 @@ private let settingsSections: [SettingsSection] = [
         .startMenu,
         .windowManagement,
         .windowSnapping,
+        .windowBehavior,
         .actions,
         .externalWidgets
     ]),
@@ -429,6 +434,8 @@ private struct SettingsDetailView: View {
             WindowManagementSettingsView()
         case .windowSnapping:
             WindowSnappingSettingsView()
+        case .windowBehavior:
+            WindowBehaviorSettingsView()
         case .actions:
             ActionCatalogSettingsView()
         case .externalWidgets:

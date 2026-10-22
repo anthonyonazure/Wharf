@@ -206,6 +206,9 @@ which solved per-window taskbar cards and blink-free fullscreen transitions.
 
 Window snapping (halves, thirds, quarters, sixths, corners, display moves,
 restore, and snapping by dragging a window to a screen edge) is adapted from **[Vorssaint](https://github.com/vorssaint/vorssaint-utils)**
+Window snapping (halves, thirds, quarters, sixths, corners, display moves and
+restore), green button maximize, quit on close, and Command-Q and Command-W
+protection are adapted from **[Vorssaint](https://github.com/vorssaint/vorssaint-utils)**
 (GPL-3.0).
 Window snapping (halves, thirds, quarters, sixths, corners, display moves and
 restore), focus follows mouse and fixed Space order are adapted from

@@ -62,6 +62,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         WindowSnapService.shared.start()
         FocusFollowsMouseService.shared.start()
         SpacesOrderService.shared.start()
+        WindowBehaviorService.start()
         AppActivityService.shared.start()
         SystemLoadService.shared.start()
         WharfMenuBarController.shared.start()

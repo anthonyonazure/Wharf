@@ -551,3 +551,106 @@ looks through it.
   is off the tap does nothing (the pane says so).
 - **Branch.** Work is on `stage3b-focus-wintap`, branched from
   `feature/vorssaint-parity` at f0bec25, in an isolated worktree.
+## 2026-10-22, Stage 3a: Window Behavior (green button, quit on close, quit protection)
+
+Three features in one new Settings pane, Features > Window Behavior, each with
+its own switch, all off by default. Adapted from Vorssaint
+(vorssaint/vorssaint-utils, GPL-3.0): WindowMaximizer, WindowServerTrafficLightHitTest
+and WindowServerSupport, WindowMaximizerSupport, AutoQuitService, and
+QuitProtectionSupport and QuitProtectionService. Files:
+
+- `Docky/Services/WindowBehaviorLogic.swift`: pure logic (Foundation and
+  CoreGraphics only). Bundle id list matching, the window server scan for a
+  green button under the pointer, the green button modifier rules, the quit on
+  close decision, and the Command-Q and Command-W state machine
+  (`QuitGuardStateMachine`) with its per-app policy.
+- `Docky/Services/WindowBehaviorPreferences.swift`: its own `@Observable`
+  settings object under `wharf.windowBehavior.*` in the standard defaults, so
+  `DockyPreferences.swift` only gained one line (the global reset calls
+  `WindowBehaviorPreferences.shared.resetToDefaults()`).
+- `Docky/Services/GreenButtonMaximizeService.swift`,
+  `Docky/Services/QuitOnCloseService.swift`,
+  `Docky/Services/QuitGuardService.swift` (with its HUD), and
+  `Docky/Services/WindowBehaviorService.swift`, which starts all three from one
+  line in `AppDelegate`.
+- `Docky/Views/SettingsWindow/WindowBehaviorSettingsView.swift`: the pane.
+- Checks: `scripts/test-window-behavior.sh` builds the logic with
+  `Tests/WindowBehavior/WindowBehaviorLogicTests.swift` and prints
+  `PASS: 85 checks`.
+
+How each works:
+
+- **Green button.** An event tap looks at left clicks. A cheap window server
+  scan first decides whether the click could be on a green button at all;
+  only then does Accessibility confirm it is the zoom (or full screen) button.
+  A plain click maximizes through `WindowSnapService.perform(.maximize, on:)`,
+  so it lands on the same rectangle as the Maximize shortcut (menu bar, macOS
+  Dock and Wharf dock excluded, snap gap kept). A second click on a window
+  already at that rectangle runs Restore. Option-click sets the window's
+  full screen attribute. Command, Control or Shift clicks, apps on the
+  exception list, and windows already in full screen are left to macOS.
+- **Quit on close.** Watches `WindowRegistry.windows` for apps on the list.
+  When a listed app that has shown a window drops to none, it looks again at
+  0.35, 0.9 and 1.8 seconds, and only asks the app to quit
+  (`NSRunningApplication.terminate()`, never force) when every look agrees:
+  regular app, not Wharf, not hidden, no window in Accessibility (minimized
+  ones count as windows) and no normal window in the window server's full list.
+- **Quit and close protection.** A key tap reads only Command key presses
+  (plain typing returns at once). For the frontmost app it resolves the mode
+  (per-app override, else the default; a key not protected is off), and the
+  state machine says whether to pass, hold back, or confirm. Confirming
+  Command-Q sends the app a normal quit request; confirming Command-W replays a
+  marked Command-W press that the tap lets through. Escape or letting go of
+  Command cancels. A small panel near the bottom of the screen says what to do,
+  with a progress bar while holding.
+
+### Deviations
+
+- **The green button tap swallows events; it is not listen-only.** A
+  listen-only tap cannot stop the click reaching the app, so the window would
+  start entering full screen while Wharf maximized it. The tap passes every
+  event except the press and release of a confirmed green button click.
+- **Option gives full screen by setting the window's full screen attribute.**
+  On current macOS an Option-click on the green button natively zooms rather
+  than entering full screen, so passing it through would not do what the brief
+  asked.
+- **Quit on close leans toward keeping apps open.** Without Vorssaint's private
+  Space APIs, a window hidden on close and a window on another Space look the
+  same, so both count as "still has a window". Apps that hide their window
+  instead of closing it (some chat and music apps) will therefore not quit.
+- **Command-Q protection quits through a quit request, not by replaying the
+  key.** Same as Vorssaint; Command-W is replayed. Vorssaint's special cases
+  for remote desktop and virtual machine apps (where Command-Q should reach the
+  remote computer) and its app switcher handling are not ported.
+- **Key matching uses the typed character, then the US key position.**
+  Vorssaint also consults the layout's Command table for non-Latin layouts;
+  on those layouts protection may not trigger.
+- **One mode for both shortcuts.** Command-Q and Command-W each have an on
+  switch but share the default mode and the per-app overrides; Vorssaint keeps
+  separate settings per shortcut.
+
+### Unverified
+
+- None of the three features was exercised at runtime: that needs real clicks
+  and key presses on the user's own windows and apps. The build succeeds and
+  the pure logic passes its checks.
+- A read-only probe of 17 running apps found the zoom button inside the
+  window server box for 16; the exception (Zen) had its button above the
+  window frame, so its clicks simply pass through to the app.
+- Order of the quit protection tap against Windows Keyboard Mode's tap (which
+  turns Control-W into Command-W): both insert at the head of the session, so
+  which runs first depends on which was created first. If Windows Keyboard Mode
+  runs second, a Control-W it rewrites is not protected.
+- Restore after a green button maximize relies on WindowSnapService's history;
+  a window maximized by other means is left as is on the second click.
+
+Follow-up fixes in the same stage: quit on close no longer re-arms its checks
+after a look finds a window (that made apps which hide their window on close
+get re-checked on every window change anywhere), and quit protection steps
+aside while Wharf's own window switcher is open, since the switcher uses W
+under the Command chord to close the selected window. The green button match
+uses `AppWindow.cgWindowID`, which WindowRegistry fills from
+`_AXUIElementGetWindow`, the same number the window server scan returns.
+Unverified: after a declined "Save changes?" prompt, closing that sheet could
+count as another last-window close and ask the app to quit again; WindowRegistry
+only filters floating subroles, not dialogs.

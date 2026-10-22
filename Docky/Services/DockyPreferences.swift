@@ -4786,6 +4786,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         switcherCloseKeyCode = DefaultValues.switcherCloseKeyCode
         switcherZoomKeyCode = DefaultValues.switcherZoomKeyCode
         resetWindowSnappingToDefaults()
+        WindowBehaviorPreferences.shared.resetToDefaults()
         appWidgetDisplays = DefaultValues.appWidgetDisplays
         hasSeenDockEditorHint = DefaultValues.hasSeenDockEditorHint
 

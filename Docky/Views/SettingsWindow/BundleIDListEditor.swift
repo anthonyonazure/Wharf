@@ -24,26 +24,30 @@ struct BundleIDListEditor: View {
                 Text(emptyText)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(bundleIDs, id: \.self) { bundleID in
-                    HStack(spacing: 8) {
-                        Image(nsImage: icon(for: bundleID))
-                            .resizable()
-                            .frame(width: 18, height: 18)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(displayName(for: bundleID))
-                            Text(bundleID)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                // Lazy, so a very long list does not build every row (and
+                // look up every app icon) the moment the pane opens.
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(bundleIDs, id: \.self) { bundleID in
+                        HStack(spacing: 8) {
+                            Image(nsImage: icon(for: bundleID))
+                                .resizable()
+                                .frame(width: 18, height: 18)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(displayName(for: bundleID))
+                                Text(bundleID)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button {
+                                bundleIDs.removeAll { $0 == bundleID }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove \(displayName(for: bundleID))")
                         }
-                        Spacer()
-                        Button {
-                            bundleIDs.removeAll { $0 == bundleID }
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Remove \(displayName(for: bundleID))")
                     }
                 }
             }
@@ -74,10 +78,11 @@ struct BundleIDListEditor: View {
         }
     }
 
+    /// Bundle IDs ignore case, so "COM.APPLE.SAFARI" is a duplicate of
+    /// "com.apple.Safari". The spelling first added is the one shown.
     private func add(_ bundleID: String) {
-        let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !bundleIDs.contains(trimmed) else { return }
-        bundleIDs.append(trimmed)
+        let updated = BundleIDList.adding(bundleID, to: bundleIDs)
+        if updated != bundleIDs { bundleIDs = updated }
     }
 
     private func addTyped() {
@@ -86,12 +91,14 @@ struct BundleIDListEditor: View {
     }
 
     private func runningApps() -> [(name: String, bundleID: String)] {
-        let listed = Set(bundleIDs)
+        let listed = BundleIDList.matchSet(bundleIDs)
         var seen = Set<String>()
         return NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
             .compactMap { app -> (name: String, bundleID: String)? in
-                guard let id = app.bundleIdentifier, !listed.contains(id), seen.insert(id).inserted else { return nil }
+                guard let id = app.bundleIdentifier else { return nil }
+                let key = BundleIDList.normalized(id)
+                guard !listed.contains(key), seen.insert(key).inserted else { return nil }
                 return (app.localizedName ?? id, id)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

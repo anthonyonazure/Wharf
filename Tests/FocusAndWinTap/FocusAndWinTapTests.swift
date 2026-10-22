@@ -158,21 +158,123 @@ private func testSpacesSetting() {
 
 private func testSpacesSteps() {
     typealias P = SpacesOrderPlan
+    func held(_ restore: String) -> SpacesOrderJournal { SpacesOrderJournal(restore: restore, phase: .held) }
     // Turning on.
-    expect(P.step(wanted: true, current: .absent, marker: nil) == .hold(marker: P.restoreAbsent), "absent: hold, remember absent")
-    expect(P.step(wanted: true, current: .on, marker: nil) == .hold(marker: P.restoreOn), "on: hold, remember on")
-    expect(P.step(wanted: true, current: .off, marker: nil) == .remember, "already off: remember only")
-    expect(P.step(wanted: true, current: .unsupported, marker: nil) == .none, "managed: never write")
+    expect(P.step(wanted: true, current: .absent, journal: nil) == .hold(restore: P.restoreAbsent), "absent: hold, remember absent")
+    expect(P.step(wanted: true, current: .on, journal: nil) == .hold(restore: P.restoreOn), "on: hold, remember on")
+    expect(P.step(wanted: true, current: .off, journal: nil) == .remember, "already off: remember only")
+    expect(P.step(wanted: true, current: .unsupported, journal: nil) == .none, "managed: never write")
     // Steady state.
-    expect(P.step(wanted: true, current: .off, marker: P.restoreOn) == .none, "held: nothing to do")
+    expect(P.step(wanted: true, current: .off, journal: held(P.restoreOn)) == .none, "held: nothing to do")
     // The user turned it back on in System Settings.
-    expect(P.step(wanted: true, current: .on, marker: P.restoreOn) == .letGo, "user took it back: let go")
+    expect(P.step(wanted: true, current: .on, journal: held(P.restoreOn)) == .letGo, "user took it back: let go")
+    expect(P.step(wanted: true, current: .absent, journal: held(P.restoreOn)) == .letGo, "user reset it: let go")
     // Turning off.
-    expect(P.step(wanted: false, current: .off, marker: P.restoreOn) == .release(removeKey: false), "restore true")
-    expect(P.step(wanted: false, current: .off, marker: P.restoreAbsent) == .release(removeKey: true), "restore missing key")
-    expect(P.step(wanted: false, current: .off, marker: P.restoreOff) == .forget, "was already off: leave it")
-    expect(P.step(wanted: false, current: .on, marker: P.restoreOn) == .forget, "user changed it: leave it")
-    expect(P.step(wanted: false, current: .absent, marker: nil) == .none, "never held: nothing")
+    expect(P.step(wanted: false, current: .off, journal: held(P.restoreOn)) == .release(removeKey: false), "restore true")
+    expect(P.step(wanted: false, current: .off, journal: held(P.restoreAbsent)) == .release(removeKey: true), "restore missing key")
+    expect(P.step(wanted: false, current: .off, journal: held(P.restoreOff)) == .forget, "was already off: leave it")
+    expect(P.step(wanted: false, current: .on, journal: held(P.restoreOn)) == .forget, "user changed it: leave it")
+    expect(P.step(wanted: false, current: .absent, journal: nil) == .none, "never held: nothing")
+    expect(P.step(wanted: false, current: .off, journal: held(P.restoreOn)) != .none, "a held journal is never ignored")
+    // Managed after the fact: drop the record, never write.
+    expect(P.step(wanted: true, current: .unsupported, journal: held(P.restoreOn)) == .forget, "managed later: forget")
+    expect(P.step(wanted: false, current: .unsupported, journal: held(P.restoreOn)) == .forget, "managed later, off: forget")
+}
+
+/// The recovery journal phases: what the next launch does after Wharf was
+/// cut off at each point of a change.
+private func testSpacesJournalPhases() {
+    typealias P = SpacesOrderPlan
+    func j(_ restore: String, _ phase: SpacesHoldPhase) -> SpacesOrderJournal { SpacesOrderJournal(restore: restore, phase: phase) }
+
+    // Journal saved, Dock write never happened. This used to read as "the
+    // user took it back" and turned the feature off.
+    expect(P.step(wanted: true, current: .on, journal: j(P.restoreOn, .pendingHold)) == .hold(restore: P.restoreOn),
+           "pending hold, Dock untouched: retry with the saved value, not let go")
+    expect(P.step(wanted: true, current: .absent, journal: j(P.restoreAbsent, .pendingHold)) == .hold(restore: P.restoreAbsent),
+           "pending hold from a missing key: retry, still remembers absent")
+    // Dock write landed, the held mark did not.
+    expect(P.step(wanted: true, current: .off, journal: j(P.restoreOn, .pendingHold)) == .confirmHold,
+           "pending hold, Dock already off: confirm")
+    // Feature switched off before a pending hold finished.
+    expect(P.step(wanted: false, current: .off, journal: j(P.restoreAbsent, .pendingHold)) == .release(removeKey: true),
+           "pending hold that may have landed: put the old value back")
+    expect(P.step(wanted: false, current: .on, journal: j(P.restoreOn, .pendingHold)) == .forget,
+           "pending hold that never landed: just forget")
+    // Release interrupted.
+    expect(P.step(wanted: false, current: .off, journal: j(P.restoreOn, .pendingRelease)) == .release(removeKey: false),
+           "pending release, Dock still off: retry the release")
+    expect(P.step(wanted: false, current: .on, journal: j(P.restoreOn, .pendingRelease)) == .forget,
+           "pending release that landed: clear the journal")
+    expect(P.step(wanted: false, current: .absent, journal: j(P.restoreAbsent, .pendingRelease)) == .forget,
+           "pending release of a missing key that landed: clear")
+    // Switched back on while a release was unfinished.
+    expect(P.step(wanted: true, current: .off, journal: j(P.restoreOn, .pendingRelease)) == .confirmHold,
+           "back on before release landed: keep holding")
+    expect(P.step(wanted: true, current: .on, journal: j(P.restoreOn, .pendingRelease)) == .hold(restore: P.restoreOn),
+           "back on after release landed: hold again")
+}
+
+private func testBundleIDList() {
+    typealias L = BundleIDList
+    expect(L.normalized("  COM.Apple.Terminal \n") == "com.apple.terminal", "trim and lowercase")
+    expect(L.matchSet(["com.apple.Terminal", "COM.APPLE.TERMINAL", " "]) == ["com.apple.terminal"], "match set dedupes, drops blanks")
+    expect(L.contains(["com.apple.Terminal"], "com.apple.terminal"), "contains ignores case")
+    expect(L.adding("COM.APPLE.SAFARI", to: ["com.apple.Safari"]) == ["com.apple.Safari"], "case variant is a duplicate")
+    expect(L.adding("  com.example.App ", to: []) == ["com.example.App"], "added trimmed, spelling kept")
+    expect(L.adding("   ", to: ["a"]) == ["a"], "blank not added")
+    expect(L.deduplicated(["com.A", "COM.a", "com.b", ""]) == ["com.A", "com.b"], "dedupe keeps first spelling")
+
+    // The hover gate matches exclusions without regard to case.
+    let window = HoverWindowInfo(windowID: 9, ownerPID: 50, layer: 0, bounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    var input = HoverFocusInput()
+    input.ownPID = 1
+    input.target = window
+    input.targetBundleID = "com.Example.App"
+    input.excludedBundleIDs = L.matchSet(["COM.EXAMPLE.APP"])
+    expect(HoverFocusGate.decide(input) == .skip(.excludedApp), "case variant exclusion applies")
+    input.targetBundleID = "com.apple.Dock"
+    input.excludedBundleIDs = []
+    expect(HoverFocusGate.decide(input) == .skip(.dock), "Dock recognized in any case")
+}
+
+private func testStoredDelay() {
+    typealias T = FocusFollowsMouseTiming
+    expect(T.storedDelay(nil) == (300, false), "missing: default, nothing to write")
+    expect(T.storedDelay(450) == (450, false), "in range: kept")
+    expect(T.storedDelay(5_000) == (2_000, true), "too long: clamped and written back")
+    expect(T.storedDelay(-1) == (100, true), "negative: clamped and written back")
+    expect(T.storedDelay("fast") == (300, true), "malformed: default and written back")
+}
+
+private func testHoverCommitCheck() {
+    let point = CGPoint(x: 100, y: 100)
+    let ok = HoverCommitCheck(livePointer: point, receivingWindowID: 7)
+    expect(ok.allowsRaise(of: 7, restingAt: point), "all clear: raise")
+    var check = ok
+    check.livePointer = CGPoint(x: 400, y: 100)
+    expect(!check.allowsRaise(of: 7, restingAt: point), "pointer moved away (into Wharf, say): no raise")
+    check = ok
+    check.livePointer = nil
+    expect(!check.allowsRaise(of: 7, restingAt: point), "pointer unknown: no raise")
+    check = ok
+    check.receivingWindowID = 8
+    expect(!check.allowsRaise(of: 7, restingAt: point), "another window now under the pointer: no raise")
+    check = ok
+    check.menuOpen = true
+    expect(!check.allowsRaise(of: 7, restingAt: point), "menu opened meanwhile: no raise")
+    check = ok
+    check.buttonOrModifierHeld = true
+    expect(!check.allowsRaise(of: 7, restingAt: point), "click or shortcut started: no raise")
+    check = ok
+    check.featureActive = false
+    expect(!check.allowsRaise(of: 7, restingAt: point), "switched off meanwhile: no raise")
+    check = ok
+    check.evaluationCurrent = false
+    expect(!check.allowsRaise(of: 7, restingAt: point), "stale evaluation: no raise")
+    check = ok
+    check.livePointer = CGPoint(x: 102, y: 99)
+    expect(check.allowsRaise(of: 7, restingAt: point), "a point or two of jitter is fine")
 }
 
 // MARK: - Win key tap
@@ -225,6 +327,38 @@ private func testCommandTap() {
     _ = d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1))
     _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0.3))
     expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.4)), "second tap fires too")
+
+    // Command+Q and other chords never count.
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0))
+    _ = d.handle(.keyDown)
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1)), "Cmd+Q is not a tap")
+
+    // Command with the scroll wheel (zoom) is not a tap.
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0))
+    _ = d.handle(.scrollWheel)
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.3)), "Cmd+scroll is not a tap")
+
+    // Mouse held first, then Command pressed and released: changing a drag.
+    d = D()
+    _ = d.handle(.mouseDown)
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 1, mouseHeld: true))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 1.2, mouseHeld: true)),
+           "mouse down, Cmd down, Cmd up with the button held is not a tap")
+
+    // Button pressed and released by mouse up between Command down and up.
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.2, mouseHeld: true)),
+           "button held at Cmd release is not a tap")
+
+    // After the drag ends, a clean tap still works.
+    d = D()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0, mouseHeld: true))
+    _ = d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1, mouseHeld: true))
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 2))
+    expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: 2.1)), "tap after a drag fires")
 }
 
 private func testWinKeyActions() {
@@ -241,6 +375,10 @@ enum FocusAndWinTapTests {
         testGate()
         testSpacesSetting()
         testSpacesSteps()
+        testSpacesJournalPhases()
+        testBundleIDList()
+        testStoredDelay()
+        testHoverCommitCheck()
         testCommandTap()
         testWinKeyActions()
 

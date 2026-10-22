@@ -54,7 +54,7 @@ final class GreenButtonMaximizeService {
     private var lastMoveCheck = Date.distantPast
     private var rightToLeft = false
 
-    private let messagingTimeout: Float = 0.35
+    nonisolated private static let messagingTimeout: Float = 0.35
     private let mouseUpTolerance: CGFloat = 8
     /// How long a cached answer is trusted, as long as the window has not
     /// moved or resized since.
@@ -309,44 +309,62 @@ final class GreenButtonMaximizeService {
         scheduleFill(candidate)
     }
 
+    /// Looks the green button up on a private queue, so an app that answers
+    /// Accessibility slowly (or not at all) never holds up the main thread,
+    /// where both input taps run. Only the cache write comes back to main.
     private func scheduleFill(_ candidate: TrafficLightCandidate) {
-        guard fillsInFlight.insert(candidate.windowID).inserted else { return }
-        // Off the tap and off the current event: Accessibility can be slow.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.fillsInFlight.remove(candidate.windowID)
-            self.fill(candidate)
+        guard tap != nil, fillsInFlight.insert(candidate.windowID).inserted else { return }
+        let bundleIdentifier = NSRunningApplication(processIdentifier: candidate.pid)?.bundleIdentifier
+        if WindowBehaviorBundleList.contains(bundleIdentifier, in: preferences.maximizeExceptions) {
+            fillsInFlight.remove(candidate.windowID)
+            store(nil, for: candidate, bundleIdentifier: bundleIdentifier)
+            return
+        }
+        Self.lookUpQueue.async { [weak self] in
+            let found = Self.lookUp(pid: candidate.pid, windowID: candidate.windowID)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.fillsInFlight.remove(candidate.windowID)
+                guard self.tap != nil else { return }
+                self.store(found, for: candidate, bundleIdentifier: bundleIdentifier)
+            }
         }
     }
 
-    private func fill(_ candidate: TrafficLightCandidate) {
-        guard tap != nil else { return }
-        let bundleIdentifier = NSRunningApplication(processIdentifier: candidate.pid)?.bundleIdentifier
-        func store(button: AXUIElement?, all: [AXUIElement] = [], frame: CGRect, nativeFallback: Bool, usable: Bool) {
-            if cache.count > 64 {
-                let cutoff = Date().addingTimeInterval(-cacheLifetime)
-                cache = cache.filter { $0.value.filledAt > cutoff }
-                if cache.count > 64 { cache.removeAll() }
-            }
-            cache[candidate.windowID] = ZoomTarget(
-                pid: candidate.pid, windowID: candidate.windowID, bundleIdentifier: bundleIdentifier,
-                windowBounds: candidate.frame, buttonFrame: frame, button: button, greenButtons: all,
-                allowsNativeFallback: nativeFallback, isUsable: usable, filledAt: Date()
-            )
+    private func store(_ found: LookUp?, for candidate: TrafficLightCandidate, bundleIdentifier: String?) {
+        if cache.count > 64 {
+            let cutoff = Date().addingTimeInterval(-cacheLifetime)
+            cache = cache.filter { $0.value.filledAt > cutoff }
+            if cache.count > 64 { cache.removeAll() }
         }
+        cache[candidate.windowID] = ZoomTarget(
+            pid: candidate.pid, windowID: candidate.windowID, bundleIdentifier: bundleIdentifier,
+            windowBounds: candidate.frame, buttonFrame: found?.frame ?? .zero, button: found?.button,
+            greenButtons: found?.all ?? [], allowsNativeFallback: found?.allowsNativeFallback ?? false,
+            isUsable: found != nil, filledAt: Date()
+        )
+    }
 
-        guard !WindowBehaviorBundleList.contains(bundleIdentifier, in: preferences.maximizeExceptions),
-              let window = axWindow(pid: candidate.pid, windowID: candidate.windowID),
+    nonisolated private static let lookUpQueue = DispatchQueue(label: "wharf.greenButton.lookUp", qos: .userInitiated)
+
+    nonisolated private struct LookUp {
+        let button: AXUIElement
+        let all: [AXUIElement]
+        let frame: CGRect
+        let allowsNativeFallback: Bool
+    }
+
+    /// The green button of one window, or nil for a window to leave alone
+    /// (not found, full screen, no enabled button). Runs on lookUpQueue.
+    nonisolated private static func lookUp(pid: pid_t, windowID: CGWindowID) -> LookUp? {
+        guard let window = axWindow(pid: pid, windowID: windowID),
               !boolAttribute(window, "AXFullScreen"),
               let button = greenButton(in: window)
-        else {
-            store(button: nil, frame: .zero, nativeFallback: false, usable: false)
-            return
-        }
+        else { return nil }
         let all = [kAXZoomButtonAttribute as String, kAXFullScreenButtonAttribute as String]
             .compactMap { elementAttribute(window, $0) }
-        store(button: button.element, all: all, frame: button.frame,
-              nativeFallback: button.allowsNativeFallback, usable: true)
+        return LookUp(button: button.element, all: all, frame: button.frame,
+                      allowsNativeFallback: button.allowsNativeFallback)
     }
 
     // MARK: - Acting on a click
@@ -426,15 +444,15 @@ final class GreenButtonMaximizeService {
     /// bar does not count.
     private func hitIsOnButton(_ buttons: [AXUIElement], at point: CGPoint) -> Bool {
         let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
+        AXUIElementSetMessagingTimeout(systemWide, Self.messagingTimeout)
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &hit) == .success,
               var current = hit
         else { return false }
-        AXUIElementSetMessagingTimeout(current, messagingTimeout)
+        AXUIElementSetMessagingTimeout(current, Self.messagingTimeout)
         for _ in 0..<4 {
             if buttons.contains(where: { CFEqual(current, $0) }) { return true }
-            guard let parent = elementAttribute(current, kAXParentAttribute as String) else { return false }
+            guard let parent = Self.elementAttribute(current, kAXParentAttribute as String) else { return false }
             current = parent
         }
         return false
@@ -443,24 +461,27 @@ final class GreenButtonMaximizeService {
     /// The Accessibility window with this window server id. The app element
     /// is only asked for its window list, never its role, which would switch
     /// a Chromium app into full accessibility mode.
-    private func axWindow(pid: pid_t, windowID: CGWindowID) -> AXUIElement? {
+    nonisolated private static func axWindow(pid: pid_t, windowID: CGWindowID) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, messagingTimeout)
+        AXUIElementSetMessagingTimeout(app, Self.messagingTimeout)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement]
         else { return nil }
         for window in windows {
+            // Bounded before the first question, so a hung app costs at most
+            // the timeout per window, on the look-up queue.
+            AXUIElementSetMessagingTimeout(window, Self.messagingTimeout)
             var id: CGWindowID = 0
             if _AXUIElementGetWindow(window, &id) == .success, id == windowID {
-                AXUIElementSetMessagingTimeout(window, messagingTimeout)
+                AXUIElementSetMessagingTimeout(window, Self.messagingTimeout)
                 return window
             }
         }
         return nil
     }
 
-    private func greenButton(in window: AXUIElement)
+    nonisolated private static func greenButton(in window: AXUIElement)
         -> (element: AXUIElement, frame: CGRect, allowsNativeFallback: Bool)? {
         for (attribute, allowsNativeFallback) in [
             (kAXZoomButtonAttribute as String, true),
@@ -475,7 +496,7 @@ final class GreenButtonMaximizeService {
         return nil
     }
 
-    private func frame(of element: AXUIElement) -> CGRect? {
+    nonisolated private static func frame(of element: AXUIElement) -> CGRect? {
         var positionValue: CFTypeRef?
         var sizeValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
@@ -493,30 +514,18 @@ final class GreenButtonMaximizeService {
         return CGRect(origin: origin, size: size)
     }
 
-    private func elementAttribute(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+    nonisolated private static func elementAttribute(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value,
               CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
         let result = value as! AXUIElement
-        AXUIElementSetMessagingTimeout(result, messagingTimeout)
+        AXUIElementSetMessagingTimeout(result, Self.messagingTimeout)
         return result
     }
 
-    private func pid(of element: AXUIElement) -> pid_t? {
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-        return pid == 0 ? nil : pid
-    }
-
-    private func role(of element: AXUIElement) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &value) == .success else { return nil }
-        return value as? String
-    }
-
-    private func boolAttribute(_ element: AXUIElement, _ attribute: String, default defaultValue: Bool = false) -> Bool {
+    nonisolated private static func boolAttribute(_ element: AXUIElement, _ attribute: String, default defaultValue: Bool = false) -> Bool {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let value

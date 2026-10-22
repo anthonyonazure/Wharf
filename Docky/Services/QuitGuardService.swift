@@ -262,7 +262,9 @@ final class QuitGuardService {
         let name = app?.name ?? "the app"
         switch decision {
         case .pass:
-            if machine.pending == nil {
+            // A failure note (hudHide scheduled) stays up for its full time,
+            // even as the user lets go of Command.
+            if machine.pending == nil, hudHide == nil {
                 clearTimers()
                 hideHUD()
             }
@@ -428,7 +430,10 @@ final class QuitGuardService {
     /// A short note when a confirmed action was not carried out.
     private func flashHUD(_ message: String) {
         showHUD(message, holdSeconds: nil)
-        let work = DispatchWorkItem { [weak self] in self?.hud.hide() }
+        let work = DispatchWorkItem { [weak self] in
+            self?.hudHide = nil
+            self?.hud.hide()
+        }
         hudHide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
     }

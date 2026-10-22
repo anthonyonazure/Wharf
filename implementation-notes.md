@@ -852,9 +852,15 @@ in doubt, do not swallow input and do not quit anything.
   would remove the remaining dependency on a busy main thread, but under the
   project's MainActor default isolation it is the likeliest way to add a data
   race. Instead all slow work left the callbacks: no Accessibility, no HUD,
-  no app lookups. The green button callback still reads the window server
-  list once per press, which is not an app and does not hang the way an
-  unresponsive app's Accessibility does.
+  no app lookups. The green button lookup ahead of a click runs on its own
+  queue, so a hung app never asks the main thread (where both taps run) to
+  wait; every Accessibility element it touches has a 0.35 s timeout set
+  before the first question. The green button callback still reads the
+  window server list once per press, which is not an app and does not hang
+  the way an unresponsive app's Accessibility does. Two Accessibility steps
+  still run on the main thread, both bounded by timeouts and never inside a
+  tap: the check right before a maximize, and reading the focused window for
+  a protected Close.
 - **A change of focused window inside the same app is not watched.** It is
   caught by the check right before acting (the captured window must still be
   focused), which is where it matters.

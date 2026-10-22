@@ -20,6 +20,7 @@ struct WindowBehaviorSettingsView: View {
     /// Secure Input stops every event tap from seeing keys; checked while the
     /// pane is open.
     @State private var isSecureInputOn = IsSecureEventInputEnabled()
+    private let secureInputTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var anyFeatureOn: Bool {
         preferences.maximizeEnabled || preferences.quitOnCloseEnabled || preferences.quitGuardEnabled
@@ -184,7 +185,7 @@ struct WindowBehaviorSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(secureInputTimer) { _ in
             let on = IsSecureEventInputEnabled()
             if on != isSecureInputOn { isSecureInputOn = on }
         }

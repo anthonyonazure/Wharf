@@ -237,3 +237,123 @@ whatever the content insets happen to be. `TileClickRouter` is therefore keyed
 by the hosting view and the press is converted against that view, which needs
 no assumption about chrome. The same key stops three docks publishing the same
 tile IDs over each other.
+
+## 2026-10-22, Stage 1: window snapping
+
+Keyboard window snapping at parity with Vorssaint's Window Layout, adapted from
+Vorssaint (vorssaint/vorssaint-utils, GPL-3.0). Files:
+
+- `Docky/Services/WindowSnapGeometry.swift`: pure math (Foundation and
+  CoreGraphics only). `WindowSnapAction` (41 actions), `targetRect(for:current:area:gap:)`,
+  `subtractingDock(_:from:)`, `rectForDisplay(current:source:destination:)`,
+  `anchoredRect`, `adjacentDisplayIndex`, `WindowSnapHistory`, and the
+  shortcut resolution and conflict helpers.
+- `Docky/Services/WindowSnapAction+Shortcuts.swift`: default shortcuts.
+- `Docky/Services/WindowSnapService.swift`: the single entry point is
+  `WindowSnapService.shared.perform(_:on:)`; `on: nil` means the frontmost
+  window. Also owns the Carbon hot keys and `conflictMessage(for:action:)`.
+- `WindowRegistry` gained `frontmostWindow()`, `liveFrame(of:)` and `move(_:to:)`.
+- `Docky/Views/SettingsWindow/WindowSnappingSettingsView.swift`: the pane,
+  registered under Features in `SettingsRootView`.
+- Prefs: `wharf.windowSnapEnabled` (default on), `wharf.windowSnapGap`
+  (default 0, clamped 0 to 40), `wharf.windowSnapShortcuts` (JSON map of only
+  the user's overrides; a stored empty shortcut means "cleared").
+
+Order of operations for a snap: screen visibleFrame, minus the strip of every
+visible Wharf dock on that screen (`MainWindow.currentReservationFrame`, same
+edge rule as `WindowReservationService`), then the gap on the screen edges,
+then the tile, then half the gap off each shared edge so neighbors end up
+exactly one gap apart.
+
+### How to run the geometry tests
+
+The Xcode project has no test target, and adding one here would mean hand
+editing `project.pbxproj` while another branch is adding test infrastructure.
+Instead the pure geometry compiles with a standalone check file:
+
+    scripts/test-snap-geometry.sh
+
+It needs only Xcode's Swift toolchain, builds `Docky/Services/WindowSnapGeometry.swift`
+together with `Tests/WindowSnap/WindowSnapGeometryTests.swift` into a small
+executable, and prints `PASS: 187 checks` or each failure with its line. The
+`Tests/` folder sits outside the `Docky/` synchronized group, so the app build
+never sees it.
+
+### Deviations
+
+- **Branch.** This work was done in an isolated worktree that cannot check out
+  `feature/vorssaint-parity` (the main checkout holds it). The worktree branch
+  `worktree-agent-ab2dc9840d62982eb` was reset to the tip of
+  `feature/vorssaint-parity` (0ec26b5) and the commits sit on top of it. They
+  need a fast-forward merge or cherry-pick onto `feature/vorssaint-parity`.
+- **Display moves scale proportionally**, as the brief asked. Vorssaint
+  deliberately does not: it keeps the window's size (only shrinking to fit)
+  and its edge insets, because scaling stretches a laptop window across an
+  ultrawide and squashes it onto a portrait panel. If that bites, swapping to
+  Vorssaint's rule is a change to `rectForDisplay` alone.
+- **One gap, not two.** Vorssaint has separate window and screen gaps; the
+  brief asked for one, so the same value drives both. Following Vorssaint,
+  Maximize takes the screen gap but no window gap, and Center, Maximize with
+  Margin, Restore and the display moves ignore the gap.
+- **Maximize with Margin** uses Vorssaint's fixed 5 percent inset per axis,
+  with no separate setting.
+- **Default shortcuts for Center and Restore differ from Vorssaint.**
+  Vorssaint uses Control-Option-C and Control-Option-R, but Windows Keyboard
+  Mode rewrites Control plus C or R into Command before the key reaches a hot
+  key. Wharf uses Control-Option-M (center) and Control-Option-Delete
+  (restore). Halves are Control-Option-arrows, Maximize Control-Option-Return,
+  next and previous display Control-Option-Command-Right and Left. Everything
+  else starts unset.
+- **Conflict refusal also covers Windows Keyboard Mode.** When that mode is on,
+  a Control shortcut (without Command) on a key the mode rewrites is refused,
+  since it would arrive as Command instead. The window switcher's implicit
+  Shift reverse shortcut and the Windows snip are refused too.
+- **Edges are rounded, not `integral`.** Vorssaint rounds rects outward with
+  `integral`, which made adjacent thirds overlap by a point and broke the
+  exact gap. Each edge is rounded to the nearest point instead.
+- **Thirds include Middle Two Thirds**, which Vorssaint lacks, because the
+  brief lists two thirds for top, middle and bottom. Vorssaint's Full Screen
+  action is not included (not in the brief).
+- **Not ported on purpose:** Vorssaint's repeat-press behavior (Top Half
+  twice maximizes, a repeated side half cycles half, two thirds, one third or
+  crosses to the next display: `effectiveAction`, `displayCrossing`,
+  `sideCycle*`), the directional display picker, and the ignored-apps list.
+- **Right-click "Move and Resize" submenu not changed (brief item 5 skipped).**
+  The existing submenu lives in `WindowContextActions.swift`, shared by the
+  hover preview and the switcher, not the tile menu; its handlers still use
+  `WorkspaceService.fill*`, which ignore the dock strip and the gap. Pointing
+  them at `WindowSnapService.shared.perform(_:on:)` is a small follow-up.
+- **The snap service is `@Observable`**, unlike the Combine-based services, so
+  the pane can show which shortcuts another app already holds.
+
+### Unverified
+
+- Nothing was run against real windows. The Debug build was not launched,
+  because starting a second Wharf alongside the installed one would put a
+  second set of docks on screen and register the shortcuts system wide. So no
+  snap, restore, display move, hot key press or settings pane has been seen.
+- Whether a session event tap (Windows Keyboard Mode) rewrites a key before a
+  Carbon hot key sees it was not tested; the conflict rule assumes it does.
+- The dock strip uses `MainWindow.frame`, which may include magnification
+  headroom, the same as `WindowReservationService`. If so, snapped windows
+  stop short of the dock by that headroom.
+- The dock-overshoot retry and the re-anchor for apps with a minimum size are
+  ported logic, untested against an app that actually refuses a size.
+- Snapping with a dock that is auto-hidden: `currentReservationFrame` is nil
+  then, so windows may cover the hidden dock's strip. Intended, untested.
+- Carbon reports a combination another app holds as a registration failure;
+  that path and its orange message in the pane were never triggered.
+
+### For Stage 2 (edge drag and modifier drag)
+
+- Call `WindowSnapService.shared.perform(action, on: window)`; it already
+  handles the dock strip, gap, restore history, overshoot and re-anchoring.
+- For a drag preview, `WindowSnapGeometry.targetRect(for:current:area:gap:)`
+  with `WindowSnapService.shared.usableArea(of:)` gives the exact rect a drop
+  would produce, without moving anything.
+- Restore history records the frame before each snap, keyed by `WindowID`;
+  a drag-to-snap should go through `perform` so un-snapping by Restore works.
+- `WindowRegistry.frontmostWindow()` exists; a drag trigger will need the
+  window under the pointer instead.
+- Hot keys are released while the pane records (`isRecordingShortcut`); a drag
+  monitor should respect `windowSnapEnabled` the same way.

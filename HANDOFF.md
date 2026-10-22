@@ -217,3 +217,18 @@ deliberately kept their SwiftUI gestures.
   dock had two Firefox tiles that render identically, one pinned and one a folder child.
 - Verify the instrument before trusting a result. Most of 2026-08-27 was spent acting on
   numbers from a rig that was wrong in four separate ways.
+
+## Checkpoint 2026-10-22: Vorssaint parity build (branch feature/vorssaint-parity)
+
+Nothing here is installed or pushed. Branch `feature/vorssaint-parity` carries every stage, merged with `--no-ff`, and builds clean.
+
+- **Stages merged:** 1 window snapping, 2 edge-drag and modifier-drag triggers, 3a green button maximize + quit on close + Cmd-Q/Cmd-W protection, 3b focus follows mouse + fixed Space order + Win-key tap + exclusion editor, 4a command bar, 4b preview-card buttons + Layouts menus, 5 multi-row dock fix + per-display overrides. Each stage then got a Codex (gpt-6-astra) and Gemini adversarial review and a fix round; the fix notes are in implementation-notes.md.
+- **Verified at checkpoint:** `xcodebuild ... test` passes 1,989 tests (7 skipped, 0 failures); eight scripts/test-*.sh check suites pass (251, 101, 109, window-behavior source guards, 359, 40, 21, 52).
+- **Never run live:** no feature has been tried against real windows or keys. Hands-on checks still owed: Cmd-W delivery to the captured app (Chrome, Electron), hold-to-tile after the green-button hand-off, hover raise, Space order toggle, Win tap, drag snap, the dock editor on a side-edge display.
+- **Accidental upstream merge:** an early `--ff-only` merge of a worktree branch pulled about 30 commits from origin/main into this branch (the test suite, release script, widget audio work). Recommendation: keep them.
+- **Defaults:** Window Snapping is ON by default (shortcuts only: ctrl+opt+arrows, Return, M, Delete). Everything that swallows input or quits apps is OFF. Preview-card buttons are ON by request.
+- **Untouched pre-existing edits:** `.gitignore` and `Docky/Services/ScreenDockCoordinator.swift` were modified before this work and are not part of any commit here.
+- **Test command note:** the HANDOFF line above with `CODE_SIGN_IDENTITY=-` fails a signature check; plain `xcodebuild -project Docky.xcodeproj -scheme Docky -destination 'platform=macOS' test` works with normal signing.
+- **Rollback kit made before any install:** `$HOME/Library/Application Support/Wharf/app-backup-20261022-025252.app` and `prefs-backup-20261022-025252.plist` (restore the app with ditto, the prefs with `defaults import com.anthonyonazure.Wharf <file>`).
+- **Install:** the installed app and the Debug build have the same designated requirement, so the Accessibility grant should survive. Install line: `ditto <DerivedData>/Build/Products/Debug/Wharf.app /Applications/Wharf.app`, then restart Wharf. Wait for Anthony's yes.
+- **Skipped as infeasible:** attention flashing (no public macOS signal) and blink-free fullscreen switching. Theme and contents per screen were skipped by choice.

@@ -38,4 +38,17 @@ if grep -n 'AXUIElement' "$OUT.handle"; then
     echo "FAIL: the green button tap path calls Accessibility"
     exit 1
 fi
+# Chunk 1 review fixes in the quit services: the hold rechecks the physical
+# key, a dead tap is noticed and rebuilt, the focus owner is checked, the
+# HUD text wraps, and start() runs once.
+grep -q 'CGEventSource.keyState' "$GUARD" || { echo "FAIL: the hold does not recheck the key"; exit 1; }
+grep -q 'CGEvent.tapIsEnabled' "$GUARD" || { echo "FAIL: a dead quit protection tap is not noticed"; exit 1; }
+grep -q 'AXUIElementCreateSystemWide' "$GUARD" || { echo "FAIL: quit protection does not check the focus owner"; exit 1; }
+if grep -n 'lineLimit(1)' "$GUARD"; then
+    echo "FAIL: the HUD clips long app names"
+    exit 1
+fi
+for SERVICE in "$GUARD" "$ROOT/Docky/Services/QuitOnCloseService.swift"; do
+    grep -q 'guard !started else { return }' "$SERVICE" || { echo "FAIL: start() is not idempotent in $SERVICE"; exit 1; }
+done
 echo "PASS: service source guards"

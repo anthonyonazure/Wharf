@@ -16,6 +16,7 @@ import UniformTypeIdentifiers
 struct WindowBehaviorSettingsView: View {
     @Bindable private var preferences = WindowBehaviorPreferences.shared
     @ObservedObject private var permissions = PermissionsService.shared
+    private var status = WindowBehaviorStatus.shared
     @State private var isShowingResetConfirmation = false
     /// Secure Input stops every event tap from seeing keys; checked while the
     /// pane is open.
@@ -61,8 +62,21 @@ struct WindowBehaviorSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Turns all three features off and empties their app lists.")
+            Text(Self.resetSummary)
         }
+    }
+
+    /// Everything the reset changes, read from the defaults it restores.
+    private static var resetSummary: String {
+        typealias Defaults = WindowBehaviorPreferences.DefaultValues
+        func onOff(_ value: Bool) -> String { value ? "on" : "off" }
+        return "Turns all three features off and empties their app lists. Quit and Close Protection also goes back to its defaults: "
+            + "Protect Command-Q \(onOff(Defaults.quitGuardProtectsQuit)), "
+            + "Protect Command-W \(onOff(Defaults.quitGuardProtectsClose)), "
+            + "default protection \(Defaults.quitGuardDefaultMode.title), "
+            + String(format: "hold for %.1f s, ", Defaults.quitGuardHoldMilliseconds / 1_000)
+            + String(format: "second press within %.1f s, ", Defaults.quitGuardDoublePressMilliseconds / 1_000)
+            + "extra modifier \(Defaults.quitGuardExtraModifier.title), and every per-app protection removed."
     }
 
     // MARK: Green button
@@ -106,7 +120,26 @@ struct WindowBehaviorSettingsView: View {
                 identifiers: $preferences.quitOnCloseApps
             )
             .disabled(!preferences.quitOnCloseEnabled)
+
+            if preferences.quitOnCloseEnabled, !skippedListedApps.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(skippedListedApps, id: \.self) { name in
+                        Text("\(name): skipped, window still present. The app keeps a window open (possibly an invisible one), so it was left running.")
+                    }
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    /// Notes for apps still on the list, by name.
+    private var skippedListedApps: [String] {
+        status.quitOnCloseSkipped
+            .filter { WindowBehaviorBundleList.contains($0.key, in: preferences.quitOnCloseApps) }
+            .map(\.value)
+            .sorted()
     }
 
     // MARK: Quit protection
@@ -163,10 +196,11 @@ struct WindowBehaviorSettingsView: View {
                         Text(modifier.title).tag(modifier)
                     }
                 }
-                if preferences.quitGuardExtraModifier == .control {
-                    Text("Control-Command-Q is also the macOS Lock Screen shortcut.")
+                if preferences.quitGuardExtraModifier != .option {
+                    Text("Shift-Command-Q (Log Out) and Control-Command-Q (Lock Screen) belong to macOS and always pass through, so Command-Q confirms with Option-Command-Q instead. Command-W uses \(preferences.quitGuardExtraModifier.title).")
                         .font(.callout)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 QuitGuardOverridesEditor(overrides: $preferences.quitGuardOverrides)
@@ -177,6 +211,13 @@ struct WindowBehaviorSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(!preferences.quitGuardEnabled)
+
+            if preferences.quitGuardEnabled, status.quitGuardInactive {
+                Text("Protection is inactive: macOS turned off Wharf's keyboard watcher and it could not be restarted. Turn the switch off and on again to retry.")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if preferences.quitGuardEnabled, isSecureInputOn {
                 Text("Secure keyboard entry is on (a password field or a terminal setting), so macOS hides key presses from Wharf and protection is paused until it ends.")
@@ -220,7 +261,7 @@ private struct BundleListEditor: View {
                         AppLabel(bundleIdentifier: identifier)
                         Spacer()
                         Button {
-                            identifiers.removeAll { $0 == identifier }
+                            identifiers = WindowBehaviorBundleList.sanitized(identifiers.filter { $0 != identifier })
                         } label: {
                             Image(systemName: "minus.circle")
                         }
@@ -243,7 +284,11 @@ private struct QuitGuardOverridesEditor: View {
                 Text("Per-app protection")
                 Spacer()
                 AddAppMenu(excluded: Array(overrides.keys)) { identifier in
-                    overrides[identifier] = .off
+                    // One entry per bundle id whatever its case, so what is
+                    // shown is what is saved and what is matched.
+                    var updated = overrides
+                    updated[identifier] = .off
+                    overrides = QuitGuardPolicy.normalized(updated)
                 }
             }
             if overrides.isEmpty {

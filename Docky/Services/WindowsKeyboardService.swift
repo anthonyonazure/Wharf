@@ -466,21 +466,38 @@ final class WindowsKeyboardService {
         let input: CommandTapDetector.Input
         switch type {
         case .flagsChanged:
+            let keyCode = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+            // The Caps Lock key itself, even when a short press leaves the
+            // light as it was (the Caps Lock delay), is a key in between.
+            if CommandTapKeys.kind(of: keyCode) == .capsLock {
+                input = .keyDown
+                break
+            }
             let flags = event.flags
             let command = flags.contains(.maskCommand)
             let now = ProcessInfo.processInfo.systemUptime
+            // Delivered too late to measure: forget the press, open nothing.
+            guard let time = WinTapEvents.eventTime(
+                timestamp: event.timestamp,
+                timebaseNumer: Self.timebase.numer,
+                timebaseDenom: Self.timebase.denom,
+                now: now
+            ) else {
+                winTapDetector.reset()
+                return
+            }
+            // Modifier changes are rare next to keystrokes, so the held-key
+            // scan (about a hundred reads of the hardware key table) is
+            // cheap here.
             input = .flagsChanged(
                 command: command,
                 otherModifiers: !flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
-                time: WinTapEvents.eventTime(
-                    timestamp: event.timestamp,
-                    timebaseNumer: Self.timebase.numer,
-                    timebaseDenom: Self.timebase.denom,
-                    now: now
-                ),
+                time: time,
                 mouseHeld: Self.isAnyMouseButtonDown,
                 // Asked only on release, where it decides the tap.
-                lastOtherKeyAt: command ? nil : now - Self.secondsSinceHardwareKeyDown
+                lastOtherKeyAt: command ? nil : now - Self.secondsSinceHardwareKeyDown,
+                otherKeyHeld: Self.isOtherKeyHeld,
+                capsLock: flags.contains(.maskAlphaShift)
             )
         case .keyDown:
             input = .keyDown
@@ -516,6 +533,12 @@ final class WindowsKeyboardService {
         [CGMouseButton.left, .right, .center].contains {
             CGEventSource.buttonState(.combinedSessionState, button: $0)
         }
+    }
+
+    /// Any key but Command physically down now, from the hardware state, so
+    /// a key held since before the press counts too (see `CommandTapKeys`).
+    private nonisolated static var isOtherKeyHeld: Bool {
+        CommandTapKeys.otherKeyHeld { CGEventSource.keyState(.hidSystemState, key: CGKeyCode($0)) }
     }
 
     private nonisolated static let timebase: mach_timebase_info_data_t = {

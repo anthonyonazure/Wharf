@@ -464,17 +464,17 @@ private func testWinTapEvents() {
     // Timestamps: mach ticks on Apple silicon (125/3), nanoseconds on Intel.
     let now: TimeInterval = 1_000
     let ticks = UInt64((now - 0.25) * 1_000_000_000 * 3 / 125)
-    let fromTicks = E.eventTime(timestamp: ticks, timebaseNumer: 125, timebaseDenom: 3, now: now)
+    let fromTicks = E.eventTime(timestamp: ticks, timebaseNumer: 125, timebaseDenom: 3, now: now) ?? -1
     expect(abs(fromTicks - 999.75) < 0.001, "mach ticks convert to the event's own time")
     let nanos = UInt64((now - 0.25) * 1_000_000_000)
-    let fromNanos = E.eventTime(timestamp: nanos, timebaseNumer: 125, timebaseDenom: 3, now: now)
+    let fromNanos = E.eventTime(timestamp: nanos, timebaseNumer: 125, timebaseDenom: 3, now: now) ?? -1
     expect(abs(fromNanos - 999.75) < 0.001, "nanoseconds still read right on Apple silicon")
-    expect(abs(E.eventTime(timestamp: nanos, timebaseNumer: 1, timebaseDenom: 1, now: now) - 999.75) < 0.001,
+    expect(abs((E.eventTime(timestamp: nanos, timebaseNumer: 1, timebaseDenom: 1, now: now) ?? -1) - 999.75) < 0.001,
            "Intel timebase")
     expect(E.eventTime(timestamp: 0, timebaseNumer: 1, timebaseDenom: 1, now: now) == now, "missing stamp: now")
-    expect(E.eventTime(timestamp: 5, timebaseNumer: 1, timebaseDenom: 1, now: now) == now, "implausibly old: now")
-    expect(E.eventTime(timestamp: UInt64(2_000 * 1e9), timebaseNumer: 1, timebaseDenom: 1, now: now) == now,
-           "in the future: now")
+    expect(E.eventTime(timestamp: 5, timebaseNumer: 1, timebaseDenom: 1, now: now) == nil, "implausibly old: refused")
+    expect(E.eventTime(timestamp: UInt64(2_000 * 1e9), timebaseNumer: 1, timebaseDenom: 1, now: now) == nil,
+           "in the future: refused")
 
     // Hold measured from event stamps: a tap the tap thread saw late still fires.
     var d = CommandTapDetector()
@@ -486,6 +486,77 @@ private func testWinTapEvents() {
 private func testWinKeyActions() {
     expect(WinKeyTapAction(rawValue: "startMenu") == .startMenu, "raw value round trip")
     expect(WinKeyTapAction.allCases.count == 3, "three choices")
+}
+
+// MARK: - Code review chunk 2 re-check (Win key)
+
+private func testWinTapRecheck() {
+    typealias E = WinTapEvents
+    // Item 7: a press and release both delivered 3 s late, with stamps that
+    // say so, are refused, never clamped to "now" (which would read as a
+    // short tap).
+    let now: TimeInterval = 1_000
+    let late = UInt64((now - 3) * 1_000_000_000)
+    expect(E.eventTime(timestamp: late, timebaseNumer: 1, timebaseDenom: 1, now: now) == nil, "3 s late on Intel: refused")
+    let lateTicks = UInt64((now - 3) * 1_000_000_000 * 3 / 125)
+    expect(E.eventTime(timestamp: lateTicks, timebaseNumer: 125, timebaseDenom: 3, now: now) == nil,
+           "3 s late in mach ticks: refused")
+    let lateNanosOnArm = UInt64((now - 1.5) * 1_000_000_000)
+    expect(E.eventTime(timestamp: lateNanosOnArm, timebaseNumer: 125, timebaseDenom: 3, now: now) == nil,
+           "1.5 s late in nanoseconds on Apple silicon: refused")
+    expect(E.eventTime(timestamp: 0, timebaseNumer: 125, timebaseDenom: 3, now: now) == now, "no stamp at all: now")
+
+    // Item 5: a key held since before Command went down, or still held at
+    // release, cancels the tap even when its last key-down is old.
+    var d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10, otherKeyHeld: true))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.2, lastOtherKeyAt: 5)),
+           "W held when Command went down: no tap")
+    d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.2, lastOtherKeyAt: 5,
+                                   otherKeyHeld: true)),
+           "key still held at release (no repeat): no tap")
+    expect(d.lastCancelledByHardwareKey, "held key reported as a hardware key cancel")
+    d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10))
+    expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.2, lastOtherKeyAt: 5)),
+           "nothing held: tap fires")
+
+    // Which held keys count.
+    typealias K = CommandTapKeys
+    expect(K.kind(of: 0x37) == .command && K.kind(of: 0x36) == .command, "both Command keys are Command")
+    expect(K.kind(of: 0x39) == .capsLock, "Caps Lock is its own kind")
+    for code: UInt16 in [0x38, 0x3C, 0x3A, 0x3D, 0x3B, 0x3E, 0x3F] {
+        expect(K.kind(of: code) == .otherModifier, "\(code) is another modifier")
+    }
+    expect(K.kind(of: 0x0D) == .key, "W is a key")
+    expect(!K.otherKeyHeld { $0 == 0x37 || $0 == 0x36 }, "Command alone held: nothing else")
+    expect(!K.otherKeyHeld { $0 == 0x39 }, "Caps Lock reported down (its light) is not trusted")
+    expect(K.otherKeyHeld { $0 == 0x37 || $0 == 0x0D }, "Command and W held: another key")
+    expect(K.otherKeyHeld { $0 == 0x38 }, "Shift held: another key")
+    expect(!K.otherKeyHeld { _ in false }, "nothing held")
+
+    // Item 6: Caps Lock switching during the press cancels; Caps Lock that
+    // stays on throughout does not.
+    d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0, capsLock: true))
+    expect(d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1, capsLock: true)),
+           "Caps Lock on the whole time: tap fires")
+    d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0, capsLock: false))
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0.05, capsLock: true))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1, capsLock: true)),
+           "Caps Lock switched on mid press: no tap")
+    d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0, capsLock: true))
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1, capsLock: false)),
+           "Caps Lock switched off by release: no tap")
+    d = CommandTapDetector()
+    _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 0))
+    _ = d.handle(.keyDown)
+    expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 0.1)),
+           "Caps Lock key with no light change (fed as a key) cancels")
 }
 
 @main
@@ -505,6 +576,7 @@ enum FocusAndWinTapTests {
         testCommandTapReviewFixes()
         testWinTapEvents()
         testWinKeyActions()
+        testWinTapRecheck()
 
         if failures == 0 {
             print("PASS: \(checks) checks")

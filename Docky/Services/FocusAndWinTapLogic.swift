@@ -486,8 +486,15 @@ nonisolated struct CommandTapDetector {
         /// go down, on the same clock as `time`. It catches keys the tap
         /// never receives, such as Command+Tab and Command+Space, which the
         /// window server can consume before the session tap.
+        /// `otherKeyHeld` is whether the hardware reports any key other than
+        /// Command physically down right now (see `CommandTapKeys`): a key
+        /// held from before the press, or one that does not repeat, is not
+        /// caught by `lastOtherKeyAt`.
+        /// `capsLock` is the Caps Lock light. It is a latched state, so being
+        /// on proves nothing; only a change during the press cancels.
         case flagsChanged(command: Bool, otherModifiers: Bool, time: TimeInterval,
-                          mouseHeld: Bool = false, lastOtherKeyAt: TimeInterval? = nil)
+                          mouseHeld: Bool = false, lastOtherKeyAt: TimeInterval? = nil,
+                          otherKeyHeld: Bool = false, capsLock: Bool = false)
         case keyDown
         /// Volume, brightness and media keys (event type 14).
         case systemDefined
@@ -498,6 +505,7 @@ nonisolated struct CommandTapDetector {
 
     private var commandDown = false
     private var armedAt: TimeInterval?
+    private var armedCapsLock = false
 
     /// True while a press or a pending tap is remembered.
     var isIdle: Bool { !commandDown && armedAt == nil }
@@ -521,16 +529,19 @@ nonisolated struct CommandTapDetector {
         case .keyDown, .systemDefined, .mouseDown, .scrollWheel:
             armedAt = nil
             return false
-        case let .flagsChanged(command, otherModifiers, time, mouseHeld, lastOtherKeyAt):
+        case let .flagsChanged(command, otherModifiers, time, mouseHeld, lastOtherKeyAt, otherKeyHeld, capsLock):
             defer { commandDown = command }
             if command, !commandDown {
-                // Command just went down. Only a press on its own can count.
-                armedAt = otherModifiers || mouseHeld ? nil : time
+                // Command just went down. Only a press on its own can count:
+                // no other modifier, no button and no other key held.
+                armedAt = otherModifiers || mouseHeld || otherKeyHeld ? nil : time
+                armedCapsLock = capsLock
                 return false
             }
             if command {
-                // Still down; another modifier joining spoils the tap.
-                if otherModifiers || mouseHeld { armedAt = nil }
+                // Still down; another modifier joining, or Caps Lock
+                // switching, spoils the tap.
+                if otherModifiers || mouseHeld || otherKeyHeld || capsLock != armedCapsLock { armedAt = nil }
                 return false
             }
             guard commandDown, let armedAt else {
@@ -538,12 +549,58 @@ nonisolated struct CommandTapDetector {
                 return false
             }
             self.armedAt = nil
+            if capsLock != armedCapsLock { return false }
+            if otherKeyHeld {
+                lastCancelledByHardwareKey = true
+                return false
+            }
             if let lastOtherKeyAt, lastOtherKeyAt >= armedAt - Self.otherKeySlackSeconds {
                 lastCancelledByHardwareKey = true
                 return false
             }
             let held = time - armedAt
             return !otherModifiers && !mouseHeld && held >= 0 && held <= Self.maximumHoldSeconds
+        }
+    }
+}
+
+/// Which physically held keys stop a Win key tap. Virtual key codes from
+/// Carbon's Events.h, repeated here so this file stays Foundation only.
+nonisolated enum CommandTapKeys {
+    enum Kind: Equatable {
+        /// Left or right Command: the Win key itself.
+        case command
+        /// Shift, Option, Control or Fn, either side.
+        case otherModifier
+        /// Caps Lock. The hardware may report its light rather than the key,
+        /// so being down is not trusted; the detector watches for a change
+        /// of the light instead.
+        case capsLock
+        case key
+    }
+
+    static let rightCommand: UInt16 = 0x36
+    static let command: UInt16 = 0x37
+    static let capsLockKey: UInt16 = 0x39
+    static let otherModifiers: Set<UInt16> = [0x38, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F]
+    /// Every key code a keyboard reports.
+    static let scanned: ClosedRange<UInt16> = 0...0x7F
+
+    static func kind(of keyCode: UInt16) -> Kind {
+        if keyCode == command || keyCode == rightCommand { return .command }
+        if keyCode == capsLockKey { return .capsLock }
+        if otherModifiers.contains(keyCode) { return .otherModifier }
+        return .key
+    }
+
+    /// True when any held key other than Command and Caps Lock should stop
+    /// the tap. `isDown` asks the hardware about one key code.
+    static func otherKeyHeld(isDown: (UInt16) -> Bool) -> Bool {
+        scanned.contains { code in
+            switch kind(of: code) {
+            case .command, .capsLock: false
+            case .otherModifier, .key: isDown(code)
+            }
         }
     }
 }
@@ -583,11 +640,18 @@ nonisolated enum WinTapEvents {
     /// Apple silicon it is widely reported to carry mach ticks; on Intel the
     /// two agree. Both readings are tried, mach ticks first, and one is
     /// trusted only when it lands within `plausibleAgeSeconds` before `now`.
-    /// Otherwise `now` is used, which is what the tap did before.
+    ///
+    /// Nil when neither reading is plausible: an event delivered that late
+    /// (or with a stamp from the future) cannot have its hold measured, and
+    /// pretending it happened now would turn a long hold into a short one.
+    /// The caller then forgets the press, so nothing opens. A missing stamp
+    /// (zero) is the one case read as `now`: it says nothing about delay,
+    /// and refusing it would switch the Win key tap off for good on a system
+    /// that never stamps events.
     static let plausibleAgeSeconds: TimeInterval = 1
 
     static func eventTime(timestamp: UInt64, timebaseNumer: UInt32, timebaseDenom: UInt32,
-                          now: TimeInterval) -> TimeInterval {
+                          now: TimeInterval) -> TimeInterval? {
         guard timestamp != 0 else { return now }
         var candidates: [Double] = []
         if timebaseDenom != 0 {
@@ -598,7 +662,7 @@ nonisolated enum WinTapEvents {
             let age = now - seconds
             if age >= -0.01, age <= plausibleAgeSeconds { return min(seconds, now) }
         }
-        return now
+        return nil
     }
 }
 

@@ -1766,7 +1766,9 @@ AXModal read, settings text).
 ## 2026-10-22, Code review chunk 2 patches (focus and Space order)
 
 Branch `cr3-focus-spaces` from `feature/vorssaint-parity` (655ea5f). Every
-claim was checked against the code first; all ten held.
+claim was checked against the code first. Nine held as stated; item 7's
+premise (Wharf panels at the menu level) could not be confirmed from the
+source, and the exclusion was added anyway (see Deviations).
 
 ### What changed
 1. Hover lookup watchdog. A ticket (`HoverLookupTicket`) replaces the
@@ -1868,3 +1870,16 @@ retry schedule, availability), run as a second binary by
 - Whether a Dock already respawning when a second restart request is
   coalesced has read the preferences before the second writer flushed. The
   window is tiny; a Dock already up is always restarted again.
+- On Macs with a notch, a native full-screen window's bounds may not equal
+  the display's bounds, so item 8 can miss there. The miss lets hover focus
+  run as before; nothing is lost.
+- Wharf's own menu count resets only on the end tracking notification. If
+  one were ever missed, hover focus would stay off until relaunch (silent,
+  harmless otherwise).
+
+### Known residual (not one of the ten items)
+- `currentSetting()` still ignores the result of
+  `CFPreferencesAppSynchronize` on the Dock domain. A failed read while the
+  journal is held could look like the user turned rearranging back on and
+  turn the switch off (let go). Fixing it needs a new "unreadable" setting
+  that makes the step do nothing; left for a follow-up.

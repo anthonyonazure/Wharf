@@ -117,10 +117,11 @@ final class QuitOnCloseService {
         }
         if activationObserver == nil {
             // An app brought to the front (its Dock icon clicked, a document
-            // opened) is about to show a window: stop any pending look. An
-            // app already asked to quit once is armed again by whatever
-            // window it shows next, so a cancelled quit does not disarm it
-            // for good when its windows are not standard ones.
+            // opened) is about to show a window: stop any pending look. For
+            // an app already asked to quit once, activation alone never
+            // re-arms (it may be its own quit or save prompt coming forward);
+            // it only lets a later ordinary, non dialog window count as new
+            // work, for apps whose windows are not standard ones.
             activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification,
                 object: nil,
@@ -152,9 +153,8 @@ final class QuitOnCloseService {
             // A window (new or back) ends any pending look for the app.
             rounds[pid] = nil
             if episodes.hasRequestedQuit(pid) {
-                let isStandard = hasStandardWindow(pid: pid, in: windows)
-                episodes.sawWindow(of: pid, isStandard: isStandard)
-                if !isStandard { recheckSubrole(of: pid) }
+                episodes.sawWindow(of: pid, kind: strongestWindowKind(pid: pid, in: windows))
+                if episodes.hasRequestedQuit(pid) { recheckSubrole(of: pid) }
             }
         }
 
@@ -239,8 +239,8 @@ final class QuitOnCloseService {
         rounds[pid] = nil
         if let id = app.bundleIdentifier { status.quitOnCloseSkipped[id.lowercased()] = nil }
         // One request per windowless stretch: if the user cancels a save
-        // prompt, the app stays until it shows a real window again and that
-        // one closes too.
+        // prompt, the app stays until it shows a new work window (never a
+        // dialog) and that one closes too.
         episodes.requestedQuit(pid)
         // A normal quit request: unsaved-changes prompts still appear.
         app.terminate()
@@ -258,17 +258,25 @@ final class QuitOnCloseService {
         return count
     }
 
-    /// Whether any of the app's windows is a standard window. A subrole that
-    /// cannot be read does not count, so a doubtful window never re-arms.
-    private func hasStandardWindow(pid: pid_t, in windows: [AppWindow]) -> Bool {
-        windows.contains { window in
-            guard window.processIdentifier == pid else { return false }
-            AXUIElementSetMessagingTimeout(window.element, messagingTimeout)
-            var value: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(window.element, kAXSubroleAttribute as CFString, &value) == .success
-            else { return false }
-            return (value as? String) == kAXStandardWindowSubrole as String
-        }
+    /// The strongest kind among the app's windows (see
+    /// QuitOnCloseWindowKind). A subrole or modal flag that cannot be read is
+    /// a doubt, and a modal window is a dialog whatever its subrole, so a
+    /// quit or save prompt never re-arms.
+    private func strongestWindowKind(pid: pid_t, in windows: [AppWindow]) -> QuitOnCloseWindowKind {
+        windows.lazy
+            .filter { $0.processIdentifier == pid }
+            .map { window -> QuitOnCloseWindowKind in
+                AXUIElementSetMessagingTimeout(window.element, self.messagingTimeout)
+                var subrole: CFTypeRef?
+                let subroleRead = AXUIElementCopyAttributeValue(window.element, kAXSubroleAttribute as CFString, &subrole) == .success
+                var modal: CFTypeRef?
+                let modalRead = AXUIElementCopyAttributeValue(window.element, kAXModalAttribute as CFString, &modal) == .success
+                return QuitOnCloseWindowKind.classify(
+                    subrole: subroleRead ? subrole as? String : nil,
+                    isModal: modalRead ? (modal as? Bool) : nil
+                )
+            }
+            .max() ?? .unknown
     }
 
     /// One more look at the subroles a moment later, for a window that did
@@ -276,9 +284,7 @@ final class QuitOnCloseService {
     private func recheckSubrole(of pid: pid_t) {
         DispatchQueue.main.asyncAfter(deadline: .now() + subroleRetryDelay) { [weak self] in
             guard let self, self.isActive, self.episodes.hasRequestedQuit(pid) else { return }
-            if self.hasStandardWindow(pid: pid, in: self.registry.windows) {
-                self.episodes.sawWindow(of: pid, isStandard: true)
-            }
+            self.episodes.sawWindow(of: pid, kind: self.strongestWindowKind(pid: pid, in: self.registry.windows))
         }
     }
 

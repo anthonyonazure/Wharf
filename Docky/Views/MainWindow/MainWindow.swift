@@ -170,8 +170,9 @@ final class MainWindowContainerView: NSView {
     private func cursorIsAtChromeFringe(_ point: CGPoint, hostingSize: CGSize) -> Bool {
         let chromeSize = (window as? MainWindow)?.dockContext.layout.chromeSize ?? .zero
         guard chromeSize.width > 0, chromeSize.height > 0 else { return true }
-        let position = DockyPreferences.shared.windowPosition
-            .resolved(systemOrientation: DockSettingsService.shared.orientation)
+        let position = (window as? MainWindow)?.dockContext.resolvedPosition
+            ?? DockyPreferences.shared.windowPosition
+                .resolved(systemOrientation: DockSettingsService.shared.orientation)
         switch position {
         case .bottom:
             return point.y >= hostingSize.height - chromeSize.height
@@ -321,7 +322,15 @@ final class MainWindow: NSPanel {
     /// `nil` means "unbound" — the legacy single-window behavior where the
     /// dock follows the primary display or the pointer.
     var assignedDisplayID: CGDirectDisplayID? {
-        didSet { dockContext.displayID = assignedDisplayID }
+        didSet {
+            dockContext.displayID = assignedDisplayID
+            // Wharf: the window was built before it knew its display, so its
+            // first frame and hide state used the global settings. Settle
+            // against this display's overrides now.
+            if hasCompletedSetup, assignedDisplayID != oldValue {
+                applyEffectiveVisibility(animated: false)
+            }
+        }
     }
 
     /// Per-dock state (layout metrics, magnification). Wharf runs one dock per
@@ -352,7 +361,7 @@ final class MainWindow: NSPanel {
     }
 
     private var effectivelyAutohides: Bool {
-        preferences.autohidesWindow
+        dockContext.resolvedAutohides
             || fullscreenHidingActive
             || (isMaximizedActiveOnTargetScreen && preferences.maximizedWindowBehavior == .hideDocky)
     }
@@ -545,6 +554,9 @@ final class MainWindow: NSPanel {
             // view redrew in several rows while the panel kept its one row
             // frame, clipping every extra row until something else resized it.
             _ = preferences.dockRowCount
+            // Per-display edge and tile size overrides. Read the whole store
+            // so a dock re-measures even when its own entry is first created.
+            _ = PerDisplaySettings.shared.allOverrides
             _ = dockSettings.orientation
             _ = dockSettings.tileSize
             _ = dockSettings.largeSize
@@ -691,6 +703,7 @@ final class MainWindow: NSPanel {
     private func observeVisibilityInputs() {
         observeChanges { [weak self] in
             _ = DockyPreferences.shared.autohidesWindow
+            _ = PerDisplaySettings.shared.allOverrides
             self?.applyEffectiveVisibility(animated: true)
         }
         .store(in: &cancellables)
@@ -902,7 +915,7 @@ final class MainWindow: NSPanel {
         let verticalContentPadding: CGFloat = fullAxis ? 0
             : preferences.effectiveWindowContentInsetTop + preferences.effectiveWindowContentInsetBottom
         let position = resolvedPositionForThisDock
-        let baseTileSize = dockSettings.displayTileSize
+        let baseTileSize = dockContext.resolvedTileSize
         let baseTileHeight = baseTileSize + preferences.effectiveTileVerticalPadding * 2
         let externalAppDropPreview: AppTile? = {
             if case let .app(_, tile) = DockDragService.shared.kind { return tile }
@@ -1012,7 +1025,7 @@ final class MainWindow: NSPanel {
         // size is the UNscaled `largeSize` even when overflow has shrunk
         // the resting tiles, so headroom is measured from the scaled
         // chrome height up to that fixed peak.
-        let scaledBaseTileSize = dockSettings.tileSize * contentScale
+        let scaledBaseTileSize = dockContext.resolvedTileSize * contentScale
         let magnificationHeadroom: CGFloat = (
             dockSettings.magnification && dockSettings.largeSize > scaledBaseTileSize
         )
@@ -1162,9 +1175,7 @@ final class MainWindow: NSPanel {
     /// Wharf: this dock's edge, honouring a per-display override before the
     /// global preference.
     var resolvedPositionForThisDock: ResolvedDockWindowPosition {
-        let override = PerDisplaySettings.shared.position(for: assignedDisplayID)
-        return (override ?? preferences.windowPosition)
-            .resolved(systemOrientation: dockSettings.orientation)
+        dockContext.resolvedPosition
     }
 
     private func frameOrigin(

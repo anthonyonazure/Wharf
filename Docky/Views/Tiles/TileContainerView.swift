@@ -935,11 +935,11 @@ struct TileContainerView: View {
     }
 
     private var baseTileSize: CGFloat {
-        dockSettings.displayTileSize
+        dock.resolvedTileSize
     }
 
     private var position: ResolvedDockWindowPosition {
-        preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        dock.resolvedPosition
     }
 
     /// Cross-axis alignment that pushes tiles toward the screen edge the

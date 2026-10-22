@@ -674,6 +674,7 @@ struct BehaviorSettingsView: View {
         }
 
         FixedSpaceOrderSection()
+        PerScreenDisplaysSection()
     }
 
     @ViewBuilder

@@ -168,11 +168,11 @@ struct DividerTileView: View {
 
     private var lineInset: CGFloat {
         let fraction = min(max(preferences.effectiveDividerPaddingFraction, 0), 0.5)
-        return layout.scaled(dockSettings.displayTileSize) * fraction
+        return layout.scaled(dock.resolvedTileSize) * fraction
     }
 
     private var position: ResolvedDockWindowPosition {
-        preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        dock.resolvedPosition
     }
 
     private var isPinnedCustomDivider: Bool {

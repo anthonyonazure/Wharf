@@ -1102,7 +1102,7 @@ struct TileView: View {
     }
 
     private var effectiveTileSize: CGFloat {
-        renderedTileSize ?? layout.scaled(dockSettings.displayTileSize)
+        renderedTileSize ?? layout.scaled(dock.resolvedTileSize)
     }
 
     private func renderedWidgetSpan(for span: TileSpan) -> TileSpan {
@@ -1162,7 +1162,7 @@ struct TileView: View {
     }
 
     private var position: ResolvedDockWindowPosition {
-        preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        dock.resolvedPosition
     }
 
     private var runningIndicatorAlignment: Alignment {

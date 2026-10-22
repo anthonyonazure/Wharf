@@ -46,6 +46,16 @@ nonisolated enum CommandBarNumberFormat {
         return formatter.string(from: NSNumber(value: normalized))
     }
 
+    /// True when the comma at `index` is followed by exactly three digits.
+    static func isGroupingComma(at index: Int, in characters: [Character]) -> Bool {
+        for offset in 1...3 {
+            let position = index + offset
+            guard position < characters.count, characters[position].isASCII, characters[position].isNumber else { return false }
+        }
+        let after = index + 4
+        return after >= characters.count || !(characters[after].isASCII && characters[after].isNumber)
+    }
+
     /// The value as plain ASCII, for copying back into a field.
     static func plain(_ value: Double) -> String {
         let rounded = significantRounded(value)
@@ -168,8 +178,9 @@ nonisolated enum CommandBarCalculator {
                         if sawDot { return nil }
                         sawDot = true
                     } else if c == "," {
-                        // A grouping comma (1,000). Only accepted between digits.
-                        guard index + 1 < characters.count, characters[index + 1].isASCII, characters[index + 1].isNumber else { break }
+                        // A grouping comma (1,000) only. "1,5" is refused
+                        // rather than read as 15 where comma is the decimal mark.
+                        guard sawDigit, !sawDot, CommandBarNumberFormat.isGroupingComma(at: index, in: characters) else { return nil }
                     } else {
                         break
                     }
@@ -478,8 +489,13 @@ nonisolated enum CommandBarUnits {
             index += 1
         }
         let numberStart = index
-        while index < characters.count,
-              (characters[index].isASCII && characters[index].isNumber) || characters[index] == "." || characters[index] == "," {
+        while index < characters.count {
+            let c = characters[index]
+            if c == "," {
+                guard index > numberStart, CommandBarNumberFormat.isGroupingComma(at: index, in: characters) else { return nil }
+            } else if !(c.isASCII && c.isNumber) && c != "." {
+                break
+            }
             index += 1
         }
         guard index > numberStart, index - numberStart <= 24 else { return nil }

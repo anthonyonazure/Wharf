@@ -245,7 +245,7 @@ final class CommandBarService: ObservableObject {
                 .map(windowRow)
         }
         if preferences.isOn(.menus) {
-            candidates += menuItems.map(menuRow)
+            candidates += menuItems.enumerated().map { menuRow($1, index: $0) }
         }
         if preferences.isOn(.snap) {
             candidates += WindowSnapAction.allCases.map(snapRow)
@@ -376,12 +376,13 @@ final class CommandBarService: ObservableObject {
         )
     }
 
-    private func menuRow(_ item: CommandBarMenuItem) -> CommandBarResult {
+    private func menuRow(_ item: CommandBarMenuItem, index: Int) -> CommandBarResult {
         let appName = targetApp?.localizedName ?? "App"
         let bundleID = targetApp?.bundleIdentifier ?? "unknown"
         let path = item.path.joined(separator: " > ")
         return CommandBarResult(
-            id: "menu:\(path) > \(item.title)",
+            // Two items can share a path and title, so the index keeps rows unique.
+            id: "menu:\(index):\(path) > \(item.title)",
             kind: .menu,
             title: item.title,
             subtitle: "\(appName): \(path)",

@@ -69,6 +69,7 @@ private func testArithmetic() {
     expectCalc("2 * pi", 2 * Double.pi)
     expectCalc("e^1", M_E)
     expectCalc("1,000 * 2", 2000)
+    expectCalc("1,234,567 + 1", 1234568)
     expectCalc("3 \u{00D7} 4", 12)
     expectCalc("8 \u{00F7} 2", 4)
     expectCalc("5 \u{2212} 7", -2)
@@ -106,7 +107,7 @@ private func testHostileCalculator() {
         "1 + ) 2", "sqrt", "sqrt()", "sqrt 4", "sin(", "foo(1)", "1 + x",
         "NaN", "nan + 1", "inf * 0", "infinity", "1e", "1e+", "e1e1e1",
         "\u{0000}", "1\u{0000}+1", "💥+1", "١+١", "1 + 1 ; rm", "$(1+1)",
-        "1,,000 + 1", ",5+1",
+        "1,,000 + 1", ",5+1", "1,5 + 1", "1,50 * 2", "1,0000 + 1", "1.5,000 + 1",
     ]
     for input in hostile {
         expectFast("calc \(input.debugDescription)") {
@@ -186,7 +187,7 @@ private func testUnits() {
         "5 km to kg", "20 c to mi", "1 gb to h", "km to mi", "100 km", "100 km mi",
         "100 km to", "100 km to parsecs", "100 zz to mi", "100 km to mi to ft",
         "", "to", "1e999 km to mi", "99999999999999999999 km to mi", "--5 km to mi",
-        "nan km to mi", "100 km \u{0000} mi", String(repeating: "9", count: 500) + " km to mi",
+        "nan km to mi", "1,5 km to mi", ",5 km to mi", "100 km \u{0000} mi", String(repeating: "9", count: 500) + " km to mi",
     ]
     for input in refused {
         expectFast("units \(input.prefix(30))") {

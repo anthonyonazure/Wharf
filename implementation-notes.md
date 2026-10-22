@@ -1227,3 +1227,10 @@ locale-aware number parsing, and the file path filter.
   partial results and deadline timing. Only the build and the logic checks
   were run.
 - A network home folder (no test machine has one).
+- The menu walk now treats an item whose enabled state cannot be read as
+  disabled. An app whose menu items do not publish that attribute will show
+  no menu commands where it showed them all before. That is intended (fail
+  closed), not a regression.
+- The new conflict check turns the hot key off on a conflict. Wharf's own
+  defaults (Launchpad unset, Window Switcher Option-Tab) do not collide with
+  the bar's Option-Space, so a fresh install is unaffected.

@@ -82,7 +82,10 @@ struct BundleIDListEditor: View {
             }
 
             HStack {
-                TextField("Bundle ID, for example com.apple.Terminal", text: $typedBundleID)
+                TextField(allowsExecutableNames
+                          ? "Bundle ID (com.apple.Terminal) or program name (alacritty)"
+                          : "Bundle ID, for example com.apple.Terminal",
+                          text: $typedBundleID)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { addTyped() }
                 Button("Add") { addTyped() }
@@ -95,12 +98,17 @@ struct BundleIDListEditor: View {
                 Text(typedValidationError)
                     .font(.caption)
                     .foregroundStyle(.orange)
+            } else if allowsExecutableNames {
+                Text("A name without dots is taken as a program name, for an app that has no bundle ID (many terminals, for example).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
     private var typedValidationError: String? {
-        BundleIDList.validationError(typedBundleID)
+        BundleIDList.validationError(typedBundleID, allowsExecutableName: allowsExecutableNames)
     }
 
     /// Bundle IDs ignore case, so "COM.APPLE.SAFARI" is a duplicate of

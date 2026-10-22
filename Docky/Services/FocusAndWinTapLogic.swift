@@ -88,9 +88,23 @@ nonisolated enum BundleIDList {
     /// bundle ID is reverse DNS: two or more parts separated by dots, each
     /// made of letters, digits and hyphens. Underscores are refused, as
     /// Apple's rules for the key refuse them.
-    static func validationError(_ typed: String) -> String? {
+    ///
+    /// `allowsExecutableName` is for a list whose service also matches an
+    /// app without a bundle ID by its executable's name (`matchKey`): there
+    /// a name without dots is taken as that program name, so `alacritty` or
+    /// `xterm` can be added. It may hold letters, digits, spaces, hyphens and
+    /// underscores, never a slash or a colon. Other lists refuse it, since
+    /// such an entry would never match there.
+    static func validationError(_ typed: String, allowsExecutableName: Bool = false) -> String? {
         let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "Type a bundle ID." }
+        if trimmed.isEmpty { return allowsExecutableName ? "Type a bundle ID or a program name." : "Type a bundle ID." }
+        if allowsExecutableName, !trimmed.contains(".") {
+            let program = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+            if trimmed.unicodeScalars.contains(where: { !program.contains($0) }) {
+                return "A program name uses only letters, digits, spaces, hyphens and underscores."
+            }
+            return nil
+        }
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
         if trimmed.unicodeScalars.contains(where: { !allowed.contains($0) }) {
             return "A bundle ID uses only letters, digits, dots and hyphens."
@@ -342,6 +356,76 @@ nonisolated struct HoverCommitCheck {
         // and unsure means no raise.
         return receivingWindowID == windowID
     }
+
+    // Code review chunk 2 re-check, items 2 and 3.
+
+    /// The monotonic clock (`systemUptime`) now, and the lookup's absolute
+    /// deadline on the same clock. An answer that arrives after it is
+    /// dropped even when the watchdog has not run yet (a busy main thread
+    /// can deliver both out of order).
+    var now: TimeInterval = 0
+    var deadline: TimeInterval = .infinity
+    /// The gate run again on fresh state right before raising: the app in
+    /// front now (excluded or full screen since the lookup began?), the
+    /// target's exclusion, the display selection, menus and modifiers. Nil
+    /// when it could not be read, which means no raise.
+    var freshDecision: HoverFocusDecision?
+
+    /// Everything in `allowsRaise`, plus the deadline and the fresh gate,
+    /// which must still name this very window of this very app.
+    func allowsCommit(of windowID: CGWindowID, pid: pid_t, restingAt point: CGPoint) -> Bool {
+        guard now <= deadline, freshDecision == .raise(windowID: windowID, pid: pid) else { return false }
+        return allowsRaise(of: windowID, restingAt: point)
+    }
+}
+
+/// Code review chunk 2 re-check, item 1: who is using the hover lookup
+/// workers. A ticket (`HoverLookupTicket`) says whether an answer is still
+/// wanted; this says how many lookups are still running, answered or not, so
+/// a stuck Accessibility call holds one slot instead of a queue. A job that
+/// was cancelled before it started never runs, and one cancelled midway
+/// stops at its next step. Not thread safe by itself: the service wraps it
+/// in a lock so the worker threads can ask.
+nonisolated struct HoverWorkerLedger: Equatable {
+    /// One stuck lookup plus one live one. With both slots taken, a resting
+    /// pointer waits instead of piling more calls onto a busy app.
+    static let maximumOutstanding = 2
+
+    private(set) var outstanding: Set<UInt64> = []
+    private var cancelled: Set<UInt64> = []
+    private var last: UInt64 = 0
+
+    var canStart: Bool { outstanding.count < Self.maximumOutstanding }
+
+    /// A new job's id, or nil when every slot is taken.
+    mutating func start() -> UInt64? {
+        guard canStart else { return nil }
+        last &+= 1
+        outstanding.insert(last)
+        return last
+    }
+
+    /// The answer is no longer wanted. The slot stays taken until the job
+    /// actually returns (`finish`).
+    mutating func cancel(_ id: UInt64) {
+        if outstanding.contains(id) { cancelled.insert(id) }
+    }
+
+    /// For switching the feature off: nothing running may raise anything.
+    mutating func cancelAll() {
+        cancelled.formUnion(outstanding)
+    }
+
+    /// Asked by the worker before each step.
+    func shouldContinue(_ id: UInt64) -> Bool {
+        outstanding.contains(id) && !cancelled.contains(id)
+    }
+
+    /// The job returned, whatever it found: its slot is free again.
+    mutating func finish(_ id: UInt64) {
+        outstanding.remove(id)
+        cancelled.remove(id)
+    }
 }
 
 // MARK: - Fixed Space order
@@ -472,8 +556,15 @@ nonisolated struct CommandTapDetector {
         /// go down, on the same clock as `time`. It catches keys the tap
         /// never receives, such as Command+Tab and Command+Space, which the
         /// window server can consume before the session tap.
+        /// `otherKeyHeld` is whether the hardware reports any key other than
+        /// Command physically down right now (see `CommandTapKeys`): a key
+        /// held from before the press, or one that does not repeat, is not
+        /// caught by `lastOtherKeyAt`.
+        /// `capsLock` is the Caps Lock light. It is a latched state, so being
+        /// on proves nothing; only a change during the press cancels.
         case flagsChanged(command: Bool, otherModifiers: Bool, time: TimeInterval,
-                          mouseHeld: Bool = false, lastOtherKeyAt: TimeInterval? = nil)
+                          mouseHeld: Bool = false, lastOtherKeyAt: TimeInterval? = nil,
+                          otherKeyHeld: Bool = false, capsLock: Bool = false)
         case keyDown
         /// Volume, brightness and media keys (event type 14).
         case systemDefined
@@ -484,6 +575,7 @@ nonisolated struct CommandTapDetector {
 
     private var commandDown = false
     private var armedAt: TimeInterval?
+    private var armedCapsLock = false
 
     /// True while a press or a pending tap is remembered.
     var isIdle: Bool { !commandDown && armedAt == nil }
@@ -507,16 +599,19 @@ nonisolated struct CommandTapDetector {
         case .keyDown, .systemDefined, .mouseDown, .scrollWheel:
             armedAt = nil
             return false
-        case let .flagsChanged(command, otherModifiers, time, mouseHeld, lastOtherKeyAt):
+        case let .flagsChanged(command, otherModifiers, time, mouseHeld, lastOtherKeyAt, otherKeyHeld, capsLock):
             defer { commandDown = command }
             if command, !commandDown {
-                // Command just went down. Only a press on its own can count.
-                armedAt = otherModifiers || mouseHeld ? nil : time
+                // Command just went down. Only a press on its own can count:
+                // no other modifier, no button and no other key held.
+                armedAt = otherModifiers || mouseHeld || otherKeyHeld ? nil : time
+                armedCapsLock = capsLock
                 return false
             }
             if command {
-                // Still down; another modifier joining spoils the tap.
-                if otherModifiers || mouseHeld { armedAt = nil }
+                // Still down; another modifier joining, or Caps Lock
+                // switching, spoils the tap.
+                if otherModifiers || mouseHeld || otherKeyHeld || capsLock != armedCapsLock { armedAt = nil }
                 return false
             }
             guard commandDown, let armedAt else {
@@ -524,12 +619,58 @@ nonisolated struct CommandTapDetector {
                 return false
             }
             self.armedAt = nil
+            if capsLock != armedCapsLock { return false }
+            if otherKeyHeld {
+                lastCancelledByHardwareKey = true
+                return false
+            }
             if let lastOtherKeyAt, lastOtherKeyAt >= armedAt - Self.otherKeySlackSeconds {
                 lastCancelledByHardwareKey = true
                 return false
             }
             let held = time - armedAt
             return !otherModifiers && !mouseHeld && held >= 0 && held <= Self.maximumHoldSeconds
+        }
+    }
+}
+
+/// Which physically held keys stop a Win key tap. Virtual key codes from
+/// Carbon's Events.h, repeated here so this file stays Foundation only.
+nonisolated enum CommandTapKeys {
+    enum Kind: Equatable {
+        /// Left or right Command: the Win key itself.
+        case command
+        /// Shift, Option, Control or Fn, either side.
+        case otherModifier
+        /// Caps Lock. The hardware may report its light rather than the key,
+        /// so being down is not trusted; the detector watches for a change
+        /// of the light instead.
+        case capsLock
+        case key
+    }
+
+    static let rightCommand: UInt16 = 0x36
+    static let command: UInt16 = 0x37
+    static let capsLockKey: UInt16 = 0x39
+    static let otherModifiers: Set<UInt16> = [0x38, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F]
+    /// Every key code a keyboard reports.
+    static let scanned: ClosedRange<UInt16> = 0...0x7F
+
+    static func kind(of keyCode: UInt16) -> Kind {
+        if keyCode == command || keyCode == rightCommand { return .command }
+        if keyCode == capsLockKey { return .capsLock }
+        if otherModifiers.contains(keyCode) { return .otherModifier }
+        return .key
+    }
+
+    /// True when any held key other than Command and Caps Lock should stop
+    /// the tap. `isDown` asks the hardware about one key code.
+    static func otherKeyHeld(isDown: (UInt16) -> Bool) -> Bool {
+        scanned.contains { code in
+            switch kind(of: code) {
+            case .command, .capsLock: false
+            case .otherModifier, .key: isDown(code)
+            }
         }
     }
 }
@@ -569,11 +710,18 @@ nonisolated enum WinTapEvents {
     /// Apple silicon it is widely reported to carry mach ticks; on Intel the
     /// two agree. Both readings are tried, mach ticks first, and one is
     /// trusted only when it lands within `plausibleAgeSeconds` before `now`.
-    /// Otherwise `now` is used, which is what the tap did before.
+    ///
+    /// Nil when neither reading is plausible: an event delivered that late
+    /// (or with a stamp from the future) cannot have its hold measured, and
+    /// pretending it happened now would turn a long hold into a short one.
+    /// The caller then forgets the press, so nothing opens. A missing stamp
+    /// (zero) is the one case read as `now`: it says nothing about delay,
+    /// and refusing it would switch the Win key tap off for good on a system
+    /// that never stamps events.
     static let plausibleAgeSeconds: TimeInterval = 1
 
     static func eventTime(timestamp: UInt64, timebaseNumer: UInt32, timebaseDenom: UInt32,
-                          now: TimeInterval) -> TimeInterval {
+                          now: TimeInterval) -> TimeInterval? {
         guard timestamp != 0 else { return now }
         var candidates: [Double] = []
         if timebaseDenom != 0 {
@@ -584,7 +732,7 @@ nonisolated enum WinTapEvents {
             let age = now - seconds
             if age >= -0.01, age <= plausibleAgeSeconds { return min(seconds, now) }
         }
-        return now
+        return nil
     }
 }
 

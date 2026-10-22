@@ -232,3 +232,14 @@ Nothing here is installed or pushed. Branch `feature/vorssaint-parity` carries e
 - **Rollback kit made before any install:** `$HOME/Library/Application Support/Wharf/app-backup-20261022-025252.app` and `prefs-backup-20261022-025252.plist` (restore the app with ditto, the prefs with `defaults import com.anthonyonazure.Wharf <file>`).
 - **Install:** the installed app and the Debug build have the same designated requirement, so the Accessibility grant should survive. Install line: `ditto <DerivedData>/Build/Products/Debug/Wharf.app /Applications/Wharf.app`, then restart Wharf. Wait for Anthony's yes.
 - **Skipped as infeasible:** attention flashing (no public macOS signal) and blink-free fullscreen switching. Theme and contents per screen were skipped by choice.
+
+## Checkpoint 2026-10-22 (later): review rounds on the Vorssaint parity build
+
+Branch `feature/vorssaint-parity` (unpushed, not merged into main). The installed `/Applications/Wharf.app` is the earlier build from before these rounds.
+
+- **Two BMAD code review chunks run** (Window Behavior; focus, Space order, Win tap, keyboard), each with Blind Hunter plus Edge Case Hunter, patched, then re-attacked by Codex (gpt-6-astra) and Gemini, then patched again. Remaining chunks not reviewed this way: snap engine and drag triggers, command bar, dock changes (preview buttons, layouts, multi-row, per-display), settings wiring. Those had one Codex and Gemini round earlier.
+- **Verified at this checkpoint:** build succeeds; Wharf's own test suite passes (1,989 tests, 0 failures, 7 skipped); eight scripts/test-*.sh suites pass.
+- **Lesson:** the check scripts do not run Wharf's XCTest suite. A patch once broke a pinned test (stored bundle lists must round trip verbatim). Always run `xcodebuild -project Docky.xcodeproj -scheme Docky -destination 'platform=macOS' test` after merging.
+- **Still never run live:** green button, Command-Q/Command-W guard, focus follows mouse, Fixed Space order and Dock restart paths, Win tap, drag snap, command bar actions.
+- **Open follow-up:** if reading the Dock setting fails while Wharf holds Space order fixed, it can look like the user changed it and the switch turns off.
+- **Rollback kit:** `$HOME/Library/Application Support/Wharf/app-backup-20261022-025252.app` and `prefs-backup-20261022-025252.plist` are copies of the pre-parity app. Take a fresh copy of the installed app before the next install.

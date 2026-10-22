@@ -473,6 +473,18 @@ final class WindowRegistry: ObservableObject {
         return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value) == .success
     }
 
+    /// Wharf: the tracked window for a raw AX window element, for drag
+    /// snapping, which finds the window under the pointer. Re-syncs the app
+    /// once when the element is not tracked yet; nil for windows the registry
+    /// does not track (panels, filtered apps).
+    func window(for element: AXUIElement, pid: pid_t) -> AppWindow? {
+        if let match = windows.first(where: { CFEqual($0.element, element) }) {
+            return match
+        }
+        syncWindows(for: pid)
+        return windows.first { CFEqual($0.element, element) }
+    }
+
     /// Returns a live `AXUIElement` for the window's logical identity, or nil
     /// when the window is truly gone. Probes the cached element with a cheap
     /// position read; if AX no longer answers, re-syncs the app and tries to

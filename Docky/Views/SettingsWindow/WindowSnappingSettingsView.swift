@@ -66,6 +66,8 @@ struct WindowSnappingSettingsView: View {
                 .disabled(!preferences.windowSnapEnabled)
             }
 
+            WindowSnapDragSettingsSection()
+
             ForEach(WindowSnapAction.Group.allCases) { group in
                 Section(group.title) {
                     ForEach(group.actions) { action in
@@ -98,7 +100,7 @@ struct WindowSnappingSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Turns snapping on, sets the gap to 0 and puts every shortcut back to its default.")
+            Text("Turns snapping on, sets the gap to 0, puts every shortcut back to its default and turns the drag triggers off.")
         }
     }
 

@@ -1842,6 +1842,70 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// Whether the window snapping shortcuts are registered. See
+    /// `WindowSnapService`.
+    var windowSnapEnabled: Bool {
+        didSet {
+            guard windowSnapEnabled != oldValue else { return }
+            defaults.set(windowSnapEnabled, forKey: Keys.windowSnapEnabled)
+        }
+    }
+
+    /// Points between snapped windows and between a window and the screen
+    /// edge. Clamped to `WindowSnapGeometry.gapRange` on read and write.
+    var windowSnapGap: Double {
+        didSet {
+            let clamped = Double(WindowSnapGeometry.clampedGap(windowSnapGap))
+            if clamped != windowSnapGap {
+                windowSnapGap = clamped
+                return
+            }
+            guard windowSnapGap != oldValue else { return }
+            defaults.set(windowSnapGap, forKey: Keys.windowSnapGap)
+        }
+    }
+
+    /// Only the shortcuts the user changed, keyed by `WindowSnapAction.rawValue`.
+    /// A missing key means the action's default; a stored `.empty` means the
+    /// user cleared it. Read through `windowSnapShortcut(for:)`.
+    private(set) var windowSnapShortcutOverrides: [String: KeyboardShortcut] {
+        didSet {
+            guard windowSnapShortcutOverrides != oldValue else { return }
+            persistWindowSnapShortcutOverrides(windowSnapShortcutOverrides)
+        }
+    }
+
+    /// The effective shortcut for a snap action, or nil when it has none.
+    func windowSnapShortcut(for action: WindowSnapAction) -> KeyboardShortcut? {
+        WindowSnapShortcuts.resolved(
+            stored: windowSnapShortcutOverrides[action.rawValue],
+            isCleared: { !$0.isValid },
+            fallback: action.defaultShortcut
+        )
+    }
+
+    /// Stores a shortcut for a snap action. Pass `.empty` to clear it. Setting
+    /// the default again drops the override, so a later change to the default
+    /// still reaches this user.
+    func setWindowSnapShortcut(_ shortcut: KeyboardShortcut, for action: WindowSnapAction) {
+        var overrides = windowSnapShortcutOverrides
+        let matchesDefault = shortcut.isValid
+            ? shortcut == action.defaultShortcut
+            : action.defaultShortcut == nil
+        if matchesDefault {
+            overrides.removeValue(forKey: action.rawValue)
+        } else {
+            overrides[action.rawValue] = shortcut
+        }
+        windowSnapShortcutOverrides = overrides
+    }
+
+    func resetWindowSnappingToDefaults() {
+        windowSnapEnabled = DefaultValues.windowSnapEnabled
+        windowSnapGap = DefaultValues.windowSnapGap
+        windowSnapShortcutOverrides = DefaultValues.windowSnapShortcutOverrides
+    }
+
     /// Whether running apps show their notification badge (the red count,
     /// like Mail's unread total) on their dock tile. Read from the system
     /// Dock via accessibility, see `DockBadgeService`.
@@ -3695,6 +3759,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let windowsKeyboardMode = "wharf.windowsKeyboardMode"
         static let windowsKeyboardSnipShortcut = "wharf.windowsKeyboardSnipShortcut"
         static let windowsKeyboardExcludedBundleIDs = "wharf.windowsKeyboardExcludedBundleIDs"
+        static let windowSnapEnabled = "wharf.windowSnapEnabled"
+        static let windowSnapGap = "wharf.windowSnapGap"
+        static let windowSnapShortcuts = "wharf.windowSnapShortcuts"
         static let showsAppBadges = "docky.showsAppBadges"
         static let folderBadgeMode = "docky.folderBadgeMode"
         static let folderBadgePreviewStyle = "docky.folderBadgePreviewStyle"
@@ -3826,6 +3893,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         ]
         static let windowsKeyboardMode = false
         static let windowsKeyboardSnipShortcut = true
+        static let windowSnapEnabled = true
+        static let windowSnapGap: Double = 0
+        static let windowSnapShortcutOverrides: [String: KeyboardShortcut] = [:]
         /// Terminals, where Control keeps its Unix meaning.
         static let windowsKeyboardExcludedBundleIDs: [String] = [
             "com.apple.Terminal",
@@ -3979,6 +4049,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         let storedWindowsKeyboardMode = defaults.object(forKey: Keys.windowsKeyboardMode) as? Bool
         let storedWindowsKeyboardSnipShortcut = defaults.object(forKey: Keys.windowsKeyboardSnipShortcut) as? Bool
         let storedWindowsKeyboardExcludedBundleIDs = defaults.object(forKey: Keys.windowsKeyboardExcludedBundleIDs) as? [String]
+        let storedWindowSnapEnabled = defaults.object(forKey: Keys.windowSnapEnabled) as? Bool
+        let storedWindowSnapGap = defaults.object(forKey: Keys.windowSnapGap) as? Double
+        let storedWindowSnapShortcuts = defaults.data(forKey: Keys.windowSnapShortcuts)
         let storedShowsAppBadges = defaults.object(forKey: Keys.showsAppBadges) as? Bool
         let storedFolderBadgeMode = defaults.string(forKey: Keys.folderBadgeMode)
         let storedFolderBadgePreviewStyle = defaults.string(forKey: Keys.folderBadgePreviewStyle)
@@ -4115,6 +4188,11 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         self.windowsKeyboardMode = storedWindowsKeyboardMode ?? DefaultValues.windowsKeyboardMode
         self.windowsKeyboardSnipShortcut = storedWindowsKeyboardSnipShortcut ?? DefaultValues.windowsKeyboardSnipShortcut
         self.windowsKeyboardExcludedBundleIDs = storedWindowsKeyboardExcludedBundleIDs ?? DefaultValues.windowsKeyboardExcludedBundleIDs
+        self.windowSnapEnabled = storedWindowSnapEnabled ?? DefaultValues.windowSnapEnabled
+        self.windowSnapGap = Double(WindowSnapGeometry.clampedGap(storedWindowSnapGap ?? DefaultValues.windowSnapGap))
+        self.windowSnapShortcutOverrides = storedWindowSnapShortcuts
+            .flatMap { try? JSONDecoder().decode([String: KeyboardShortcut].self, from: $0) }
+            ?? DefaultValues.windowSnapShortcutOverrides
         self.showsAppBadges = storedShowsAppBadges ?? DefaultValues.showsAppBadges
         self.folderBadgeMode = storedFolderBadgeMode
             .flatMap(FolderBadgeMode.init(rawValue:))
@@ -4531,6 +4609,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         switcherMinimizeKeyCode = DefaultValues.switcherMinimizeKeyCode
         switcherCloseKeyCode = DefaultValues.switcherCloseKeyCode
         switcherZoomKeyCode = DefaultValues.switcherZoomKeyCode
+        resetWindowSnappingToDefaults()
         appWidgetDisplays = DefaultValues.appWidgetDisplays
         hasSeenDockEditorHint = DefaultValues.hasSeenDockEditorHint
     }
@@ -4679,6 +4758,15 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         }
 
         defaults.set(data, forKey: Keys.windowSwitcherShortcut)
+    }
+
+    private func persistWindowSnapShortcutOverrides(_ overrides: [String: KeyboardShortcut]) {
+        guard !overrides.isEmpty, let data = try? encoder.encode(overrides) else {
+            defaults.removeObject(forKey: Keys.windowSnapShortcuts)
+            return
+        }
+
+        defaults.set(data, forKey: Keys.windowSnapShortcuts)
     }
 
     private func persistLaunchpadShortcut(_ shortcut: KeyboardShortcut) {

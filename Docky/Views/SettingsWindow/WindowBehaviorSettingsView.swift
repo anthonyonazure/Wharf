@@ -123,8 +123,8 @@ struct WindowBehaviorSettingsView: View {
 
             if preferences.quitOnCloseEnabled, !skippedListedApps.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(skippedListedApps, id: \.self) { name in
-                        Text("\(name): skipped, window still present. The app keeps a window open (possibly an invisible one), so it was left running.")
+                    ForEach(skippedListedApps, id: \.id) { app in
+                        Text("\(app.name): skipped, window still present. The app keeps a window open (possibly an invisible one), so it was left running.")
                     }
                 }
                 .font(.callout)
@@ -135,11 +135,11 @@ struct WindowBehaviorSettingsView: View {
     }
 
     /// Notes for apps still on the list, by name.
-    private var skippedListedApps: [String] {
+    private var skippedListedApps: [(id: String, name: String)] {
         status.quitOnCloseSkipped
             .filter { WindowBehaviorBundleList.contains($0.key, in: preferences.quitOnCloseApps) }
-            .map(\.value)
-            .sorted()
+            .map { (id: $0.key, name: $0.value) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     // MARK: Quit protection
@@ -213,7 +213,7 @@ struct WindowBehaviorSettingsView: View {
             .disabled(!preferences.quitGuardEnabled)
 
             if preferences.quitGuardEnabled, status.quitGuardInactive {
-                Text("Protection is inactive: macOS turned off Wharf's keyboard watcher and it could not be restarted. Turn the switch off and on again to retry.")
+                Text("Protection is inactive: macOS turned off Wharf's keyboard watcher and Wharf is trying to restart it. If this line stays, turn the switch off and on again.")
                     .font(.callout)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

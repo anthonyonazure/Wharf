@@ -58,19 +58,24 @@ Turn it on in **Settings → Behavior → Placement → Display → All Displays
 - [x] Ctrl+C/V/X/Z and the rest of the editing set behave as they do on Windows
 - [x] Terminals excluded, so Ctrl+C there still sends SIGINT
 - [x] Win+Shift+S draws a region straight to the clipboard, like the Windows snip
-- [ ] Per-app override UI (the exclusion list is editable via defaults today)
-- [ ] Win key opens the Launchpad / start menu
+- [x] Per-app override UI: add running apps, pick from Applications, or type a bundle ID
+- [x] A lone tap of the Win key opens the Start Menu or Launchpad (your choice, off by default)
 
 In **Settings → Behavior → Windows Keyboard**. Needs Accessibility permission.
 
 ### 1c. Focus follows mouse (Unix-style)
 
-- [ ] Whichever window the pointer is over gets keyboard focus, no click needed
-- [ ] Per-display opt-in, since this habit fights anyone used to macOS's
-      click-to-focus on the same desk
+- [x] Whichever window the pointer rests on comes forward with keyboard focus, no click needed
+- [x] Adjustable pause (100 to 2000 ms, default 300) so windows crossed on the way are left alone
+- [x] Per-display opt-in, since this habit fights anyone used to macOS's
+      click-to-focus on the same desk (off on every display by default)
+- [x] Excluded apps; never acts while a menu is open, a button is down or a modifier is held
+- [x] Fixed Space order: stop macOS rearranging Spaces by recent use, and put
+      your old setting back when turned off
 
 Classic X11/Unix window-manager behavior: focus tracks the pointer instead of
-the last click. Not started.
+the last click. In **Settings → Behavior → Focus Follows Mouse**; Fixed Space
+order is in **Settings → Behavior → Visibility**.
 
 ### 2. Taskbar mode
 
@@ -173,8 +178,8 @@ Some planned behavior is informed by
 which solved per-window taskbar cards and blink-free fullscreen transitions.
 
 Window snapping (halves, thirds, quarters, sixths, corners, display moves and
-restore) is adapted from **[Vorssaint](https://github.com/vorssaint/vorssaint-utils)**
-(GPL-3.0).
+restore), focus follows mouse and fixed Space order are adapted from
+**[Vorssaint](https://github.com/vorssaint/vorssaint-utils)** (GPL-3.0).
 
 Licensed under the [GNU General Public License v3.0](LICENSE). Because Wharf derives
 from GPL-3.0 code, it and any distributed derivative must remain open source under

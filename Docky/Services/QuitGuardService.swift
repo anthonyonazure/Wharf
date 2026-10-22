@@ -9,8 +9,8 @@
 //  applies. The decisions live in QuitGuardStateMachine.
 //
 //  Fail safe throughout: the tap callback reads only cached state (the app
-//  in front, the policy), never Accessibility, and passes a key through when
-//  it has no answer. A confirmed action is bound to the app (and for Close,
+//  in front, the app that owns keyboard focus, the policy), never
+//  Accessibility, and passes a key through when it has no answer. A confirmed action is bound to the app (and for Close,
 //  the window) captured at the first press and checked again right before
 //  it runs; if anything changed, or the targeted action fails, nothing
 //  happens and the HUD says so. No shortcut is ever posted to whatever app
@@ -58,19 +58,48 @@ final class QuitGuardService {
     /// The physical key each protected shortcut was last typed with, so the
     /// confirmed shortcut is sent with the same key.
     private var keyCodes: [QuitGuardKey: Int64] = [:]
-    /// The focused window of the target app at the first press of a Close,
-    /// by sequence. Read off the tap, right after it.
-    private var capturedWindows: [Int: AXUIElement] = [:]
+    /// What the target app's focused window read as at the first press of a
+    /// Close, by sequence. Read off the tap, right after it.
+    private var capturedWindows: [Int: CapturedWindow] = [:]
     /// Cached so the tap callback never asks anything slow.
     private var frontmost: FrontApp?
+    /// The app that owns keyboard focus by Accessibility, read off the tap
+    /// and cached. Nil while unknown (just after an app switch, or when the
+    /// read fails); only a known value that differs from `frontmost` makes
+    /// the tap step aside, for a panel that takes keys without activating
+    /// (Spotlight style) or an app switch the notification has not caught.
+    private var focusedOwnerPid: pid_t?
+    private var focusReadGeneration = 0
+    private let focusQueue = DispatchQueue(label: "wharf.quitGuard.focus", qos: .userInteractive)
+    /// The modifier that must still be down when a hold ends: Command, or
+    /// Control when Windows keyboard translation turned Control-Q into
+    /// Command-Q on the way in.
+    private var holdModifier: CGEventFlags = .maskCommand
     private var settings = Settings()
     private let hud = QuitGuardHUD()
+    private let status = WindowBehaviorStatus.shared
+    private var started = false
+
+    /// Recreating a tap macOS turned off for good: a few tries, further
+    /// apart each time, then the pane says protection is inactive.
+    private var retryCount = 0
+    private var lastRetry = Date.distantPast
+    private var retryWork: DispatchWorkItem?
+    private static let maxRetries = 5
 
     private let messagingTimeout: Float = 0.3
 
+    private struct CapturedWindow {
+        let read: QuitGuardWindowRead
+        let element: AXUIElement?
+    }
+
     private init() {}
 
+    /// Safe to call more than once: later calls do nothing.
     func start() {
+        guard !started else { return }
+        started = true
         observeChanges { [weak self] in
             let prefs = WindowBehaviorPreferences.shared
             let snapshot = Settings(
@@ -92,11 +121,53 @@ final class QuitGuardService {
             .store(in: &cancellables)
     }
 
-    private func syncTapState() {
-        let wanted = settings.enabled
+    private var isWanted: Bool {
+        settings.enabled
             && (settings.policy.protectsQuit || settings.policy.protectsClose)
             && AXIsProcessTrusted()
-        if wanted { installTap() } else { removeTap() }
+    }
+
+    private func syncTapState() {
+        guard isWanted else {
+            retryWork?.cancel()
+            retryWork = nil
+            retryCount = 0
+            removeTap()
+            status.quitGuardInactive = false
+            return
+        }
+        // A tap macOS turned off and would not turn back on is rebuilt.
+        if let tap, !CGEvent.tapIsEnabled(tap: tap) {
+            removeTap(keepingKeyState: true)
+        }
+        installTap()
+        if let tap, CGEvent.tapIsEnabled(tap: tap) {
+            status.quitGuardInactive = false
+        } else {
+            removeTap(keepingKeyState: true)
+            scheduleRetry()
+        }
+    }
+
+    /// The tap is dead: tear it down and build it again a little later.
+    private func scheduleRetry() {
+        // A death long after the last one starts a fresh count.
+        if Date().timeIntervalSince(lastRetry) > 60 { retryCount = 0 }
+        status.quitGuardInactive = true
+        guard retryWork == nil else { return }
+        guard retryCount < Self.maxRetries else {
+            NSLog("[Wharf] Quit protection: the event tap keeps failing; protection is inactive")
+            return
+        }
+        retryCount += 1
+        lastRetry = Date()
+        let delay = 0.5 * pow(2, Double(retryCount - 1))
+        let work = DispatchWorkItem { [weak self] in
+            self?.retryWork = nil
+            self?.syncTapState()
+        }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func installTap() {
@@ -139,9 +210,13 @@ final class QuitGuardService {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        refreshFocusedOwner()
     }
 
-    private func removeTap() {
+    /// `keepingKeyState` is for a rebuild: keys already held back stay owned
+    /// (the machine forgets them on its own timeout), so a repeat cannot
+    /// slip through once the new tap is up.
+    private func removeTap(keepingKeyState: Bool = false) {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
@@ -150,10 +225,39 @@ final class QuitGuardService {
         tap = nil
         runLoopSource = nil
         frontmost = nil
-        machine.reset()
+        focusedOwnerPid = nil
+        if keepingKeyState { machine.interrupted() } else { machine.reset() }
         capturedWindows.removeAll()
         clearTimers()
         hideHUD()
+    }
+
+    /// Reads which app owns keyboard focus, off the main thread, and caches
+    /// it. A newer read, or an app switch, makes an older answer stale.
+    private func refreshFocusedOwner() {
+        focusReadGeneration += 1
+        let generation = focusReadGeneration
+        let timeout = messagingTimeout
+        focusQueue.async { [weak self] in
+            let pid = Self.systemFocusedAppPid(timeout: timeout)
+            DispatchQueue.main.async {
+                guard let self, self.focusReadGeneration == generation else { return }
+                self.focusedOwnerPid = pid
+            }
+        }
+    }
+
+    nonisolated private static func systemFocusedAppPid(timeout: Float) -> pid_t? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, timeout)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(value as! AXUIElement, &pid) == .success, pid > 0 else { return nil }
+        return pid
     }
 
     private func updateFrontmost(_ app: NSRunningApplication?) {
@@ -171,6 +275,9 @@ final class QuitGuardService {
     /// A different app in front ends any wait that belongs to another app.
     private func frontmostChanged(_ app: NSRunningApplication?) {
         updateFrontmost(app)
+        // The cached focus owner predates the switch: unknown until reread.
+        focusedOwnerPid = nil
+        refreshFocusedOwner()
         let decision = machine.frontmostChanged(to: frontmost?.pid ?? 0)
         if decision == .cancel {
             clearTimers()
@@ -183,12 +290,24 @@ final class QuitGuardService {
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            // Keys may have been missed, including the release that ends a swallow.
-            machine.reset()
+            // Keys may have been missed, including the release that ends a
+            // swallow. The wait ends, but held keys stay owned and a repeat
+            // of a protected shortcut is still swallowed (see interrupted()).
+            machine.interrupted()
             capturedWindows.removeAll()
             clearTimers()
             hideHUD()
-            if let tap, settings.enabled { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap, settings.enabled {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                if !CGEvent.tapIsEnabled(tap: tap) {
+                    // Never torn down from inside its own callback.
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.removeTap(keepingKeyState: true)
+                        self.scheduleRetry()
+                    }
+                }
+            }
             return Unmanaged.passUnretained(event)
         }
         if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker {
@@ -216,10 +335,14 @@ final class QuitGuardService {
                 keyCode: keyCode
             )
             let front = frontmost
+            // Keys going to something other than the app in front (a panel
+            // that does not activate, or an app switch not yet announced)
+            // are not that app's shortcut: protect nothing.
+            let focusAgrees = focusedOwnerPid == nil || focusedOwnerPid == front?.pid
             // No trustworthy answer for the app in front: protect nothing.
             let mode = key.flatMap { key in
                 front.map { settings.policy.mode(for: $0.bundleIdentifier, key: key) }
-            } ?? .off
+            }.flatMap { focusAgrees ? $0 : nil } ?? .off
             machine.holdMilliseconds = settings.holdMilliseconds
             machine.doublePressMilliseconds = settings.doublePressMilliseconds
             machine.extraModifier = settings.extraModifier
@@ -238,13 +361,22 @@ final class QuitGuardService {
                 target: front?.pid ?? 0
             )
             if let key, decision != .pass, decision != .swallow { keyCodes[key] = keyCode }
+            if case .beginHold = decision {
+                // Physical Command means a real Command-Q; otherwise the
+                // Windows keyboard translation made it from Control.
+                holdModifier = CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand)
+                    ? .maskCommand : .maskControl
+            }
             return apply(decision, to: event, app: front)
 
         case .keyUp:
             guard machine.hasPressInFlight else { return Unmanaged.passUnretained(event) }
-            return apply(machine.keyUp(keyCode: keyCode), to: event, app: nil)
+            return apply(machine.keyUp(keyCode: keyCode, timestamp: event.timestamp), to: event, app: nil)
 
         case .flagsChanged:
+            // Command going down is the moment to check who has focus, well
+            // before the Q or W that may follow.
+            if flags.contains(.maskCommand) { refreshFocusedOwner() }
             _ = apply(machine.commandChanged(isHeld: flags.contains(.maskCommand)), to: event, app: nil)
             // Modifier changes always reach the system.
             return Unmanaged.passUnretained(event)
@@ -276,28 +408,39 @@ final class QuitGuardService {
         case .beginHold(let key):
             clearTimers()
             let sequence = machine.pending?.sequence ?? 0
+            let heldKeyCode = machine.pending?.keyCode
+            let modifier = holdModifier
             captureWindowIfClose(key, sequence: sequence, pid: app?.pid)
             let seconds = machine.holdMilliseconds / 1_000
             let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.carryOut(self.machine.holdElapsed(sequence: sequence), name: name)
+                    // Time alone never confirms: the key and the modifier must
+                    // still be down now, in case their release went unseen.
+                    let keyDown = heldKeyCode.map {
+                        CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0))
+                    } ?? false
+                    let modifierDown = CGEventSource.flagsState(.combinedSessionState).contains(modifier)
+                    self.carryOut(
+                        self.machine.holdElapsed(sequence: sequence, keyStillDown: keyDown, commandStillDown: modifierDown),
+                        name: name
+                    )
                 }
             }
             RunLoop.main.add(timer, forMode: .common)
             holdTimer = timer
-            showHUD("Keep holding \(key.symbol) to \(Self.verb(for: key)) \(name)", holdSeconds: seconds)
+            showHUD("Keep holding \(key.symbol) to \(Self.verb(for: key)) \(name)", holdSeconds: seconds, pid: app?.pid)
             return nil
 
         case .beginDoublePress(let key):
             captureWindowIfClose(key, sequence: machine.pending?.sequence ?? 0, pid: app?.pid)
             scheduleExpiry(after: machine.doublePressMilliseconds / 1_000 + 0.1)
-            showHUD("Press \(key.symbol) again to \(Self.verb(for: key)) \(name)", holdSeconds: nil)
+            showHUD("Press \(key.symbol) again to \(Self.verb(for: key)) \(name)", holdSeconds: nil, pid: app?.pid)
             return nil
 
         case .showModifierHint(let key, let modifier):
             scheduleExpiry(after: QuitGuardStateMachine.modifierHintSeconds)
-            showHUD("Press \(modifier.symbol)\(key.symbol) to \(Self.verb(for: key)) \(name)", holdSeconds: nil)
+            showHUD("Press \(modifier.symbol)\(key.symbol) to \(Self.verb(for: key)) \(name)", holdSeconds: nil, pid: app?.pid)
             return nil
 
         case .confirm, .cancel:
@@ -314,7 +457,10 @@ final class QuitGuardService {
             clearTimers()
             hideHUD()
             let keyCode = keyCodes[key] ?? key.fallbackKeyCode
-            let captured = machine.confirmedSequence.map { capturedWindows[$0] }
+            // A capture that never answered counts as unreadable.
+            let captured: CapturedWindow? = machine.confirmedSequence.map {
+                capturedWindows[$0] ?? CapturedWindow(read: .unreadable, element: nil)
+            }
             capturedWindows.removeAll()
             // Out of the tap callback first, so nothing slow runs inside it.
             DispatchQueue.main.async { [weak self] in
@@ -329,18 +475,20 @@ final class QuitGuardService {
         }
     }
 
-    /// `capturedWindow` is nil for a one-press confirm (nothing was captured,
-    /// the press itself is the confirmation), and `.some(nil)` when a capture
-    /// was expected but could not be read: then nothing is closed.
-    private func perform(_ key: QuitGuardKey, target: pid_t, name: String, keyCode: Int64, capturedWindow: AXUIElement??) {
-        // Revalidate right before acting: the target must still be running
-        // and still be the app in front.
+    /// `captured` is nil for a one-press confirm (nothing was captured, the
+    /// press itself is the confirmation).
+    private func perform(_ key: QuitGuardKey, target: pid_t, name: String, keyCode: Int64, capturedWindow captured: CapturedWindow?) {
+        // Revalidate right before acting: the target must still be running,
+        // still be the app in front, and (when Accessibility can say) still
+        // own keyboard focus.
+        let focusOwner = Self.systemFocusedAppPid(timeout: messagingTimeout)
         guard target > 0,
               let app = NSRunningApplication(processIdentifier: target),
               !app.isTerminated,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == target
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == target,
+              focusOwner == nil || focusOwner == target
         else {
-            flashHUD("\(name) is no longer in front, so nothing happened")
+            flashHUD("\(name) is no longer in front, so nothing happened", pid: target)
             return
         }
 
@@ -349,24 +497,39 @@ final class QuitGuardService {
             // A normal quit request; the app may still ask to save. When it
             // refuses, nothing else is tried.
             if !app.terminate() {
-                flashHUD("Could not ask \(name) to quit")
+                flashHUD("Could not ask \(name) to quit", pid: target)
             }
 
         case .close:
-            guard let current = Self.focusedWindow(of: target, timeout: messagingTimeout) else {
-                flashHUD("Could not find the window in \(name), so nothing was closed")
+            let current = Self.focusedWindow(of: target, timeout: messagingTimeout)
+            let sameWindow: Bool = {
+                guard let a = captured?.element, let b = current.element else { return false }
+                return CFEqual(a, b)
+            }()
+            switch QuitGuardCloseCheck.verdict(captured: captured?.read, current: current.read, sameWindow: sameWindow) {
+            case .noWindow:
+                flashHUD("\(name) has no window in front, so nothing was closed", pid: target)
                 return
-            }
-            if let capturedWindow {
-                guard let capturedWindow, CFEqual(capturedWindow, current) else {
-                    flashHUD("The window changed, so nothing was closed")
-                    return
-                }
+            case .windowChanged:
+                flashHUD("The window changed, so nothing was closed", pid: target)
+                return
+            case .post:
+                break
             }
             // Command-W goes to the captured app only, never to whatever is
             // in front. The keystroke (not the close button) keeps the app's
             // own meaning: a tab in a browser, a window elsewhere.
+            let before = Self.closeSnapshot(of: target, window: current.element, timeout: messagingTimeout)
             Self.postCommandPress(keyCode: keyCode, to: target)
+            // Nothing tells Wharf whether the app acted on the key, so look
+            // shortly after: a window or tab gone, or a save sheet, is enough.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                guard let self else { return }
+                let after = Self.closeSnapshot(of: target, window: current.element, timeout: self.messagingTimeout)
+                if !QuitGuardCloseCheck.looksHandled(before: before, after: after) {
+                    self.flashHUD("Sent \(QuitGuardKey.close.symbol) to \(name), but could not confirm anything closed", pid: target)
+                }
+            }
         }
     }
 
@@ -378,21 +541,54 @@ final class QuitGuardService {
         // the next turn of the main loop, well before any confirm.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.machine.pending?.sequence == sequence else { return }
-            if let window = Self.focusedWindow(of: pid, timeout: self.messagingTimeout) {
-                self.capturedWindows[sequence] = window
-            }
+            let read = Self.focusedWindow(of: pid, timeout: self.messagingTimeout)
+            self.capturedWindows[sequence] = CapturedWindow(read: read.read, element: read.element)
         }
     }
 
-    private static func focusedWindow(of pid: pid_t, timeout: Float) -> AXUIElement? {
+    /// The app's focused window, told apart from "the app says it has none"
+    /// and "the app cannot be asked".
+    private static func focusedWindow(of pid: pid_t, timeout: Float) -> (read: QuitGuardWindowRead, element: AXUIElement?) {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, timeout)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success,
-              let value,
-              CFGetTypeID(value) == AXUIElementGetTypeID()
-        else { return nil }
-        return (value as! AXUIElement)
+        switch AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) {
+        case .success:
+            guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return (.noFocusedWindow, nil) }
+            return (.window, (value as! AXUIElement))
+        case .noValue:
+            return (.noFocusedWindow, nil)
+        default:
+            return (.unreadable, nil)
+        }
+    }
+
+    private static func closeSnapshot(of pid: pid_t, window: AXUIElement?, timeout: Float) -> QuitGuardCloseCheck.Snapshot {
+        var snapshot = QuitGuardCloseCheck.Snapshot()
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, timeout)
+        var count: CFIndex = 0
+        if AXUIElementGetAttributeValueCount(app, kAXWindowsAttribute as CFString, &count) == .success {
+            snapshot.windowCount = count
+        }
+        if let window {
+            AXUIElementSetMessagingTimeout(window, timeout)
+            var title: CFTypeRef?
+            switch AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title) {
+            case .success:
+                snapshot.windowExists = true
+                snapshot.windowTitle = title as? String
+            case .invalidUIElement:
+                snapshot.windowExists = false
+            default:
+                break
+            }
+            let focused = focusedWindow(of: pid, timeout: timeout)
+            if focused.read != .unreadable {
+                snapshot.focusedIsSameWindow = focused.element.map { CFEqual($0, window) } ?? false
+            }
+        }
+        return snapshot
     }
 
     private func scheduleExpiry(after seconds: Double) {
@@ -415,10 +611,12 @@ final class QuitGuardService {
 
     // MARK: - HUD, always off the tap callback
 
-    private func showHUD(_ message: String, holdSeconds: Double?) {
+    /// `pid` is the app the message is about; the HUD goes on the screen
+    /// with that app's front window.
+    private func showHUD(_ message: String, holdSeconds: Double?, pid: pid_t?) {
         hudHide?.cancel()
         hudHide = nil
-        DispatchQueue.main.async { [weak self] in self?.hud.show(message: message, holdSeconds: holdSeconds) }
+        DispatchQueue.main.async { [weak self] in self?.hud.show(message: message, holdSeconds: holdSeconds, pid: pid) }
     }
 
     private func hideHUD() {
@@ -428,8 +626,8 @@ final class QuitGuardService {
     }
 
     /// A short note when a confirmed action was not carried out.
-    private func flashHUD(_ message: String) {
-        showHUD(message, holdSeconds: nil)
+    private func flashHUD(_ message: String, pid: pid_t?) {
+        showHUD(message, holdSeconds: nil, pid: pid)
         let work = DispatchWorkItem { [weak self] in
             self?.hudHide = nil
             self?.hud.hide()
@@ -457,22 +655,33 @@ final class QuitGuardService {
 
 // MARK: - HUD
 
-/// A small panel near the bottom of the screen with the pointer. It never
+/// A small panel near the bottom of the screen that shows the target app's
+/// front window (the pointer's screen when that cannot be found). It never
 /// takes focus or clicks.
 final class QuitGuardHUD {
+    static let width: CGFloat = 360
     private var panel: NSPanel?
     private let model = QuitGuardHUDModel()
 
-    func show(message: String, holdSeconds: Double?) {
+    func show(message: String, holdSeconds: Double?, pid: pid_t?) {
         let panel = self.panel ?? makePanel()
         self.panel = panel
         model.message = message
         model.holdSeconds = holdSeconds
         model.startedAt = Date()
 
-        let size = NSSize(width: 360, height: holdSeconds == nil ? 52 : 70)
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        // Long app names wrap; the panel grows to fit. Measured directly,
+        // since the hosting view lays out the new text only later.
+        let textHeight = (message as NSString).boundingRect(
+            with: NSSize(width: Self.width - 32, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]
+        ).height
+        let extra: CGFloat = holdSeconds == nil ? 24 : 42
+        let size = NSSize(width: Self.width, height: max(holdSeconds == nil ? 52 : 70, ceil(textHeight) + extra))
+        let screen = pid.flatMap(Self.screen(ofFrontWindowOf:))
+            ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+            ?? NSScreen.main
         if let visible = screen?.visibleFrame {
             panel.setFrame(
                 NSRect(x: visible.midX - size.width / 2, y: visible.minY + visible.height * 0.18,
@@ -485,6 +694,33 @@ final class QuitGuardHUD {
 
     func hide() {
         panel?.orderOut(nil)
+    }
+
+    /// The screen holding most of the app's frontmost normal window, from
+    /// the window server list (front to back, no Accessibility).
+    private static func screen(ofFrontWindowOf pid: pid_t) -> NSScreen? {
+        guard pid > 0,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]],
+              let primaryHeight = NSScreen.screens.first?.frame.height
+        else { return nil }
+        for window in windows {
+            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let bounds = TrafficLightHitTest.bounds(from: window),
+                  bounds.width >= 50, bounds.height >= 50
+            else { continue }
+            // Window server bounds are top down from the primary screen.
+            let flipped = NSRect(x: bounds.minX, y: primaryHeight - bounds.maxY, width: bounds.width, height: bounds.height)
+            return NSScreen.screens.max { a, b in
+                area(a.frame.intersection(flipped)) < area(b.frame.intersection(flipped))
+            }.flatMap { area($0.frame.intersection(flipped)) > 0 ? $0 : nil }
+        }
+        return nil
+    }
+
+    private static func area(_ rect: NSRect) -> CGFloat {
+        rect.isNull ? 0 : rect.width * rect.height
     }
 
     private func makePanel() -> NSPanel {
@@ -520,8 +756,10 @@ private struct QuitGuardHUDView: View {
         VStack(spacing: 8) {
             Text(model.message)
                 .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: QuitGuardHUD.width - 32)
             if let seconds = model.holdSeconds {
                 TimelineView(.animation) { context in
                     ProgressView(value: min(1, context.date.timeIntervalSince(model.startedAt) / seconds))

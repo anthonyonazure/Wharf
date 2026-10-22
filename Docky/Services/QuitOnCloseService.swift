@@ -40,12 +40,23 @@ final class QuitOnCloseService {
     /// Apps already asked to quit in their current windowless stretch.
     private var episodes = QuitOnCloseEpisodes()
     private var activationObserver: NSObjectProtocol?
+    /// Rounds in which an earlier look still found a window. They never
+    /// quit, but keep looking so the last look can say whether the window
+    /// stayed.
+    private var roundsThatSawWindows: Set<Int> = []
+    private let status = WindowBehaviorStatus.shared
+    private var started = false
 
     private let messagingTimeout: Float = 0.5
+    /// A new window often reports its subrole a moment after it appears.
+    private let subroleRetryDelay: TimeInterval = 0.5
 
     private init() {}
 
+    /// Safe to call more than once: later calls do nothing.
     func start() {
+        guard !started else { return }
+        started = true
         observeChanges { [weak self] in
             _ = WindowBehaviorPreferences.shared.quitOnCloseEnabled
             _ = WindowBehaviorPreferences.shared.quitOnCloseApps
@@ -78,7 +89,9 @@ final class QuitOnCloseService {
             hadWindow.removeAll()
             hasWindowNow.removeAll()
             rounds.removeAll()
+            roundsThatSawWindows.removeAll()
             episodes = QuitOnCloseEpisodes()
+            status.quitOnCloseSkipped.removeAll()
             return
         }
 
@@ -104,14 +117,20 @@ final class QuitOnCloseService {
         }
         if activationObserver == nil {
             // An app brought to the front (its Dock icon clicked, a document
-            // opened) is about to show a window: stop any pending look.
+            // opened) is about to show a window: stop any pending look. An
+            // app already asked to quit once is armed again by whatever
+            // window it shows next, so a cancelled quit does not disarm it
+            // for good when its windows are not standard ones.
             activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] note in
                 guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-                MainActor.assumeIsolated { self?.rounds[app.processIdentifier] = nil }
+                MainActor.assumeIsolated {
+                    self?.rounds[app.processIdentifier] = nil
+                    self?.episodes.activated(app.processIdentifier)
+                }
             }
         }
         // A list change may have removed apps that were being watched.
@@ -133,7 +152,9 @@ final class QuitOnCloseService {
             // A window (new or back) ends any pending look for the app.
             rounds[pid] = nil
             if episodes.hasRequestedQuit(pid) {
-                episodes.sawWindow(of: pid, isStandard: hasStandardWindow(pid: pid, in: windows))
+                let isStandard = hasStandardWindow(pid: pid, in: windows)
+                episodes.sawWindow(of: pid, isStandard: isStandard)
+                if !isStandard { recheckSubrole(of: pid) }
             }
         }
 
@@ -159,7 +180,10 @@ final class QuitOnCloseService {
     /// look in between agreed there was nothing left. A window that came back
     /// (a full screen exit recreates its window) ends the round.
     private func checkAndQuit(pid: pid_t, round: Int, isFinalLook: Bool) {
-        guard isActive, hadWindow.contains(pid), rounds[pid] == round else { return }
+        guard isActive, hadWindow.contains(pid), rounds[pid] == round else {
+            if isFinalLook { roundsThatSawWindows.remove(round) }
+            return
+        }
         guard let app = NSRunningApplication(processIdentifier: pid) else {
             hadWindow.remove(pid)
             return
@@ -181,16 +205,39 @@ final class QuitOnCloseService {
             serverWindowCount: QuitOnCloseLogic.serverWindowCount(in: serverWindows, pid: pid),
             quitAlreadyRequested: episodes.hasRequestedQuit(pid)
         )
+        var windowless = facts
+        windowless.accessibilityWindowCount = 0
+        windowless.serverWindowCount = 0
+        let onlyWindowsInTheWay = QuitOnCloseLogic.shouldQuit(windowless)
         guard QuitOnCloseLogic.shouldQuit(facts) else {
+            if onlyWindowsInTheWay, !isFinalLook {
+                // A window is still there (maybe still fading out). This
+                // round will not quit, but the last look says whether it
+                // stayed.
+                roundsThatSawWindows.insert(round)
+                return
+            }
+            if onlyWindowsInTheWay, let id = app.bundleIdentifier {
+                // A window stayed: often an invisible or unusual window the
+                // app keeps. Said in the pane so it is not a silent no.
+                status.quitOnCloseSkipped[id.lowercased()] = app.localizedName ?? id
+            }
             // Something is still there: stop this round. The next close
             // starts a new one.
             rounds[pid] = nil
+            roundsThatSawWindows.remove(round)
             return
         }
         guard isFinalLook else { return }
+        // Every look must agree there was nothing left.
+        guard roundsThatSawWindows.remove(round) == nil else {
+            rounds[pid] = nil
+            return
+        }
 
         hasWindowNow.remove(pid)
         rounds[pid] = nil
+        if let id = app.bundleIdentifier { status.quitOnCloseSkipped[id.lowercased()] = nil }
         // One request per windowless stretch: if the user cancels a save
         // prompt, the app stays until it shows a real window again and that
         // one closes too.
@@ -221,6 +268,17 @@ final class QuitOnCloseService {
             guard AXUIElementCopyAttributeValue(window.element, kAXSubroleAttribute as CFString, &value) == .success
             else { return false }
             return (value as? String) == kAXStandardWindowSubrole as String
+        }
+    }
+
+    /// One more look at the subroles a moment later, for a window that did
+    /// not report its subrole yet when it appeared.
+    private func recheckSubrole(of pid: pid_t) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + subroleRetryDelay) { [weak self] in
+            guard let self, self.isActive, self.episodes.hasRequestedQuit(pid) else { return }
+            if self.hasStandardWindow(pid: pid, in: self.registry.windows) {
+                self.episodes.sawWindow(of: pid, isStandard: true)
+            }
         }
     }
 

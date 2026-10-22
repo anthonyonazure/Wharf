@@ -471,6 +471,7 @@ private struct WindowPreviewCard: View {
     @ObservedObject private var workspace = WorkspaceService.shared
     @State private var isPreviewHovered = false
     @State private var isMoreMenuPresented = false
+    @State private var isActionMenuPresented = false
 
     private let previewWidth: CGFloat = 180
     private let previewHeight: CGFloat = 102
@@ -574,6 +575,13 @@ private struct WindowPreviewCard: View {
                 )
                 .padding(6)
                 .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if isPreviewHovered || isMoreMenuPresented || isActionMenuPresented {
+                PreviewCardActionRow(window: window, isMenuPresented: $isActionMenuPresented)
+                    .padding(6)
+                    .transition(.opacity)
             }
         }
         .onHover { hovering in
@@ -681,6 +689,8 @@ private struct WindowPreviewListRow: View {
 
     @ObservedObject private var preview = WindowPreviewService.shared
     @ObservedObject private var workspace = WorkspaceService.shared
+    @State private var isRowHovered = false
+    @State private var isActionMenuPresented = false
 
     private let iconSize: CGFloat = 28
 
@@ -718,7 +728,10 @@ private struct WindowPreviewListRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if window.isMinimized {
+            if isRowHovered || isActionMenuPresented {
+                PreviewCardActionRow(window: window, isMenuPresented: $isActionMenuPresented)
+                    .transition(.opacity)
+            } else if window.isMinimized {
                 Image(systemName: "minus.diamond.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary.opacity(0.55))
@@ -741,6 +754,7 @@ private struct WindowPreviewListRow: View {
         }
         .contentShape(rowShape)
         .onHover { isHovering in
+            isRowHovered = isHovering
             if isHovering {
                 preview.selectWindow(withIdentifier: window.windowIdentifier)
             }
@@ -749,6 +763,7 @@ private struct WindowPreviewListRow: View {
             WindowPreviewWindowController.shared.confirm(window)
         }
         .animation(.easeInOut(duration: 0.12), value: isSelected)
+        .animation(.easeInOut(duration: 0.12), value: isRowHovered)
     }
 
     private func contextActions(modifierFlags: NSEvent.ModifierFlags) -> [ContextAction] {

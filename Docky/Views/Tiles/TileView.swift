@@ -265,7 +265,7 @@ struct TileView: View {
             .action(String(localized: "Edit Dock...")) {
                 DockEditModeService.shared.enter()
             }
-        ]
+        ] + LayoutMenuActions.dockMenuEntries()
 
         if case .spacer = tile.content {
             actions.append(.divider)

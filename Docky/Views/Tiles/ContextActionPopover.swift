@@ -410,14 +410,20 @@ struct MoreActionsButton: View {
     let actionProvider: (NSEvent.ModifierFlags) -> [ContextAction]
     let preferredEdge: NSRectEdge
     let onPresentationChanged: (Bool) -> Void
+    let systemImage: String
+    let helpText: String
 
     @State private var triggerCount: Int = 0
 
     init(
+        systemImage: String = "ellipsis",
+        helpText: String = "More actions",
         preferredEdge: NSRectEdge = .maxY,
         onPresentationChanged: @escaping (Bool) -> Void = { _ in },
         actionProvider: @escaping (NSEvent.ModifierFlags) -> [ContextAction]
     ) {
+        self.systemImage = systemImage
+        self.helpText = helpText
         self.preferredEdge = preferredEdge
         self.onPresentationChanged = onPresentationChanged
         self.actionProvider = actionProvider
@@ -427,7 +433,7 @@ struct MoreActionsButton: View {
         Button {
             triggerCount &+= 1
         } label: {
-            Image(systemName: "ellipsis")
+            Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
@@ -438,7 +444,7 @@ struct MoreActionsButton: View {
                 .shadow(color: .black.opacity(0.4), radius: 3, y: 1)
         }
         .buttonStyle(.plain)
-        .help("More actions")
+        .help(helpText)
         .background(
             MoreActionsMenuAnchor(
                 trigger: triggerCount,

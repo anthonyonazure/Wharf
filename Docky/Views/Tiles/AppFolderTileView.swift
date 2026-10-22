@@ -57,11 +57,11 @@ struct AppFolderTileView: View {
     }
 
     private var tileSize: CGFloat {
-        layout.scaled(dockSettings.displayTileSize)
+        layout.scaled(dock.resolvedTileSize)
     }
 
     private var position: ResolvedDockWindowPosition {
-        preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        dock.resolvedPosition
     }
 
     private var groupedOpenedBackdropExtent: CGFloat {

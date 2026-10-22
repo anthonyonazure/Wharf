@@ -8,29 +8,14 @@
 //
 //  Stored as overrides rather than as a full settings copy per display. A dock
 //  with no override inherits the global value, so changing a global setting
-//  still moves every dock that has not been deliberately customised — the
+//  still moves every dock that has not been deliberately customized — the
 //  alternative silently strands displays on stale values.
 //
 
 import AppKit
 
-struct DisplayOverride: Codable, Equatable {
-    var position: String?
-    var tileSize: Double?
-    var themeIdentifier: String?
-    /// Offset from the snapped edge position, in points. Non-zero means the
-    /// dock floats.
-    var floatOffsetX: Double?
-    var floatOffsetY: Double?
-
-    var isEmpty: Bool {
-        position == nil
-            && tileSize == nil
-            && themeIdentifier == nil
-            && (floatOffsetX ?? 0) == 0
-            && (floatOffsetY ?? 0) == 0
-    }
-}
+// `DisplayOverride` and the fallback rules live in PerScreenResolution.swift,
+// which is Foundation only so scripts/test-perscreen.sh can check them.
 
 @Observable
 final class PerDisplaySettings {
@@ -86,6 +71,10 @@ final class PerDisplaySettings {
         override(for: displayID)?.tileSize.map { CGFloat($0) }
     }
 
+    func autohide(for displayID: CGDirectDisplayID?) -> Bool? {
+        override(for: displayID)?.autohide
+    }
+
     func themeIdentifier(for displayID: CGDirectDisplayID?) -> String? {
         override(for: displayID)?.themeIdentifier
     }
@@ -103,12 +92,36 @@ final class PerDisplaySettings {
         setOverride(current, for: displayID)
     }
 
+    // MARK: - Displays section
+
+    /// Every stored override, connected or not. Reading it inside an
+    /// observation closure tracks the whole store, which is what a dock
+    /// needs to notice its own entry being created or removed.
+    var allOverrides: [String: DisplayOverride] {
+        overrides
+    }
+
+    /// Override for a display by its stored key. The Displays settings list
+    /// works in keys so it never has to resolve a display ID that may have
+    /// gone away while the pane was open.
+    func override(forKey key: String) -> DisplayOverride? {
+        overrides[key]
+    }
+
+    func setOverride(_ override: DisplayOverride?, forKey key: String) {
+        if let override, !override.isEmpty {
+            overrides[key] = override
+        } else {
+            overrides.removeValue(forKey: key)
+        }
+        save()
+    }
+
     // MARK: - Persistence
 
     private func load() {
-        guard let data = defaults.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode([String: DisplayOverride].self, from: data) else { return }
-        overrides = decoded
+        // Entry by entry, so one unreadable display cannot wipe the others.
+        overrides = PerScreenResolution.decodeOverrides(defaults.data(forKey: defaultsKey))
     }
 
     private func save() {

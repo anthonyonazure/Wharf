@@ -64,7 +64,7 @@ struct MainWindowView: View {
     }
 
     private var dockEdgeAlignment: Alignment {
-        switch preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation) {
+        switch dock.resolvedPosition {
         case .top: .top
         case .bottom: .bottom
         case .left: .leading
@@ -120,7 +120,7 @@ struct MainWindowView: View {
 
     @ViewBuilder
     private func backgroundFill(radii: RectangleCornerRadii) -> some View {
-        let resolvedPosition = preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        let resolvedPosition = dock.resolvedPosition
         let rotated = resolvedPosition.isVertical
         UnevenRoundedRectangle(cornerRadii: radii, style: .continuous)
             .fill(Color.clear)
@@ -194,7 +194,7 @@ struct MainWindowView: View {
     }
 
     private var maximumCornerRadius: CGFloat {
-        let iconHeight = layoutService.scaled(dockSettings.displayTileSize)
+        let iconHeight = layoutService.scaled(dock.resolvedTileSize)
         return (iconHeight + layoutService.scaled(preferences.effectiveTileVerticalPadding) * 2) / 2
     }
 
@@ -215,9 +215,7 @@ struct MainWindowView: View {
             return chromeSize
         }
 
-        let isVertical = preferences.windowPosition
-            .resolved(systemOrientation: dockSettings.orientation)
-            .isVertical
+        let isVertical = dock.resolvedPosition.isVertical
         if isVertical {
             return CGSize(width: chromeSize.width, height: chromeSize.height + chromeGrowth)
         }

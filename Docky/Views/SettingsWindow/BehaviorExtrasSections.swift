@@ -29,6 +29,12 @@ struct WindowsKeyboardExtrasSections: View {
                 Text("Press and release the Win key on its own, with nothing else between, to open the Start Menu or Launchpad, as on Windows. Tap again to close it. Win key shortcuts still work as before. Launchpad opens only when the Launchpad overlay is turned on under Features, Launchpad.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if extras.winTapAction == .launchpad, !preferences.enablesLaunchpadOverlay {
+                    Text("The Launchpad overlay is off, so a Win key tap does nothing. Turn on Enable Launchpad under Features, Launchpad.")
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.vertical, 4)
         } header: {

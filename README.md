@@ -214,6 +214,9 @@ Window snapping (halves, thirds, quarters, sixths, corners, display moves and
 restore), focus follows mouse and fixed Space order are adapted from
 **[Vorssaint](https://github.com/vorssaint/vorssaint-utils)** (GPL-3.0).
 
+The Command Bar (menu command search, the calculator's strict rules and the unit
+lexicon) is adapted from Vorssaint's command bar as well.
+
 Licensed under the [GNU General Public License v3.0](LICENSE). Because Wharf derives
 from GPL-3.0 code, it and any distributed derivative must remain open source under
 the same license.

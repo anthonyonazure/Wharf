@@ -654,3 +654,118 @@ uses `AppWindow.cgWindowID`, which WindowRegistry fills from
 Unverified: after a declined "Save changes?" prompt, closing that sheet could
 count as another last-window close and ask the app to quit again; WindowRegistry
 only filters floating subroles, not dialogs.
+## 2026-10-22, Stage 4a: Command Bar
+
+A floating search field opened by a global shortcut, modeled on Vorssaint's
+command bar (vorssaint/vorssaint-utils, GPL-3.0). It searches installed and
+running apps, open windows, files (Spotlight), the menu commands of the app
+in front, and window snap layouts, and it answers arithmetic and unit
+conversions. Files:
+
+- `Docky/Services/CommandBarCore.swift`: pure logic, Foundation only. The
+  calculator (`CommandBarCalculator`), unit conversion (`CommandBarUnits`),
+  number formatting, ranking (`CommandBarRanking`) and the bounded recency
+  store (`CommandBarRecency`, 200 entries).
+- `Docky/Services/CommandBarPreferences.swift`: its own `@Observable` store
+  with Keys and DefaultValues, every key prefixed `wharf.commandBar.`:
+  `enabled` (default off), `shortcut` (default Option-Space),
+  `disabledSources` (stored as the off set, so new sources start on),
+  `maxResults` (default 8, 3 to 20), `recency`.
+- `Docky/Services/CommandBarMenus.swift`: the Accessibility menu bar walk,
+  adapted from Vorssaint. Background queue, depth 4, 400 items, 0.35 s AX
+  timeout on the app element, every CF value type checked before casting.
+  Skips the Apple, Window and Help menus.
+- `Docky/Services/CommandBarService.swift`: gathers candidates, ranks, runs
+  the choice, owns the Carbon hot key (signature `CMDB`) and
+  `conflictMessage(for:)`.
+- `Docky/Views/MainWindow/CommandBarWindowController.swift`: the panel. Same
+  recipe as the Start Menu panel (borderless, non-activating, can become key,
+  level above the menu bar), centered near the top of the screen under the
+  pointer, styled with `dockyGlass`, the dock tint and 12 point corners.
+- `Docky/Views/SettingsWindow/CommandBarSettingsView.swift`: the pane, under
+  Features as "Command Bar".
+- Shared files, additive only: `SettingsRootView.swift` (one case in each
+  switch and the Features list), `AppDelegate.swift` (one start line),
+  `WindowSnapService.swift` (the snap pane now refuses the Command Bar's
+  shortcut when the bar is on), `README.md` (credit line).
+
+How it behaves:
+
+- Keyboard: Up and Down move, Return runs, Tab opens the selected row's
+  quick actions (apps: Open or Switch To, Show in Finder, Hide, Quit;
+  windows: Bring to Front, Minimize, Close, Left Half, Right Half, Maximize;
+  files: Open, Show in Finder, Copy Path; sums: Copy Result, Copy Plain
+  Number), Escape closes the action list and then the bar. A click outside,
+  or the panel losing key status, closes it.
+- The app in front and its focused window are captured when the bar opens,
+  so menu commands and snaps land there. The bar never activates Wharf.
+- Ranking: exact title, then prefix (shorter titles first), word prefix,
+  all query words as word prefixes ("half left"), initials ("vsc"),
+  substring, letters in order. Plus up to 200 points of history (frequency
+  and freshness) and a small tie breaker (apps, then windows, then menu
+  items). An empty field shows recently chosen items.
+- Files: `NSMetadataQuery`, `NSMetadataQueryLocalComputerScope` only,
+  display name contains the text (passed as a predicate argument), app
+  bundles excluded, newest used first, debounced 250 ms, 2 or more
+  characters, stopped after the first gather, at most "max results" rows.
+- Calculator: + - * / ^ (and **, the Unicode minus, times and divide),
+  postfix percent, brackets, pi, e, sqrt abs sin cos tan asin acos atan ln
+  log exp floor ceil round. Input over 200 characters, 200 tokens or 32
+  levels of nesting is refused; every intermediate value must be finite;
+  division by zero is refused. A bare number is not a calculation.
+- Units: temperature, length, mass, data (decimal and binary), duration,
+  volume, speed and area, as "number unit to unit" (also in, into, as, ->).
+  Units of different families never meet, since Foundation traps on that.
+
+### How to run the checks
+
+    scripts/test-command-bar.sh
+
+Builds `CommandBarCore.swift` and `WindowSnapGeometry.swift` with
+`Tests/CommandBar/CommandBarCoreTests.swift` and prints `PASS: 273 checks`.
+Includes hostile input (1/0, 0/0, 9^9^9^9, 2^999999, 1e999, 5000 open
+brackets, 1000 nested sqrt, 10,000 repeats of 1+, a 10,000 digit number,
+NUL bytes, emoji, Arabic digits) each timed under 50 ms, 10,000 random
+expressions, and a watchdog thread that fails the run after 20 seconds.
+
+### Deviations
+
+- **Separate preferences store.** Settings live in `CommandBarPreferences`,
+  not `DockyPreferences`, to keep the shared file untouched. So the global
+  "reset everything" in `DockyPreferences.resetToDefaults()` does not reset
+  the Command Bar; the pane has its own Reset button.
+- **Default shortcut is Option-Space,** stored but only registered once the
+  bar is switched on (default off). Nothing in Wharf uses it. Raycast and
+  Alfred often do; then the pane shows the orange "another app already uses
+  this shortcut" line.
+- **Conflicts refused:** Start Menu's fixed Control-Option-S (Stage 1's
+  list misses it, so a snap shortcut could still collide with it), Launchpad,
+  the Window Switcher and its Shift reverse, the Windows snip, every snap
+  shortcut, and Control keys that Windows Keyboard Mode rewrites. The
+  Launchpad and Window Switcher recorders do not check against the Command
+  Bar in return.
+- **Numbers use a period for decimals in every locale.** A comma is only
+  accepted as a thousands separator (exactly three digits after it);
+  "1,5" is refused rather than read as 15. Results are displayed in the
+  Mac's own number format.
+- **No clipboard history or snippets** (Wharf has neither), no web search,
+  emoji, dates, system settings or scripts from Vorssaint's bar.
+- **Window rows are not remembered** in history, since window identities do
+  not survive a relaunch. File rows are not remembered either, so no file
+  paths are stored.
+- **Installed apps come from Launchpad's scan**, which runs in the
+  background at launch. Opened in the first second after launch, the bar may
+  list only running apps.
+
+### Unverified
+
+- The Debug build was not launched, for the same reason as Stage 1 (a second
+  Wharf would add docks and register shortcuts system wide). So the panel,
+  its focus, the hot key, the key handling, the settings pane and every
+  action were not seen working.
+- Whether a non-activating panel takes key focus for typing when Wharf is in
+  the background is assumed from the Start Menu, which uses the same recipe.
+- The menu walk and pressing a menu item were not run against a real app.
+- Spotlight speed and result quality with a broad "contains" search on the
+  whole local disk were not measured; a short query may take a moment.
+- The Option-Space registration failure path was not triggered.

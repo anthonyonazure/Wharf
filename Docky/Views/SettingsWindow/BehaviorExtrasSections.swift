@@ -53,27 +53,8 @@ struct WindowsKeyboardExtrasSections: View {
 
 /// Fixed Space order, shown in the Visibility pane.
 struct FixedSpaceOrderSection: View {
-    @Bindable private var extras = BehaviorExtrasPreferences.shared
-
     var body: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Keep Spaces in a Fixed Order", isOn: $extras.spacesOrderFixed)
-                    .font(.headline)
-                    .disabled(SpacesOrderService.shared.isManaged)
-
-                Text("Stops macOS from rearranging Spaces based on most recent use, so each desktop stays where you put it. This is the same switch as in System Settings, Desktop & Dock, Mission Control. Wharf remembers your previous setting and puts it back when you turn this off. The Dock restarts briefly to apply the change.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if SpacesOrderService.shared.isManaged {
-                    Text("A management profile controls this setting, so Wharf leaves it alone.")
-                        .foregroundStyle(.orange)
-                }
-            }
-            .padding(.vertical, 4)
-        } header: {
-            Text("Spaces")
-        }
+        // The section and its status messages live in FixedSpaceOrderSectionBody.swift.
+        FixedSpaceOrderSectionBody()
     }
 }

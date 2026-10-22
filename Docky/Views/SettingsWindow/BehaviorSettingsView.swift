@@ -98,6 +98,8 @@ struct BehaviorSettingsView: View {
                 Text("Reverts every behavior setting (placement, visibility, app-tile click, app folders, widgets, launch, system-dock) to its built-in default. Use this when a theme has nudged behavior in a direction you want to undo.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                SpacesOrderRestoreNote()
             }
             .padding(.vertical, 4)
         }

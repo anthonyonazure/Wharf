@@ -428,6 +428,51 @@ final class WindowRegistry: ObservableObject {
         return posResult == .success && sizeResult == .success
     }
 
+    /// Wharf: the focused window of the frontmost app, for window snapping.
+    /// Nil when Wharf itself is frontmost or the app reports no focused
+    /// window. Falls back to that app's most recent visible window when the
+    /// focused element is not tracked yet.
+    func frontmostWindow() -> AppWindow? {
+        guard AXIsProcessTrusted(),
+              let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let pid = app.processIdentifier
+
+        var value: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            AXUIElementCreateApplication(pid),
+            kAXFocusedWindowAttribute as CFString,
+            &value
+        ) == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() {
+            let focused = value as! AXUIElement
+            if let match = windows.first(where: { CFEqual($0.element, focused) }) {
+                return match
+            }
+            syncWindows(for: pid)
+            if let match = windows.first(where: { CFEqual($0.element, focused) }) {
+                return match
+            }
+        }
+        return windows.first { $0.processIdentifier == pid && !$0.isMinimized }
+    }
+
+    /// Wharf: the window's frame read live from AX (AX space), rather than
+    /// the snapshot cached on `AppWindow`, which can lag a move by a tick.
+    func liveFrame(of window: AppWindow) -> CGRect? {
+        guard let element = liveElement(for: window) else { return nil }
+        return frameAttribute(of: element)
+    }
+
+    /// Wharf: moves the window without resizing it. Used to re-anchor a window
+    /// that refused the requested size.
+    @discardableResult
+    func move(_ window: AppWindow, to origin: CGPoint) -> Bool {
+        guard AXIsProcessTrusted(), let element = liveElement(for: window) else { return false }
+        var point = origin
+        guard let value = AXValueCreate(.cgPoint, &point) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value) == .success
+    }
+
     /// Returns a live `AXUIElement` for the window's logical identity, or nil
     /// when the window is truly gone. Probes the cached element with a cheap
     /// position read; if AX no longer answers, re-syncs the app and tries to

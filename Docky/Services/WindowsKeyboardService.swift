@@ -80,7 +80,7 @@ final class WindowsKeyboardService {
     ///
     /// Q is deliberately absent: Ctrl+Q is not a Windows quit shortcut, and
     /// rewriting it would turn a harmless keystroke into "quit the app".
-    private static let translatedKeyCodes: Set<Int64> = [
+    static let translatedKeyCodes: Set<Int64> = [
         Int64(kVK_ANSI_A),      // select all
         Int64(kVK_ANSI_B),      // bold
         Int64(kVK_ANSI_C),      // copy

@@ -40,7 +40,7 @@ struct BundleIDListEditor: View {
                             }
                             Spacer()
                             Button {
-                                bundleIDs.removeAll { $0 == bundleID }
+                                bundleIDs = BundleIDList.removing(bundleID, from: bundleIDs)
                             } label: {
                                 Image(systemName: "minus.circle.fill")
                                     .foregroundStyle(.secondary)
@@ -73,9 +73,21 @@ struct BundleIDListEditor: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { addTyped() }
                 Button("Add") { addTyped() }
-                    .disabled(typedBundleID.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(typedValidationError != nil)
+            }
+
+            // Said only once something is typed, so an empty field is quiet.
+            if !typedBundleID.trimmingCharacters(in: .whitespaces).isEmpty,
+               let typedValidationError {
+                Text(typedValidationError)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         }
+    }
+
+    private var typedValidationError: String? {
+        BundleIDList.validationError(typedBundleID)
     }
 
     /// Bundle IDs ignore case, so "COM.APPLE.SAFARI" is a duplicate of
@@ -86,6 +98,8 @@ struct BundleIDListEditor: View {
     }
 
     private func addTyped() {
+        // Return in the field skips the disabled button, so check here too.
+        guard typedValidationError == nil else { return }
         add(typedBundleID)
         typedBundleID = ""
     }

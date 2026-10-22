@@ -77,6 +77,37 @@ nonisolated enum BundleIDList {
         var seen = Set<String>()
         return bundleIDs.filter { seen.insert(normalized($0)).inserted && !normalized($0).isEmpty }
     }
+
+    /// `bundleIDs` without `bundleID` in any case or spacing.
+    static func removing(_ bundleID: String, from bundleIDs: [String]) -> [String] {
+        let key = normalized(bundleID)
+        return bundleIDs.filter { normalized($0) != key }
+    }
+
+    /// Why a typed bundle ID is refused, or nil when it is acceptable. A
+    /// bundle ID is reverse DNS: two or more parts separated by dots, each
+    /// made of letters, digits and hyphens. Underscores are refused, as
+    /// Apple's rules for the key refuse them.
+    static func validationError(_ typed: String) -> String? {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Type a bundle ID." }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+        if trimmed.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+            return "A bundle ID uses only letters, digits, dots and hyphens."
+        }
+        let parts = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.count < 2 { return "A bundle ID has at least two parts separated by a dot, like com.example.App." }
+        if parts.contains(where: \.isEmpty) { return "A bundle ID cannot start or end with a dot or have two dots in a row." }
+        return nil
+    }
+
+    /// The key an app is matched by: its bundle ID, or for the rare app
+    /// without one, its executable's file name. Lowercased like the list.
+    static func matchKey(bundleID: String?, executableName: String?) -> String? {
+        if let bundleID, !normalized(bundleID).isEmpty { return normalized(bundleID) }
+        if let executableName, !normalized(executableName).isEmpty { return normalized(executableName) }
+        return nil
+    }
 }
 
 nonisolated struct HoverDwellEvaluation: Equatable {

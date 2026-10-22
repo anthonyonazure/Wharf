@@ -224,6 +224,33 @@ private func testBundleIDList() {
     expect(L.adding("  com.example.App ", to: []) == ["com.example.App"], "added trimmed, spelling kept")
     expect(L.adding("   ", to: ["a"]) == ["a"], "blank not added")
     expect(L.deduplicated(["com.A", "COM.a", "com.b", ""]) == ["com.A", "com.b"], "dedupe keeps first spelling")
+    expect(L.deduplicated(["com.apple.Terminal", "COM.APPLE.TERMINAL", " com.apple.terminal "]) == ["com.apple.Terminal"],
+           "stored case and spacing variants collapse on load")
+    expect(L.removing("COM.APPLE.TERMINAL", from: ["com.apple.Terminal", "com.b"]) == ["com.b"],
+           "removal ignores case")
+    expect(L.removing("com.a", from: ["com.A", "COM.a ", "com.b"]) == ["com.b"], "removal takes every variant")
+    expect(L.removing("com.z", from: ["com.a"]) == ["com.a"], "removing an absent ID changes nothing")
+
+    // Typed bundle IDs.
+    expect(L.validationError("com.apple.Terminal") == nil, "ordinary ID accepted")
+    expect(L.validationError(" org.mozilla.firefox ") == nil, "surrounding spaces ignored")
+    expect(L.validationError("com.microsoft.rdc-macos") == nil, "hyphens accepted")
+    expect(L.validationError("com.vmware.fusion2") == nil, "digits accepted")
+    expect(L.validationError("") != nil, "empty refused")
+    expect(L.validationError("Terminal") != nil, "single part refused")
+    expect(L.validationError("com..apple") != nil, "empty part refused")
+    expect(L.validationError(".com.apple") != nil, "leading dot refused")
+    expect(L.validationError("com.apple.") != nil, "trailing dot refused")
+    expect(L.validationError("com.apple Terminal") != nil, "inner space refused")
+    expect(L.validationError("com.foo_bar") != nil, "underscore refused")
+    expect(L.validationError("com.apple/Terminal") != nil, "slash refused")
+    expect(L.validationError("com.äpple") != nil, "non ASCII letters refused")
+
+    // Apps without a bundle ID fall back to their executable's name.
+    expect(L.matchKey(bundleID: "COM.A", executableName: "a") == "com.a", "bundle ID wins")
+    expect(L.matchKey(bundleID: nil, executableName: "MyTool") == "mytool", "executable name fallback")
+    expect(L.matchKey(bundleID: " ", executableName: "MyTool") == "mytool", "blank bundle ID falls back")
+    expect(L.matchKey(bundleID: nil, executableName: nil) == nil, "nothing to match by")
 
     // The hover gate matches exclusions without regard to case.
     let window = HoverWindowInfo(windowID: 9, ownerPID: 50, layer: 0, bounds: CGRect(x: 0, y: 0, width: 100, height: 100))

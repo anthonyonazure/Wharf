@@ -4684,6 +4684,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         // System dock
         hidesSystemDock = DefaultValues.hidesSystemDock
 
+        // Focus follows mouse, fixed Space order, Win key tap (own store).
+        BehaviorExtrasPreferences.shared.resetToDefaults()
+
         // Same rationale as `resetAppearanceToDefaults`: setters guard
         // against same-value writes, so any pre-existing override flag
         // would survive without an explicit wipe. The behavior keys
@@ -4787,6 +4790,7 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         switcherZoomKeyCode = DefaultValues.switcherZoomKeyCode
         resetWindowSnappingToDefaults()
         WindowBehaviorPreferences.shared.resetToDefaults()
+        BehaviorExtrasPreferences.shared.resetToDefaults()
         appWidgetDisplays = DefaultValues.appWidgetDisplays
         hasSeenDockEditorHint = DefaultValues.hasSeenDockEditorHint
 

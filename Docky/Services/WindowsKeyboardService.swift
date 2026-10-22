@@ -19,8 +19,6 @@ import Combine
 final class WindowsKeyboardService {
     static let shared = WindowsKeyboardService()
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
     private var cancellables: Set<AnyCancellable> = []
 
     /// The tap's own thread and runloop.
@@ -35,11 +33,15 @@ final class WindowsKeyboardService {
     ///
     /// A dedicated thread means the input path no longer waits on drawing.
     private var tapThread: Thread?
-    private var tapRunLoop: CFRunLoop?
 
     /// Everything the callback needs, behind a lock, so it never reaches into
-    /// main-actor state from the tap thread.
+    /// main-actor state from the tap thread. The tap, its source and its
+    /// runloop are behind it too: the tap thread re-enables the tap while
+    /// the main thread may be tearing it down.
     private let stateLock = NSLock()
+    private var _eventTap: CFMachPort?
+    private var _runLoopSource: CFRunLoopSource?
+    private var _tapRunLoop: CFRunLoop?
     private var _snipEnabled = false
     private var _excludedBundleIDs: Set<String> = []
     private var _winTapAction: WinKeyTapAction = .off
@@ -79,7 +81,8 @@ final class WindowsKeyboardService {
     @MainActor
     private func refreshSnapshot() {
         snipEnabled = DockyPreferences.shared.windowsKeyboardSnipShortcut
-        excludedBundleIDs = Set(DockyPreferences.shared.windowsKeyboardExcludedBundleIDs)
+        // Lowercased, like the frontmost bundle ID: bundle IDs ignore case.
+        excludedBundleIDs = BundleIDList.matchSet(DockyPreferences.shared.windowsKeyboardExcludedBundleIDs)
         winTapAction = BehaviorExtrasPreferences.shared.winTapAction
     }
 
@@ -204,29 +207,33 @@ final class WindowsKeyboardService {
     }
 
     private func observeFrontmostApplication() {
-        frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier.map(BundleIDList.normalized)
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            self?.frontmostBundleID = app?.bundleIdentifier
+            self?.frontmostBundleID = app?.bundleIdentifier.map(BundleIDList.normalized)
         }
     }
 
     // MARK: - Event tap
 
     private func installTapIfNeeded() {
-        guard eventTap == nil else { return }
+        stateLock.lock()
+        let installed = _eventTap != nil
+        stateLock.unlock()
+        guard !installed else { return }
 
-        // Modifier changes and clicks are watched only to recognize a lone
-        // Win key tap; they always pass through untouched.
+        // Modifier changes, clicks and scrolls are watched only to recognize
+        // a lone Win key tap; they always pass through untouched.
         let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.rightMouseDown.rawValue)
             | (1 << CGEventType.otherMouseDown.rawValue)
+            | (1 << CGEventType.scrollWheel.rawValue)
 
         // `.cgSessionEventTap` at `.headInsertEventTap` so the rewrite happens
         // before any application sees the keystroke. The tap must be active
@@ -248,15 +255,21 @@ final class WindowsKeyboardService {
         }
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        eventTap = tap
-        runLoopSource = source
+        stateLock.lock()
+        _eventTap = tap
+        _runLoopSource = source
+        stateLock.unlock()
 
         // Onto its own thread, not the main runloop. Keystrokes must not wait
         // behind the dock's drawing; see the note on `tapThread`.
         let ready = DispatchSemaphore(value: 0)
         let thread = Thread { [weak self] in
             let runLoop = CFRunLoopGetCurrent()
-            self?.tapRunLoop = runLoop
+            if let self {
+                self.stateLock.lock()
+                self._tapRunLoop = runLoop
+                self.stateLock.unlock()
+            }
             CFRunLoopAddSource(runLoop, source, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
             ready.signal()
@@ -273,21 +286,26 @@ final class WindowsKeyboardService {
         writeStatus("ACTIVE: event tap installed; Control translates to Command, terminals excluded.")
     }
 
+    /// Under the lock for the whole teardown, so the tap thread's re-enable
+    /// in `handle` can never run against a tap being invalidated.
     private func removeTap() {
-        if let eventTap {
+        stateLock.lock()
+        if let eventTap = _eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
-            if let runLoopSource, let tapRunLoop {
+            if let runLoopSource = _runLoopSource, let tapRunLoop = _tapRunLoop {
                 CFRunLoopRemoveSource(tapRunLoop, runLoopSource, .commonModes)
-                CFRunLoopWakeUp(tapRunLoop)
             }
             CFMachPortInvalidate(eventTap)
         }
+        let tapRunLoop = _tapRunLoop
+        _tapRunLoop = nil
+        _eventTap = nil
+        _runLoopSource = nil
+        stateLock.unlock()
+
         tapThread?.cancel()
         if let tapRunLoop { CFRunLoopWakeUp(tapRunLoop) }
         tapThread = nil
-        tapRunLoop = nil
-        eventTap = nil
-        runLoopSource = nil
     }
 
     // MARK: - Translation
@@ -296,9 +314,11 @@ final class WindowsKeyboardService {
         // The system disables a tap that takes too long or that the user
         // revoked permission for. Re-arm rather than silently going dead.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let eventTap {
+            stateLock.lock()
+            if let eventTap = _eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
+            stateLock.unlock()
             return Unmanaged.passUnretained(event)
         }
 
@@ -321,8 +341,9 @@ final class WindowsKeyboardService {
             isSnipInFlight = false
         }
 
+        // Not gated on the exclusion list: that list keeps Control's Mac
+        // meaning in terminals and the like, and the snip uses no Control.
         if snipEnabled,
-           shouldTranslateControl(),
            keyCode == Int64(kVK_ANSI_S),
            flags.contains(.maskCommand),
            flags.contains(.maskShift),
@@ -364,7 +385,10 @@ final class WindowsKeyboardService {
     /// reaches the app, so Command shortcuts keep working.
     private func trackWinTap(type: CGEventType, event: CGEvent) {
         let action = winTapAction
-        guard action != .off else {
+        // Excluded apps (remote desktops, virtual machines, terminals) keep
+        // the Win key to themselves. Checked on every event, so a press that
+        // began elsewhere cannot complete once an excluded app is in front.
+        guard action != .off, shouldTranslateControl() else {
             winTapDetector = CommandTapDetector()
             return
         }
@@ -375,12 +399,15 @@ final class WindowsKeyboardService {
             input = .flagsChanged(
                 command: flags.contains(.maskCommand),
                 otherModifiers: !flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
-                time: ProcessInfo.processInfo.systemUptime
+                time: ProcessInfo.processInfo.systemUptime,
+                mouseHeld: Self.isAnyMouseButtonDown
             )
         case .keyDown:
             input = .keyDown
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             input = .mouseDown
+        case .scrollWheel:
+            input = .scrollWheel
         default:
             return
         }
@@ -394,12 +421,21 @@ final class WindowsKeyboardService {
         }
     }
 
+    /// Read from the hardware state at the moment, not tracked from events,
+    /// so a button release the tap never saw cannot leave it stuck.
+    private nonisolated static var isAnyMouseButtonDown: Bool {
+        [CGMouseButton.left, .right, .center].contains {
+            CGEventSource.buttonState(.combinedSessionState, button: $0)
+        }
+    }
+
     /// False inside terminals, where Control must keep its Unix meaning.
     /// Ctrl+C there is SIGINT; rewriting it would remove the ability to
     /// interrupt a running process.
     private func shouldTranslateControl() -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
+        // Both sides are already lowercased; see `refreshSnapshot`.
         guard let bundleID = _frontmostBundleID else { return true }
         return !_excludedBundleIDs.contains(bundleID)
     }

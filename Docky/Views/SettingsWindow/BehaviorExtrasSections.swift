@@ -44,7 +44,7 @@ struct WindowsKeyboardExtrasSections: View {
         } header: {
             Text("Excluded Apps")
         } footer: {
-            Text("In these apps Control keeps its Mac meaning and nothing is translated. Terminals are on the list by default, so Ctrl+C there still interrupts a running process.")
+            Text("In these apps Control keeps its Mac meaning, nothing is translated and a Win key tap does nothing. Terminals are on the list by default, so Ctrl+C there still interrupts a running process. Win+Shift+S still takes a snip everywhere.")
                 .foregroundStyle(.secondary)
         }
         .disabled(!preferences.windowsKeyboardMode)

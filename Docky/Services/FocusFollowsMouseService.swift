@@ -12,20 +12,48 @@
 //  GPL-3.0), using public window server lists instead of its private helpers.
 //  The decisions live in FocusAndWinTapLogic.swift.
 //
+//  Accessibility calls go to the target app and can stall for as long as
+//  that app is busy, so none run on the main thread: they run one at a time
+//  on a worker queue with short timeouts, and everything is checked again on
+//  the main thread right before raising (HoverCommitCheck).
+//
 
 import AppKit
 import ApplicationServices
 import Combine
 
+/// The same private call as in CGSPrivate.swift, declared again here without
+/// main actor isolation so the worker queue can use it.
+@_silgen_name("_AXUIElementGetWindow") @discardableResult
+private nonisolated func hoverAXWindowID(_ element: AXUIElement, _ wid: inout CGWindowID) -> AXError
+
+/// An AXUIElement handed from the worker queue back to the main thread. AX
+/// element references are safe to pass between threads.
+private struct HoverAXElement: @unchecked Sendable {
+    let element: AXUIElement
+}
+
 final class FocusFollowsMouseService {
     static let shared = FocusFollowsMouseService()
 
+    /// How long one Accessibility message to the target app may take.
+    private nonisolated static let axTimeout: Float = 0.25
+    /// The most windows read from one app while looking for the target.
+    private nonisolated static let maximumWindowsScanned = 64
+    /// A lookup that answers later than this is dropped: the moment passed.
+    private static let lookupDeadline: TimeInterval = 1.0
+
     private let preferences = BehaviorExtrasPreferences.shared
     private var mouseMonitor: Any?
+    private var localMonitor: Any?
     private var timer: Timer?
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var cancellables: Set<AnyCancellable> = []
     private var state = HoverDwellState()
+
+    /// Serial, so a hung app costs one stuck lookup, never a pile of them.
+    private let worker = DispatchQueue(label: "wharf.focus-follows-mouse.lookup", qos: .userInitiated)
+    private var lookupInFlight = false
 
     private init() {}
 
@@ -52,24 +80,34 @@ final class FocusFollowsMouseService {
         }
     }
 
+    private var isWanted: Bool {
+        preferences.focusFollowsMouseEnabled
+            && !preferences.focusFollowsMouseDisplays.isEmpty
+            && AXIsProcessTrusted()
+    }
+
     /// Runs only while it can do something: switched on, at least one display
     /// opted in, and Accessibility granted. Otherwise no monitor at all.
     private func sync() {
-        let wanted = preferences.focusFollowsMouseEnabled
-            && !preferences.focusFollowsMouseDisplays.isEmpty
-            && AXIsProcessTrusted()
-        wanted ? install() : uninstall()
+        isWanted ? install() : uninstall()
     }
 
     private func install() {
         guard mouseMonitor == nil else { return }
+        let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         // Drags are watched too, so the pause starts over once a drag ends
         // instead of firing the moment the button comes up.
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-        ) { [weak self] event in
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in
             guard let point = event.cgEvent?.location else { return }
             self?.recordMovement(to: point)
+        }
+        // The global monitor never sees the pointer over Wharf's own windows.
+        // Moving into one cancels whatever was pending: nothing there is to
+        // be raised. (The live pointer check before raising covers windows
+        // that do not report mouse moves.)
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in
+            self?.resetMovement()
+            return event
         }
 
         let workspace = NSWorkspace.shared.notificationCenter
@@ -86,7 +124,9 @@ final class FocusFollowsMouseService {
     private func uninstall() {
         resetMovement()
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         mouseMonitor = nil
+        localMonitor = nil
         observers.forEach { center, token in center.removeObserver(token) }
         observers.removeAll()
     }
@@ -124,24 +164,108 @@ final class FocusFollowsMouseService {
                 timer = nil
             }
         }
-        guard let evaluation = state.nextEvaluation(
-            at: ProcessInfo.processInfo.systemUptime,
-            delayMilliseconds: preferences.focusFollowsMouseDelay
-        ) else { return }
-        defer { state.finishEvaluation(evaluation) }
+        // One lookup at a time. A pending rest waits (the timer keeps
+        // ticking) until the previous lookup answers or is abandoned.
+        guard !lookupInFlight,
+              let evaluation = state.nextEvaluation(
+                at: ProcessInfo.processInfo.systemUptime,
+                delayMilliseconds: preferences.focusFollowsMouseDelay)
+        else { return }
 
         // `focus` below would put up a permission alert when Accessibility is
         // missing. A hover feature must never do that, so both the live answer
         // and the cached one have to agree first.
-        guard AXIsProcessTrusted(), PermissionsService.shared.accessibility == .granted else { return }
+        guard AXIsProcessTrusted(), PermissionsService.shared.accessibility == .granted else {
+            state.finishEvaluation(evaluation)
+            return
+        }
 
-        let decision = HoverFocusGate.decide(input(at: evaluation.point))
-        guard case let .raise(windowID, pid) = decision,
-              let window = WindowRegistry.shared.liveWindows(for: pid).first(where: { $0.cgWindowID == windowID })
+        // Everything here is window server and AppKit state: no app is asked
+        // anything yet.
+        let input = input(at: evaluation.point)
+        let decision = HoverFocusGate.decide(input)
+        let target: (windowID: CGWindowID, pid: pid_t)
+        var needsFocusedWindow = false
+        switch decision {
+        case let .raise(windowID, pid):
+            target = (windowID, pid)
+        case .skip(.alreadyFocused) where input.focusedWindowID == nil:
+            // Same app in front: which of its windows has focus needs
+            // Accessibility, so the worker asks before deciding.
+            guard let window = input.target else { state.finishEvaluation(evaluation); return }
+            target = (window.windowID, window.ownerPID)
+            needsFocusedWindow = true
+        case .skip:
+            state.finishEvaluation(evaluation)
+            return
+        }
+
+        // The registry's snapshot usually has the window already, at no
+        // Accessibility cost.
+        let cached = WindowRegistry.shared.windows.first {
+            $0.processIdentifier == target.pid && $0.cgWindowID == target.windowID
+        }
+        let cachedElement = cached.map { HoverAXElement(element: $0.element) }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        lookupInFlight = true
+
+        worker.async { [weak self] in
+            var element: HoverAXElement?
+            var raise = true
+            if needsFocusedWindow {
+                var focusedInput = input
+                focusedInput.focusedWindowID = Self.focusedWindowID(of: target.pid)
+                if case .skip = HoverFocusGate.decide(focusedInput) { raise = false }
+            }
+            if raise {
+                element = cachedElement ?? Self.windowElement(pid: target.pid, windowID: target.windowID)
+                // Bounds the Accessibility calls `focus` makes on the main
+                // thread with this element.
+                if let element { AXUIElementSetMessagingTimeout(element.element, Self.axTimeout) }
+            }
+            DispatchQueue.main.async {
+                self?.finishLookup(evaluation, target: target, element: element, cached: cached, startedAt: startedAt)
+            }
+        }
+    }
+
+    private func finishLookup(_ evaluation: HoverDwellEvaluation,
+                              target: (windowID: CGWindowID, pid: pid_t),
+                              element: HoverAXElement?,
+                              cached: AppWindow?,
+                              startedAt: TimeInterval) {
+        lookupInFlight = false
+        defer {
+            state.finishEvaluation(evaluation)
+            startTimerIfNeeded()
+        }
+        guard let element,
+              ProcessInfo.processInfo.systemUptime - startedAt <= Self.lookupDeadline
         else { return }
-        // The window lookup above asks the app over Accessibility, which takes
-        // long enough for a click or a shortcut to begin. Check again.
-        guard state.isCurrent(evaluation), !Self.isButtonOrModifierHeld else { return }
+
+        // Read everything fresh: the lookup took time.
+        var check = HoverCommitCheck()
+        check.featureActive = mouseMonitor != nil && isWanted
+            && PermissionsService.shared.accessibility == .granted
+        check.evaluationCurrent = state.isCurrent(evaluation)
+        check.livePointer = Self.livePointer()
+        check.receivingWindowID = check.livePointer.flatMap(Self.receivingWindow(at:))
+        check.menuOpen = HoverWindowScan.isMenuOpen(in: Self.onScreenWindows())
+        check.buttonOrModifierHeld = Self.isButtonOrModifierHeld
+        guard check.allowsRaise(of: target.windowID, restingAt: evaluation.point) else { return }
+
+        let window = cached ?? AppWindow(
+            element: element.element,
+            bundleIdentifier: NSRunningApplication(processIdentifier: target.pid)?.bundleIdentifier ?? "pid:\(target.pid)",
+            processIdentifier: target.pid,
+            appDisplayName: NSRunningApplication(processIdentifier: target.pid)?.localizedName ?? "",
+            windowTitle: "",
+            // On screen under the pointer, so not minimized.
+            isMinimized: false,
+            windowNumber: nil,
+            cgWindowID: target.windowID,
+            frame: nil
+        )
         WindowRegistry.shared.focus(window)
     }
 
@@ -152,30 +276,30 @@ final class FocusFollowsMouseService {
 
     /// Everything the gate needs, read from the window server and AppKit.
     /// `point` is in global display coordinates, origin at the top left of
-    /// the main display.
+    /// the main display. `focusedWindowID` is left for the worker.
     private func input(at point: CGPoint) -> HoverFocusInput {
         var input = HoverFocusInput()
         input.ownPID = ProcessInfo.processInfo.processIdentifier
         input.mouseButtonsDown = NSEvent.pressedMouseButtons != 0
         input.modifiersHeld = !NSEvent.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
-        input.excludedBundleIDs = Set(preferences.focusFollowsMouseExcludedBundleIDs)
+        input.excludedBundleIDs = BundleIDList.matchSet(preferences.focusFollowsMouseExcludedBundleIDs)
         input.displayEnabled = isDisplayEnabled(at: point)
 
-        let raw = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-            as? [[String: Any]] ?? []
-        let windows = raw.compactMap(HoverWindowScan.info(from:))
+        let windows = Self.onScreenWindows()
         input.menuOpen = HoverWindowScan.isMenuOpen(in: windows)
         input.target = HoverWindowScan.target(in: windows, at: point, pointerWindowID: Self.receivingWindow(at: point))
 
         if let target = input.target, let app = NSRunningApplication(processIdentifier: target.ownerPID) {
             input.targetBundleID = app.bundleIdentifier
         }
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        input.frontmostPID = frontmost
-        if let frontmost, frontmost == input.target?.ownerPID {
-            input.focusedWindowID = Self.focusedWindowID(of: frontmost)
-        }
+        input.frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         return input
+    }
+
+    private static func onScreenWindows() -> [HoverWindowInfo] {
+        let raw = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        return raw.compactMap(HoverWindowScan.info(from:))
     }
 
     private func isDisplayEnabled(at point: CGPoint) -> Bool {
@@ -184,6 +308,14 @@ final class FocusFollowsMouseService {
         guard CGGetDisplaysWithPoint(point, 1, &displayID, &count) == .success, count > 0,
               let key = PerDisplaySettings.key(for: displayID) else { return false }
         return preferences.focusFollowsMouseDisplays.contains(key)
+    }
+
+    /// The pointer now, in the same top-left global coordinates as the
+    /// window server and the monitor's events.
+    private static func livePointer() -> CGPoint? {
+        guard let mainHeight = NSScreen.screens.first?.frame.height else { return nil }
+        let location = NSEvent.mouseLocation
+        return CGPoint(x: location.x, y: mainHeight - location.y)
     }
 
     /// AppKit's answer to which window a click here would reach. It skips
@@ -196,14 +328,36 @@ final class FocusFollowsMouseService {
         return number > 0 ? CGWindowID(number) : nil
     }
 
-    private static func focusedWindowID(of pid: pid_t) -> CGWindowID? {
+    // MARK: - Worker queue only
+
+    private nonisolated static func focusedWindowID(of pid: pid_t) -> CGWindowID? {
         let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.25)
+        AXUIElementSetMessagingTimeout(app, axTimeout)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         var windowID: CGWindowID = 0
-        guard _AXUIElementGetWindow(value as! AXUIElement, &windowID) == .success, windowID != 0 else { return nil }
+        guard hoverAXWindowID(value as! AXUIElement, &windowID) == .success, windowID != 0 else { return nil }
         return windowID
+    }
+
+    /// The app's Accessibility element for one window server window, read
+    /// with a short timeout per message and a cap on how many windows are
+    /// looked at.
+    private nonisolated static func windowElement(pid: pid_t, windowID: CGWindowID) -> HoverAXElement? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, axTimeout)
+        var raw: CFArray?
+        guard AXUIElementCopyAttributeValues(
+                app, kAXWindowsAttribute as CFString, 0, maximumWindowsScanned, &raw) == .success,
+              let elements = raw as? [AXUIElement]
+        else { return nil }
+        for element in elements {
+            var id: CGWindowID = 0
+            if hoverAXWindowID(element, &id) == .success, id == windowID {
+                return HoverAXElement(element: element)
+            }
+        }
+        return nil
     }
 }

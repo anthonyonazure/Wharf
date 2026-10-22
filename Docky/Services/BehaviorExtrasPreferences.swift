@@ -24,6 +24,11 @@ final class BehaviorExtrasPreferences {
         /// What `mru-spaces` read before Wharf changed it: "absent", "on" or
         /// "off". Present only while Wharf holds the order fixed.
         static let spacesOrderRestoreMarker = "wharf.spacesOrder.restoreMarker"
+        /// How far the change got (`SpacesHoldPhase`). Missing on a marker
+        /// saved by an earlier build, which only saved it once held.
+        static let spacesOrderPhase = "wharf.spacesOrder.phase"
+        /// Set before Wharf restarts the Dock, cleared once it is back.
+        static let spacesOrderDockRestartPending = "wharf.spacesOrder.dockRestartPending"
         static let winTapAction = "wharf.windowsKeyboardWinTap.action"
     }
 
@@ -46,12 +51,11 @@ final class BehaviorExtrasPreferences {
     /// Clamped to `FocusFollowsMouseTiming.delayRange` on read and write.
     var focusFollowsMouseDelay: Int {
         didSet {
+            // The clamped value is what gets saved, whether or not the
+            // reassignment below runs this observer again.
             let clamped = FocusFollowsMouseTiming.clampedDelay(focusFollowsMouseDelay)
-            if clamped != focusFollowsMouseDelay {
-                focusFollowsMouseDelay = clamped
-                return
-            }
-            defaults.set(focusFollowsMouseDelay, forKey: Keys.focusFollowsMouseDelay)
+            defaults.set(clamped, forKey: Keys.focusFollowsMouseDelay)
+            if clamped != focusFollowsMouseDelay { focusFollowsMouseDelay = clamped }
         }
     }
 
@@ -73,27 +77,55 @@ final class BehaviorExtrasPreferences {
         didSet { defaults.set(winTapAction.rawValue, forKey: Keys.winTapAction) }
     }
 
-    /// Read and written only by SpacesOrderService; not observed.
-    @ObservationIgnored var spacesOrderRestoreMarker: String? {
-        get { defaults.string(forKey: Keys.spacesOrderRestoreMarker) }
+    /// Read and written only by SpacesOrderService; not observed. Setting
+    /// it writes both keys; callers flush and read back before relying on it.
+    @ObservationIgnored var spacesOrderJournal: SpacesOrderJournal? {
+        get {
+            guard let restore = defaults.string(forKey: Keys.spacesOrderRestoreMarker) else { return nil }
+            let phase = defaults.string(forKey: Keys.spacesOrderPhase).flatMap(SpacesHoldPhase.init(rawValue:)) ?? .held
+            return SpacesOrderJournal(restore: restore, phase: phase)
+        }
         set {
             if let newValue {
-                defaults.set(newValue, forKey: Keys.spacesOrderRestoreMarker)
+                defaults.set(newValue.restore, forKey: Keys.spacesOrderRestoreMarker)
+                defaults.set(newValue.phase.rawValue, forKey: Keys.spacesOrderPhase)
             } else {
                 defaults.removeObject(forKey: Keys.spacesOrderRestoreMarker)
+                defaults.removeObject(forKey: Keys.spacesOrderPhase)
             }
         }
+    }
+
+    @ObservationIgnored var spacesOrderDockRestartPending: Bool {
+        get { defaults.bool(forKey: Keys.spacesOrderDockRestartPending) }
+        set { defaults.set(newValue, forKey: Keys.spacesOrderDockRestartPending) }
+    }
+
+    /// Back to defaults, for Reset Behavior and the full reset. Fixed Space
+    /// order goes first and leaves the journal alone: SpacesOrderService sees
+    /// the switch go off and puts the Dock preference back through its usual
+    /// release, clearing the journal only once that worked. The other
+    /// services see their switches go off and uninstall.
+    func resetToDefaults() {
+        spacesOrderFixed = DefaultValues.spacesOrderFixed
+        focusFollowsMouseEnabled = DefaultValues.focusFollowsMouseEnabled
+        focusFollowsMouseDelay = DefaultValues.focusFollowsMouseDelay
+        focusFollowsMouseDisplays = DefaultValues.focusFollowsMouseDisplays
+        focusFollowsMouseExcludedBundleIDs = DefaultValues.focusFollowsMouseExcluded
+        winTapAction = DefaultValues.winTapAction
     }
 
     private init() {
         focusFollowsMouseEnabled = defaults.object(forKey: Keys.focusFollowsMouseEnabled) as? Bool
             ?? DefaultValues.focusFollowsMouseEnabled
-        focusFollowsMouseDelay = FocusFollowsMouseTiming.clampedDelay(
-            defaults.object(forKey: Keys.focusFollowsMouseDelay) as? Int ?? DefaultValues.focusFollowsMouseDelay)
+        let storedDelay = FocusFollowsMouseTiming.storedDelay(defaults.object(forKey: Keys.focusFollowsMouseDelay))
+        focusFollowsMouseDelay = storedDelay.value
+        // Observers do not run in init, so a bad stored value is fixed here.
+        if storedDelay.needsRewrite { defaults.set(storedDelay.value, forKey: Keys.focusFollowsMouseDelay) }
         focusFollowsMouseDisplays = defaults.stringArray(forKey: Keys.focusFollowsMouseDisplays)
             ?? DefaultValues.focusFollowsMouseDisplays
-        focusFollowsMouseExcludedBundleIDs = defaults.stringArray(forKey: Keys.focusFollowsMouseExcluded)
-            ?? DefaultValues.focusFollowsMouseExcluded
+        focusFollowsMouseExcludedBundleIDs = BundleIDList.deduplicated(
+            defaults.stringArray(forKey: Keys.focusFollowsMouseExcluded) ?? DefaultValues.focusFollowsMouseExcluded)
         spacesOrderFixed = defaults.object(forKey: Keys.spacesOrderFixed) as? Bool
             ?? DefaultValues.spacesOrderFixed
         winTapAction = defaults.string(forKey: Keys.winTapAction).flatMap(WinKeyTapAction.init(rawValue:))

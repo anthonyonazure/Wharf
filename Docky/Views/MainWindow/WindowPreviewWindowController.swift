@@ -216,13 +216,44 @@ final class WindowPreviewWindowController: NSWindowController, ObservableObject 
     func requestDismiss(sourceTileID: String) {
         guard currentTileID == sourceTileID else { return }
         guard !isPreviewHovered else { return }
+        // A menu opened from the preview is tracking; hover exits during it
+        // say nothing about whether the user is done.
+        guard !WindowPreviewService.shared.isContextMenuPresented else { return }
 
         pendingDismissTask?.cancel()
         pendingDismissTask = Task { @MainActor in
             try? await Task.sleep(for: Self.dismissGrace)
             guard !Task.isCancelled else { return }
-            guard self.currentTileID == sourceTileID, !self.isPreviewHovered else { return }
+            guard self.currentTileID == sourceTileID, !self.isPreviewHovered,
+                  !WindowPreviewService.shared.isContextMenuPresented else { return }
             self.dismiss(sourceTileID: sourceTileID)
+        }
+    }
+
+    /// Called by WindowPreviewService when a menu opened from the preview
+    /// opens or closes. Opening cancels any pending dismissal; closing
+    /// looks at where the pointer ended up, since hover events may have been
+    /// missed while the menu tracked.
+    func contextMenuPresentationChanged(_ presented: Bool) {
+        if presented {
+            pendingDismissTask?.cancel()
+            pendingDismissTask = nil
+            return
+        }
+        guard let currentTileID, let window, window.isVisible else { return }
+        let pointer = NSEvent.mouseLocation
+        let outcome = PreviewActionsPolicy.afterMenuCloses(
+            pointerInPreview: window.frame.contains(pointer),
+            pointerInDock: currentSourceWindow?.frame.contains(pointer) == true
+        )
+        switch outcome {
+        case .keepHovered:
+            isPreviewHovered = true
+        case .leaveToDock:
+            break
+        case .requestDismiss:
+            isPreviewHovered = false
+            requestDismiss(sourceTileID: currentTileID)
         }
     }
 

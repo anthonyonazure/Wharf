@@ -26,12 +26,17 @@ struct ContextAction: Identifiable {
     let children: [ContextAction]
     let childrenProvider: (() -> [ContextAction])?
     let handler: () -> Void
+    /// Wharf: set on the second of a pair of actions to make it a native
+    /// alternate of the first, shown in its place while these modifiers are
+    /// held. The visible row and the action it runs then always agree.
+    var alternateModifiers: NSEvent.ModifierFlags? = nil
 
     static func action(
         _ title: String,
         image: NSImage? = nil,
         isDestructive: Bool = false,
         isOn: Bool = false,
+        alternateModifiers: NSEvent.ModifierFlags? = nil,
         handler: @escaping () -> Void
     ) -> Self {
         Self(
@@ -43,7 +48,8 @@ struct ContextAction: Identifiable {
             isOn: isOn,
             children: [],
             childrenProvider: nil,
-            handler: handler
+            handler: handler,
+            alternateModifiers: alternateModifiers
         )
     }
 
@@ -290,6 +296,12 @@ struct ContextActionMenuPresenter: NSViewRepresentable {
                 item.representedObject = action
                 item.state = action.isOn ? .on : .off
                 item.image = thumbnailImage(action.image)
+                if let modifiers = action.alternateModifiers {
+                    item.keyEquivalentModifierMask = modifiers
+                    item.isAlternate = true
+                } else {
+                    item.keyEquivalentModifierMask = []
+                }
                 if action.isDestructive {
                     item.attributedTitle = NSAttributedString(
                         string: action.title,

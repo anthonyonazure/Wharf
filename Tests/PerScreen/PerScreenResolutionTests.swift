@@ -142,6 +142,21 @@ private func testUseGlobalToggle() {
     expect(!DisplayOverride(autohide: false).isEmpty, "autohide false is still an override")
 }
 
+private func testDockMenuEditsTheRightStore() {
+    expect(R.settingPosition("left", in: nil) == nil, "no override: the dock menu edits the global edge")
+    expect(R.settingPosition("left", in: DisplayOverride(floatOffsetX: 3)) == nil, "float only is not customized")
+    expect(R.settingAutohide(true, in: DisplayOverride(themeIdentifier: "glass")) == nil, "theme only is not customized")
+    let seeded = DisplayOverride(position: "bottom", tileSize: 32, autohide: false)
+    expect(R.settingPosition("left", in: seeded) == DisplayOverride(position: "left", tileSize: 32, autohide: false), "customized: edge changes, rest kept")
+    expect(R.settingAutohide(true, in: seeded) == DisplayOverride(position: "bottom", tileSize: 32, autohide: true), "customized: hiding changes, rest kept")
+}
+
+private func testMagnificationUsesRestingSize() {
+    expect(R.magnificationHasRoom(peakSize: 64, restingSize: 32), "global 64, override 32: still magnifies")
+    expect(!R.magnificationHasRoom(peakSize: 64, restingSize: 64), "no room when peak equals resting")
+    expect(!R.magnificationHasRoom(peakSize: 64, restingSize: 96), "no room when resting is larger")
+}
+
 @main
 struct PerScreenResolutionTests {
     static func main() throws {
@@ -156,6 +171,8 @@ struct PerScreenResolutionTests {
         testVanishedDisplayIsHarmless()
         try testRoundTripThroughStorage()
         testUseGlobalToggle()
+        testDockMenuEditsTheRightStore()
+        testMagnificationUsesRestingSize()
 
         if failures == 0 {
             print("PASS: \(checks) checks")

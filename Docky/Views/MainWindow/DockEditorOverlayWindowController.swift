@@ -420,7 +420,12 @@ final class DockEditorOverlayWindowController: NSWindowController {
         }
 
         let screenFrame = mainWindow?.screen?.frame ?? NSScreen.main?.frame ?? .zero
-        let position = preferences.windowPosition.resolved(systemOrientation: DockSettingsService.shared.orientation)
+        // The owning dock's own edge, which a per-display override can move
+        // off the global one. Insetting by the global edge measured a side
+        // dock's height and left the editor a sliver.
+        let position = mainWindow?.dockContext.resolvedPosition
+            ?? preferences.windowPosition.resolved(systemOrientation: DockSettingsService.shared.orientation)
+        overlayState.position = position
         let overlayFrame = insetOverlayFrame(screenFrame: screenFrame, position: position)
 
         if let mainWindow {
@@ -478,6 +483,8 @@ final class DockEditorOverlayWindowController: NSWindowController {
 
 private final class DockEditorOverlayState: ObservableObject {
     @Published var dockFrame: CGRect = .zero
+    /// Edge of the dock this editor belongs to, set by the controller.
+    @Published var position: ResolvedDockWindowPosition = .bottom
     @Published var searchText = ""
     @Published var selectedCategory: DockEditorGalleryCategory = .all
     @Published var selectedItemID: String?
@@ -590,7 +597,7 @@ private struct DockEditorOverlayView: View {
     }
 
     private var position: ResolvedDockWindowPosition {
-        preferences.windowPosition.resolved(systemOrientation: dockSettings.orientation)
+        state.position
     }
 
     private var paletteInset: CGFloat {

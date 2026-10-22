@@ -74,6 +74,10 @@ private func testChunk() {
     expect(L.chunk([1, 2, 3, 4, 5], intoRows: 2) == [[1, 2, 3], [4, 5]], "fills rows in reading order")
     expect(L.chunk([1, 2], intoRows: 3) == [[1, 2]], "fewer items than rows stays one row")
     expect(L.chunk([Int](), intoRows: 3) == [[]], "empty stays one empty row")
+    // Review claim checked: 6 items in 4 rows is ceil(6/4) = 2 per row, so 3
+    // full rows. "At most" is the contract, and drawing and measuring both
+    // call chunk, so they agree.
+    expect(L.chunk([1, 2, 3, 4, 5, 6], intoRows: 4) == [[1, 2], [3, 4], [5, 6]], "rows are at most the requested count")
     expect(L.clampedRowCount(0) == 1 && L.clampedRowCount(9) == 5 && L.clampedRowCount(3) == 3, "row count clamps to 1...5")
 }
 

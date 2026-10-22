@@ -106,6 +106,8 @@ struct PreviewCardActionRow: View {
         switch PreviewActionsPolicy.outcome(after: action, succeeded: succeeded) {
         case .removeCard:
             preview.removeWindow(withIdentifier: window.windowIdentifier)
+        case .removeCardOnceGone:
+            preview.removeWindowOnceClosed(window)
         case .dismissPreview:
             WindowPreviewWindowController.shared.dismissCurrent()
         case .keepCard:

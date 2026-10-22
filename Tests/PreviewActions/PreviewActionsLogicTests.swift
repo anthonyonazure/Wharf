@@ -56,7 +56,21 @@ struct PreviewActionsLogicTests {
 
         // MARK: Outcomes
 
-        expect(PreviewActionsPolicy.outcome(after: .close, succeeded: true), .removeCard, "closed window drops its card")
+        expect(PreviewActionsPolicy.outcome(after: .close, succeeded: true), .removeCardOnceGone, "close waits for the window to really go")
+
+        // MARK: Close reconcile
+
+        check(PreviewActionsPolicy.isStillOpen(windowNumber: 7, key: "ax:1", live: [(windowNumber: 7, key: "ax:9")]), "same window number is still open")
+        check(!PreviewActionsPolicy.isStillOpen(windowNumber: 7, key: "ax:1", live: [(windowNumber: 8, key: "ax:1")]), "window number wins over a reused key")
+        check(PreviewActionsPolicy.isStillOpen(windowNumber: nil, key: "ax:1", live: [(windowNumber: 8, key: "ax:1")]), "no number falls back to the key")
+        check(!PreviewActionsPolicy.isStillOpen(windowNumber: 7, key: "ax:1", live: []), "empty live list means closed")
+        check(PreviewActionsPolicy.closeRecheckDelays == PreviewActionsPolicy.closeRecheckDelays.sorted(), "recheck delays ascend")
+
+        // MARK: Menu close
+
+        expect(PreviewActionsPolicy.afterMenuCloses(pointerInPreview: true, pointerInDock: false), .keepHovered, "pointer back on preview keeps it")
+        expect(PreviewActionsPolicy.afterMenuCloses(pointerInPreview: false, pointerInDock: true), .leaveToDock, "pointer on dock defers to the tile")
+        expect(PreviewActionsPolicy.afterMenuCloses(pointerInPreview: false, pointerInDock: false), .requestDismiss, "pointer elsewhere dismisses")
         expect(PreviewActionsPolicy.outcome(after: .minimize, succeeded: true), .removeCard, "minimized window drops its card")
         expect(PreviewActionsPolicy.outcome(after: .restore, succeeded: true), .dismissPreview, "restore goes to the window")
         expect(PreviewActionsPolicy.outcome(after: .snap, succeeded: true), .dismissPreview, "snap goes to the window")

@@ -37,4 +37,33 @@ extension DockContext {
             global: DockyPreferences.shared.autohidesWindow
         )
     }
+
+    /// The edge setting this dock follows (before "System" is resolved), for
+    /// the checkmark in its own Position menu.
+    var effectivePositionSetting: DockWindowPosition {
+        PerDisplaySettings.shared.position(for: displayID) ?? DockyPreferences.shared.windowPosition
+    }
+
+    /// Changes this dock's edge from its own menu: its display override when
+    /// it has one, otherwise the global setting it inherits.
+    func setPosition(_ position: DockWindowPosition) {
+        let settings = PerDisplaySettings.shared
+        if let displayID,
+           let updated = PerScreenResolution.settingPosition(position.rawValue, in: settings.override(for: displayID)) {
+            settings.setOverride(updated, for: displayID)
+        } else {
+            DockyPreferences.shared.windowPosition = position
+        }
+    }
+
+    /// Changes this dock's hiding from its own menu, by the same rule.
+    func setAutohides(_ autohides: Bool) {
+        let settings = PerDisplaySettings.shared
+        if let displayID,
+           let updated = PerScreenResolution.settingAutohide(autohides, in: settings.override(for: displayID)) {
+            settings.setOverride(updated, for: displayID)
+        } else {
+            DockyPreferences.shared.autohidesWindow = autohides
+        }
+    }
 }

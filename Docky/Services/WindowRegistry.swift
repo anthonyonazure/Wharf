@@ -443,9 +443,11 @@ final class WindowRegistry: ObservableObject {
     }
 
     /// Wharf: the focused window of the frontmost app, for window snapping.
-    /// Nil when Wharf itself is frontmost or the app reports no focused
-    /// window. Falls back to that app's most recent visible window when the
-    /// focused element is not tracked yet.
+    /// Nil when Wharf itself is frontmost, or when the focused window is one
+    /// the registry does not track (a floating tool window or panel): snapping
+    /// a different window of the same app instead would surprise the user.
+    /// Falls back to that app's most recent visible window only when the app
+    /// reports no focused window at all.
     func frontmostWindow() -> AppWindow? {
         guard AXIsProcessTrusted(),
               let app = NSWorkspace.shared.frontmostApplication,
@@ -463,9 +465,7 @@ final class WindowRegistry: ObservableObject {
                 return match
             }
             syncWindows(for: pid)
-            if let match = windows.first(where: { CFEqual($0.element, focused) }) {
-                return match
-            }
+            return windows.first(where: { CFEqual($0.element, focused) })
         }
         return windows.first { $0.processIdentifier == pid && !$0.isMinimized }
     }

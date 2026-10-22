@@ -1982,3 +1982,97 @@ retry schedule, availability), run as a second binary by
   journal is held could look like the user turned rearranging back on and
   turn the switch off (let go). Fixing it needs a new "unreadable" setting
   that makes the step do nothing; left for a follow-up.
+
+## 2026-10-22, Code review chunk 2 re-check (hover and keyboard)
+
+Branch `cr4-hover-keyboard`, from `feature/vorssaint-parity` at 64ae83b.
+Sources: the Codex re-attack (items 3 to 7 of its ranked list) and the
+Gemini re-attack (sections 3 to 8). Principle: when unsure, do nothing;
+never leave Control translation dead.
+
+### Done
+1. Hover workers (Codex 3, Gemini 4). The serial worker queue is now
+   concurrent, and `HoverWorkerLedger` (pure, in FocusAndWinTapLogic.swift,
+   wrapped in a lock in the service) allows at most two lookups running at
+   once. A stuck lookup holds one slot; a new rest waits for a free slot
+   instead of queuing behind it. The watchdog cancels its job; the worker
+   checks before every step, so a job cancelled before it started does no
+   Accessibility work and one cancelled midway stops at its next window.
+   Switching the feature off cancels every running job and settles the
+   pending ticket. The slot is freed on the worker thread the moment the
+   Accessibility work ends.
+2. Deadline at commit (Codex 4). Each lookup records an absolute deadline
+   on `systemUptime`; `HoverCommitCheck.allowsCommit` refuses an answer that
+   arrives after it, whether or not the watchdog has run.
+3. Fresh gate before raising (Codex 5, Gemini 5). `finishLookup` rebuilds the
+   whole gate input (frontmost app and its exclusion, full screen, target
+   exclusion, display selection, menus, modifiers) and the commit needs the
+   gate to name the same window of the same app again. The window is read
+   from the registry at that moment, not the instance captured before the
+   lookup; if the worker used a registry element and the registry has since
+   dropped that window, nothing is raised.
+4. Win tap action change (Codex 6). The replacement tap is created first,
+   kept off until its own thread services it, then made current, and only
+   then is the old tap retired. Each tap carries a generation; only the
+   current one acts, so the overlap cannot translate twice or race the
+   detector (a callback lock covers the instant both run). If creation
+   fails, the old tap stays (Control keeps translating), the status file
+   says DEGRADED (or FAILED when there was no tap), and syncing is retried
+   after 2, 10, 30 and 60 seconds.
+5. Held keys (Codex 7). `CommandTapKeys` sorts key codes into Command, other
+   modifiers, Caps Lock and keys. On every modifier change the service asks
+   the hardware which keys are physically down (about a hundred
+   `CGEventSource.keyState` reads, only on modifier changes). Any key other
+   than Command held at the press stops arming; held at the release cancels.
+6. Caps Lock (Gemini 7). Caps Lock is a latched light, so being on is not a
+   reason to cancel (that would kill the Win key tap for anyone typing in
+   capitals). A change of the light during the press cancels, and a
+   flagsChanged for the Caps Lock key itself is treated as a key in between,
+   which covers a short press the Caps Lock delay ignores.
+7. Late events (Gemini 8). `WinTapEvents.eventTime` now returns nil for a
+   stamp older than one second or from the future; the service then resets
+   the detector, so nothing opens. A zero stamp is still read as now: it
+   says nothing about delay, and refusing it would switch the Win key tap off
+   for good on a system that never stamps events.
+9. Program names (Gemini 6). `BundleIDList.validationError` takes
+   `allowsExecutableName`; only the Windows keyboard list passes it (its
+   editor already had `allowsExecutableNames`). There a name without dots is
+   a program name (letters, digits, spaces, hyphens, underscores; no slash
+   or colon), with a hint under the field. The Focus Follows Mouse list still
+   refuses it, since that service matches by bundle ID only. Stored lists
+   are kept verbatim.
+
+Checks: scripts/test-focus-and-wintap.sh grew from 163 to 222 checks
+(program names, held keys and key kinds, Caps Lock change versus steady,
+late stamps refused, commit deadline, fresh gate, worker slots). The two
+eventTime checks that expected "now" for old and future stamps now expect
+a refusal.
+
+### Deviations
+- Item 8 (Gemini 3, rated High) is disproved. Control to Command never
+  depended on flagsChanged: the original tap at 238a1b1 listened to keyDown
+  and keyUp only, and today's `handle` returns every non-key event untouched
+  at its `guard type == .keyDown || type == .keyUp` before any translation,
+  so even with flagsChanged in the mask (as at 3b2c5de with an action set)
+  the tap never swallowed or rewrote a modifier change. Apps always saw the
+  real Control press, before and after; the rewrite works by changing the
+  key event's own flags. No change made.
+- Gemini 1 (Win tap needs Windows keyboard mode) is by design: the Win Key
+  settings section is disabled while the mode is off. Not in this task's
+  list; left alone.
+- `HoverLookupTicket` lives in FocusAndSpacesSafetyLogic.swift, which another
+  agent owns in this round, so the worker ledger is a new type in
+  FocusAndWinTapLogic.swift instead of a change to the ticket.
+- Caps Lock as reported by `CGEventSource.keyState` is ignored in the held
+  key scan: it may report the light rather than the key.
+- The tap context objects are never released (a few bytes per tap
+  install), because a callback already running on a retired tap's thread
+  may still read one.
+
+### Unverified
+- No live run: a stuck app during hover, a failed `CGEvent.tapCreate` while
+  switching the Win tap action, a held W during a Win key tap, and Caps Lock
+  during a tap were not driven on a real Mac. The handover itself has no
+  pure test; it is covered by the build and by reading.
+- Whether `CGEventSource.keyState` reads stay cheap on every Mac; modifier
+  changes are rare, so the cost is bounded either way.

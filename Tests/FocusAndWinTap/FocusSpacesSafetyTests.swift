@@ -273,6 +273,22 @@ private func testDockRestartPlan() {
     expect(!P.canCoalesce(killedPIDs: [5], killedAt: 100, now: 110, runningPIDs: [5]),
            "an old restart does not swallow a new one")
     expect(!P.canCoalesce(killedPIDs: [], killedAt: nil, now: 1, runningPIDs: [5]), "nothing under way")
+
+    // Code review chunk 2 re-check: a failed termination is never joined.
+    var ledger = DockRestartLedger()
+    expect(ledger.record(requested: [5], accepted: [], at: 100) == .refused, "Dock refused: reported as refused")
+    expect(!ledger.canJoin(now: 101, runningPIDs: [5]), "a refused restart is not joined by the next request")
+    expect(!DockRestartResult.refused.willApply, "refused: callers keep their recovery state")
+    expect(ledger.record(requested: [5], accepted: [5], at: 102) == .submitted([5]), "accepted: submitted")
+    expect(ledger.canJoin(now: 103, runningPIDs: [5]), "an accepted restart is joined")
+    expect(DockRestartResult.submitted([5]).willApply && DockRestartResult.joined([5]).willApply
+           && DockRestartResult.notRunning.willApply, "submitted, joined and not running all apply")
+    var partial = DockRestartLedger()
+    expect(partial.record(requested: [5, 6], accepted: [5], at: 100) == .refused,
+           "one of two Docks refused: still refused")
+    expect(!partial.canJoin(now: 101, runningPIDs: [5, 6]), "the Dock that refused keeps later requests from joining")
+    var none = DockRestartLedger()
+    expect(none.record(requested: [], accepted: [], at: 100) == .notRunning, "no Dock: not running")
 }
 
 @main

@@ -19,8 +19,7 @@ final class DockRestartGate {
 
     static let dockBundleID = "com.apple.dock"
 
-    private var killedPIDs: Set<pid_t> = []
-    private var killedAt: TimeInterval?
+    private var ledger = DockRestartLedger()
 
     private init() {}
 
@@ -59,25 +58,24 @@ final class DockRestartGate {
         return id.isEmpty ? nil : id
     }
 
-    /// Restarts the Dock unless a restart is already under way. Returns the
-    /// Dock process IDs that were (or are being) asked to quit; empty when no
-    /// Dock was running, which then reads the preferences when it starts.
-    /// Callers flush their preference writes first.
+    /// Restarts the Dock unless a restart is already under way. Only a
+    /// request the Dock accepted is remembered for later requests to join;
+    /// `.refused` tells the caller the change is not applied yet. Callers
+    /// flush their preference writes first.
     @discardableResult
-    func restart(reason: String) -> Set<pid_t> {
+    func restart(reason: String) -> DockRestartResult {
         let docks = NSRunningApplication.runningApplications(withBundleIdentifier: Self.dockBundleID)
         let now = ProcessInfo.processInfo.systemUptime
-        if DockRestartPlan.canCoalesce(killedPIDs: killedPIDs, killedAt: killedAt, now: now,
-                                       runningPIDs: docks.map(\.processIdentifier)) {
+        let running = docks.map(\.processIdentifier)
+        if ledger.canJoin(now: now, runningPIDs: running) {
             NSLog("[Wharf] Dock restart for \(reason) joins the one already under way.")
-            return killedPIDs
+            return .joined(ledger.killedPIDs)
         }
-        guard !docks.isEmpty else { return [] }
-        killedPIDs = Set(docks.map(\.processIdentifier))
-        killedAt = now
-        if !docks.map({ $0.forceTerminate() }).contains(true) {
+        let accepted = Set(docks.filter { $0.forceTerminate() }.map(\.processIdentifier))
+        let result = ledger.record(requested: Set(running), accepted: accepted, at: now)
+        if result == .refused {
             NSLog("[Wharf] Dock restart for \(reason): the Dock refused to quit.")
         }
-        return killedPIDs
+        return result
     }
 }

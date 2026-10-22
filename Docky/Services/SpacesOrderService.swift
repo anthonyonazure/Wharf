@@ -242,11 +242,20 @@ final class SpacesOrderService {
         preferences.spacesOrderDockRestartBootSession = DockRestartGate.bootSessionID()
         preferences.spacesOrderDockRestartAttempts += 1
         CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
-        let killed = DockRestartGate.shared.restart(reason: "Fixed Space order")
-        guard !killed.isEmpty else {
+        switch DockRestartGate.shared.restart(reason: "Fixed Space order") {
+        case .notRunning:
             // Not running: it reads the preference when it next starts.
             clearRestartRecord()
             return
+        case .joined:
+            // Rode on a restart already under way: it cost no attempt.
+            preferences.spacesOrderDockRestartAttempts -= 1
+        case .submitted:
+            break
+        case .refused:
+            // The record stays; the check below finds the same Dock and
+            // tries again, a few times in all.
+            break
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.restartCheckDelay) { [weak self] in
             guard let self else { return }

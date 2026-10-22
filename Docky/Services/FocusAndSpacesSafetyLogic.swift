@@ -255,3 +255,44 @@ nonisolated enum DockRestartPlan {
         return runningPIDs.allSatisfy { killedPIDs.contains($0) }
     }
 }
+
+/// What a request to the shared Dock restart gate came to.
+nonisolated enum DockRestartResult: Equatable {
+    /// No Dock was running; it reads the preferences when it starts.
+    case notRunning
+    /// Every running Dock accepted the request to quit.
+    case submitted(Set<pid_t>)
+    /// Rode on a restart already under way.
+    case joined(Set<pid_t>)
+    /// At least one running Dock did not accept the request: the change is
+    /// not applied yet, so callers keep their recovery state.
+    case refused
+
+    /// True when the Dock will read the preferences as they are now.
+    var willApply: Bool { self != .refused }
+}
+
+/// The gate's memory of the last restart it submitted. Only Docks that
+/// accepted the request are recorded, so a request that failed is never
+/// joined by a later one.
+nonisolated struct DockRestartLedger {
+    private(set) var killedPIDs: Set<pid_t> = []
+    private(set) var killedAt: TimeInterval?
+
+    func canJoin(now: TimeInterval, runningPIDs: [pid_t]) -> Bool {
+        DockRestartPlan.canCoalesce(killedPIDs: killedPIDs, killedAt: killedAt, now: now, runningPIDs: runningPIDs)
+    }
+
+    /// Records the outcome of asking `requested` to quit, of which
+    /// `accepted` took the request. Nothing accepted leaves the ledger as it
+    /// was. A Dock that refused stays out of the record, so it is never
+    /// mistaken for one on its way out.
+    mutating func record(requested: Set<pid_t>, accepted: Set<pid_t>, at now: TimeInterval) -> DockRestartResult {
+        guard !requested.isEmpty else { return .notRunning }
+        let taken = accepted.intersection(requested)
+        guard !taken.isEmpty else { return .refused }
+        killedPIDs = taken
+        killedAt = now
+        return taken == requested ? .submitted(taken) : .refused
+    }
+}

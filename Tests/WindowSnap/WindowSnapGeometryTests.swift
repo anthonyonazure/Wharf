@@ -288,6 +288,137 @@ private func testActionTable() {
     expect(grouped.count == WindowSnapAction.allCases.count, "every action is in exactly one group")
 }
 
+// MARK: - Review fixes (Codex and Gemini adversarial reviews, 2026-10-22)
+
+private func testRestoreOntoConnectedDisplay() {
+    // Codex: primary (0,0,1440,900), saved frame on an unplugged external
+    // display at (2000,100,800,600).
+    let primary = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let codex = G.restoreTarget(saved: CGRect(x: 2000, y: 100, width: 800, height: 600),
+                                screenFrames: [primary], usableAreas: [primary])
+    expect(codex?.index == 0, "restore picks the remaining display")
+    if let rect = codex?.rect {
+        expect(primary.contains(rect), "restore to a vanished display lands on screen: \(rect)")
+        expectRect(rect, CGRect(x: 640, y: 100, width: 800, height: 600), "restore keeps the size and the height, clamps x")
+    }
+
+    // Gemini: saved at (1920,0,800,600) on a second display, now unplugged.
+    let gemini = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    let geminiResult = G.restoreTarget(saved: CGRect(x: 1920, y: 0, width: 800, height: 600),
+                                       screenFrames: [gemini], usableAreas: [gemini])
+    expect(geminiResult.map { gemini.contains($0.rect) } == true, "restore off the right edge comes back on screen")
+
+    // A frame larger than the area shrinks to fit instead of hanging off.
+    let usable = CGRect(x: 0, y: 0, width: 1440, height: 875)
+    let large = G.restoreTarget(saved: CGRect(x: 3000, y: 0, width: 2000, height: 1200),
+                                screenFrames: [primary], usableAreas: [usable])
+    expect(large.map { usable.contains($0.rect) } == true, "an oversized restore fits the usable area")
+
+    // A frame that is still on a connected display is restored exactly,
+    // even when it touches or crosses into another connected display.
+    let second = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+    let onScreen = CGRect(x: 1000, y: 100, width: 800, height: 600)
+    let kept = G.restoreTarget(saved: onScreen, screenFrames: [primary, second], usableAreas: [primary, second])
+    expectRect(kept?.rect ?? .null, onScreen, "a frame on connected displays is left alone")
+}
+
+private func testFixedSizeReanchor() {
+    // Codex: 1000 x 800 area, an 800 x 600 fixed-size window snapped right.
+    // AX took the position but refused the size; re-anchoring with the size
+    // it really has keeps the right edge inside the area.
+    let a = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    let rightHalf = G.targetRect(for: .rightHalf, current: CGRect(x: 0, y: 0, width: 800, height: 600), area: a)
+    expectRect(rightHalf, CGRect(x: 500, y: 0, width: 500, height: 800), "the right half target")
+    let anchored = G.anchoredRect(for: .rightHalf, target: rightHalf, actualSize: CGSize(width: 800, height: 600), area: a)
+    expect(anchored.maxX <= a.maxX && anchored.minX >= a.minX, "fixed-size right half stays inside: \(anchored)")
+    expectRect(anchored, CGRect(x: 200, y: 0, width: 800, height: 600), "fixed-size right half re-anchors to the right edge")
+}
+
+private func testDisplayMoveMinimumSize() {
+    // Codex: source (0,0,1600,1000), destination (1600,0,800,600), window
+    // (800,200,800,400) maps to (2000,120,400,240); the app then insists on
+    // an 800 point minimum width.
+    let source = CGRect(x: 0, y: 0, width: 1600, height: 1000)
+    let destination = CGRect(x: 1600, y: 0, width: 800, height: 600)
+    let target = G.rectForDisplay(current: CGRect(x: 800, y: 200, width: 800, height: 400), source: source, destination: destination)
+    expectRect(target, CGRect(x: 2000, y: 120, width: 400, height: 240), "display move target")
+    let anchored = G.anchoredRect(for: .nextDisplay, target: target, actualSize: CGSize(width: 800, height: 240), area: destination)
+    expect(anchored.maxX <= destination.maxX, "minimum-size window stays on the destination: \(anchored)")
+    expectRect(anchored, CGRect(x: 1600, y: 120, width: 800, height: 240), "minimum-size window is clamped, top kept")
+    let taller = G.anchoredRect(for: .previousDisplay, target: target, actualSize: CGSize(width: 800, height: 700), area: destination)
+    expect(taller.minX >= destination.minX && taller.maxX <= destination.maxX && taller.maxY <= destination.maxY,
+           "a window taller than the destination is pinned to its top: \(taller)")
+}
+
+private func testOvershootApproach() {
+    // Gemini gave no numbers; a 1440 x 875 visible frame with an 80 point
+    // Wharf dock on each edge in turn, snapping the half next to the dock.
+    let visible = CGRect(x: 0, y: 0, width: 1440, height: 875)
+    let dock: CGFloat = 80
+
+    let leftArea = CGRect(x: dock, y: 0, width: 1440 - dock, height: 875)
+    let leftHalf = G.targetRect(for: .leftHalf, current: current, area: leftArea)
+    let leftApproach = G.overshootApproach(target: leftHalf, area: leftArea, visible: visible)
+    expect(leftApproach.minX >= leftArea.minX, "left dock: the retry moves right, away from the dock: \(leftApproach)")
+
+    let topArea = CGRect(x: 0, y: 0, width: 1440, height: 875 - dock)
+    let topHalf = G.targetRect(for: .topHalf, current: current, area: topArea)
+    let topApproach = G.overshootApproach(target: topHalf, area: topArea, visible: visible)
+    expect(topApproach.maxY <= topArea.maxY, "top dock: the retry moves down, away from the dock: \(topApproach)")
+
+    let rightArea = CGRect(x: 0, y: 0, width: 1440 - dock, height: 875)
+    let rightHalf = G.targetRect(for: .rightHalf, current: current, area: rightArea)
+    let rightApproach = G.overshootApproach(target: rightHalf, area: rightArea, visible: visible)
+    expect(rightApproach.maxX <= rightArea.maxX, "right dock: the retry still moves left: \(rightApproach)")
+
+    let bottomArea = CGRect(x: 0, y: dock, width: 1440, height: 875 - dock)
+    let bottomHalf = G.targetRect(for: .bottomHalf, current: current, area: bottomArea)
+    let bottomApproach = G.overshootApproach(target: bottomHalf, area: bottomArea, visible: visible)
+    expect(bottomApproach.minY >= bottomArea.minY, "bottom dock: the retry still moves up: \(bottomApproach)")
+
+    // No Wharf dock: the original nudge, left and up in AppKit space.
+    let plain = G.overshootApproach(target: leftHalf, area: visible, visible: visible)
+    expect(plain.minX < leftHalf.minX && plain.minY > leftHalf.minY, "no dock keeps the original left and up nudge")
+}
+
+private func testSharedBoundaryGap() {
+    // Codex: usable horizontal bounds -600...600 on an offset secondary
+    // display, gap 1. The half boundary falls exactly on x = 0.
+    let negative = CGRect(x: -600, y: -300, width: 1200, height: 900)
+    let pairs: [(WindowSnapAction, WindowSnapAction)] = [
+        (.leftHalf, .rightHalf),
+        (.leftThird, .centerThird), (.centerThird, .rightThird),
+        (.leftQuarter, .leftMiddleQuarter), (.leftMiddleQuarter, .rightMiddleQuarter), (.rightMiddleQuarter, .rightQuarter),
+    ]
+    for a in [negative, area, CGRect(x: -1157, y: 0, width: 1157, height: 800)] {
+        for gap: CGFloat in [1, 2] {
+            for (left, right) in pairs {
+                let l = target(left, gap: gap, in: a)
+                let r = target(right, gap: gap, in: a)
+                expect(r.minX - l.maxX == gap,
+                       "\(left)/\(right) in \(a) gap \(gap): got \(r.minX - l.maxX)")
+            }
+            let bottom = target(.bottomHalf, gap: gap, in: a)
+            let top = target(.topHalf, gap: gap, in: a)
+            expect(top.minY - bottom.maxY == gap, "bottom/top half in \(a) gap \(gap): got \(top.minY - bottom.maxY)")
+        }
+    }
+    let l = target(.leftHalf, gap: 1, in: negative)
+    let r = target(.rightHalf, gap: 1, in: negative)
+    expect(l.maxX == 0 && r.minX == 1, "a 1 point gap at x = 0 is 0...1, not -1...1: \(l.maxX)...\(r.minX)")
+}
+
+private func testRestorePeek() {
+    var history = WindowSnapHistory<String>()
+    let a = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let b = CGRect(x: 50, y: 50, width: 200, height: 200)
+    history.record(a, for: "w")
+    history.record(b, for: "w")
+    expect(history.peekPrevious(for: "w", current: b) == a, "peek skips a frame equal to the current one")
+    expect(history.count(for: "w") == 2, "peek removes nothing, so a failed restore keeps its entry")
+    expect(history.popPrevious(for: "w", current: b) == a, "pop agrees with peek")
+}
+
 @main
 struct WindowSnapGeometryTests {
     static func main() {
@@ -303,6 +434,12 @@ struct WindowSnapGeometryTests {
         testHistory()
         testShortcuts()
         testActionTable()
+        testRestoreOntoConnectedDisplay()
+        testFixedSizeReanchor()
+        testDisplayMoveMinimumSize()
+        testOvershootApproach()
+        testSharedBoundaryGap()
+        testRestorePeek()
 
         if failures == 0 {
             print("PASS: \(checks) checks")

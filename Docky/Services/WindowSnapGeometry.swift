@@ -324,12 +324,22 @@ nonisolated enum WindowSnapGeometry {
     /// Rounds each edge to the nearest point. Unlike `integral`, which grows a
     /// fractional rect outward, this keeps tiles that share an edge sharing it,
     /// so a third at 386.67 points does not overlap its neighbor by a point.
+    ///
+    /// Halves always round up (toward +infinity), never away from zero. The
+    /// rule is the same everywhere on the plane, so two edges that sit an
+    /// integer gap apart around a shared boundary stay exactly that far apart
+    /// wherever the boundary falls: a 1 point gap split at x = 0 lands on 0
+    /// and 1, not on -1 and 1.
     static func roundedEdges(_ rect: CGRect) -> CGRect {
-        let minX = rect.minX.rounded()
-        let minY = rect.minY.rounded()
-        let maxX = rect.maxX.rounded()
-        let maxY = rect.maxY.rounded()
+        let minX = roundedHalfUp(rect.minX)
+        let minY = roundedHalfUp(rect.minY)
+        let maxX = roundedHalfUp(rect.maxX)
+        let maxY = roundedHalfUp(rect.maxY)
         return CGRect(x: minX, y: minY, width: max(1, maxX - minX), height: max(1, maxY - minY))
+    }
+
+    static func roundedHalfUp(_ value: CGFloat) -> CGFloat {
+        (value + 0.5).rounded(.down)
     }
 
     private static func ungappedRect(for action: WindowSnapAction, current: CGRect, area v: CGRect) -> CGRect {
@@ -408,14 +418,20 @@ nonisolated enum WindowSnapGeometry {
         actualSize: CGSize,
         area: CGRect
     ) -> CGRect {
+        let size = CGSize(width: max(1, actualSize.width), height: max(1, actualSize.height))
+
         switch action {
-        case .maximize, .restore, .previousDisplay, .nextDisplay:
+        case .maximize, .restore:
             return roundedEdges(target)
+        case .previousDisplay, .nextDisplay:
+            // Keep the top-left corner the move aimed for, at the size the app
+            // insisted on, pulled back inside the destination display.
+            let rect = CGRect(x: target.minX, y: target.maxY - size.height, width: size.width, height: size.height)
+            return roundedEdges(clamp(rect, into: area))
         default:
             break
         }
 
-        let size = CGSize(width: max(1, actualSize.width), height: max(1, actualSize.height))
         var origin = target.origin
 
         switch action {
@@ -466,6 +482,59 @@ nonisolated enum WindowSnapGeometry {
     /// (Vorssaint WindowMaximizerSupport.overshoots.)
     static func overshoots(_ actual: CGSize, target: CGSize) -> Bool {
         actual.width > target.width + 0.5 || actual.height > target.height + 0.5
+    }
+
+    /// Where to take the size from during the overshoot retry: `target`
+    /// nudged by `offset` toward the screen interior, away from whichever
+    /// edge a Wharf dock trimmed off `visible` to make `area`. With no Wharf
+    /// dock on an axis it keeps the original nudge, left and up.
+    static func overshootApproach(target: CGRect, area: CGRect, visible: CGRect, offset: CGFloat = frameTolerance) -> CGRect {
+        // AppKit space: +x is right, +y is up. A left dock trimmed minX, so
+        // go right; a top dock trimmed maxY, so go down. Right and bottom
+        // docks, and no dock, keep left and up.
+        let dx = area.minX > visible.minX + edgeTolerance ? offset : -offset
+        let dy = area.maxY < visible.maxY - edgeTolerance ? -offset : offset
+        return target.offsetBy(dx: dx, dy: dy)
+    }
+
+    // MARK: - Restore
+
+    /// Where Restore should put a remembered frame given the displays that
+    /// are connected now. A frame that still lies wholly on connected
+    /// displays comes back untouched. One that hangs off every display (its
+    /// display was unplugged, or the layout changed) is shrunk to fit and
+    /// pulled into the usable area of the display it overlaps most, or the
+    /// nearest one when it overlaps none. Returns the rect and the index of
+    /// the display it landed on.
+    static func restoreTarget(saved: CGRect, screenFrames: [CGRect], usableAreas: [CGRect]) -> (rect: CGRect, index: Int)? {
+        guard !screenFrames.isEmpty, screenFrames.count == usableAreas.count else { return nil }
+
+        let covered = screenFrames.reduce(CGFloat(0)) { sum, frame in
+            let overlap = frame.intersection(saved)
+            return overlap.isNull ? sum : sum + overlap.width * overlap.height
+        }
+        let index = indexOfLargestOverlap(saved, in: screenFrames) ?? nearestIndex(to: saved, in: screenFrames)
+        if covered >= saved.width * saved.height - 1 {
+            return (saved, index)
+        }
+
+        let area = usableAreas[index]
+        let size = CGSize(width: min(saved.width, area.width), height: min(saved.height, area.height))
+        // Keep the top-left corner where it was, as far as the area allows.
+        let rect = CGRect(x: saved.minX, y: saved.maxY - size.height, width: size.width, height: size.height)
+        return (roundedEdges(clamp(rect, into: area)), index)
+    }
+
+    /// Index of the frame whose center is closest to the center of `rect`.
+    static func nearestIndex(to rect: CGRect, in frames: [CGRect]) -> Int {
+        var best = (index: 0, distance: CGFloat.greatestFiniteMagnitude)
+        for (index, frame) in frames.enumerated() {
+            let dx = frame.midX - rect.midX
+            let dy = frame.midY - rect.midY
+            let distance = dx * dx + dy * dy
+            if distance < best.distance { best = (index, distance) }
+        }
+        return best.index
     }
 
     // MARK: - Display moves
@@ -592,6 +661,12 @@ nonisolated struct WindowSnapHistory<Key: Hashable> {
             frames.removeFirst(frames.count - Self.perWindowLimit)
         }
         framesByWindow[key] = frames
+    }
+
+    /// The frame `popPrevious` would return, without removing anything, so
+    /// Restore can apply it first and only drop it once the move worked.
+    func peekPrevious(for key: Key, current: CGRect) -> CGRect? {
+        framesByWindow[key]?.last { !WindowSnapGeometry.isClose($0, current, tolerance: 1) }
     }
 
     /// The newest remembered frame that differs from `current`, removed from

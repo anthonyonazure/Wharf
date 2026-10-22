@@ -769,3 +769,97 @@ expressions, and a watchdog thread that fails the run after 20 seconds.
 - Spotlight speed and result quality with a broad "contains" search on the
   whole local disk were not measured; a short query may take a moment.
 - The Option-Space registration failure path was not triggered.
+
+## 2026-10-22, Review fixes: window snapping (Codex and Gemini reviews)
+
+Two independent adversarial reviews (Codex, Gemini) of the snap engine.
+Every claim below was checked against the code before fixing. Geometry fixes
+each have a regression check in `Tests/WindowSnap/WindowSnapGeometryTests.swift`
+built from the reviewers' own numbers; the old code was run against the new
+checks and failed them (2 point gap at x = 0, minimum-size window left at
+x = 2000 past the destination edge), the new code passes. Totals: geometry
+251 checks, zones 101 checks, Debug build succeeds.
+
+1. Restore to an unplugged display (both reviewers). New
+   `WindowSnapGeometry.restoreTarget`: a remembered frame that still lies
+   wholly on connected displays comes back exactly; one that hangs off every
+   display is shrunk to fit and pulled into the usable area of the display it
+   overlaps most, or the nearest one. Codex case (2000,100,800,600) with only
+   the 1440 x 900 primary now lands at (640,100,800,600).
+2. Restore is transactional. `WindowSnapHistory.peekPrevious` reads the entry
+   without removing it; the service applies it, reads the live frame back, and
+   pops only when the window is within 8 points of the target. A failed
+   Restore keeps its entry. When the clamped target equals where the window
+   already is, the entry is dropped so Restore cannot stall on it.
+3. Position taken, size refused (fixed-size windows). `apply` no longer stops
+   when the AX resize reports failure: it reads the actual frame, gives up only
+   if the window did not move at all, and otherwise runs the re-anchoring. The
+   Codex case (800 x 600 fixed window, right half of 1000 x 800) re-anchors to
+   (200,0,800,600). `WindowRegistry.resize` is unchanged for its other callers.
+4. Display moves with a minimum size. `anchoredRect` for Next and Previous
+   Display now keeps the top-left corner at the size the app insisted on and
+   clamps it into the destination. Codex case: (2000,120,400,240) with an
+   800 point minimum width becomes (1600,120,800,240).
+5. Overshoot retry direction (Gemini). New
+   `WindowSnapGeometry.overshootApproach` works in AppKit space and nudges
+   away from the edge a Wharf dock trimmed (right for a left dock, down for a
+   top dock); right, bottom and no Wharf dock keep the original left and up
+   nudge, so the case that worked is unchanged.
+6. Untracked focused window. `WindowRegistry.frontmostWindow` returns nil when
+   AX names a focused window the registry does not track (floating tool
+   windows), instead of snapping another window of the same app. The fallback
+   to the app's latest window stays only for apps that report no focused
+   window at all.
+7. Shortcut conflicts. Start Menu's fixed Control Option S is now a static
+   (`StartMenuService.shortcut`) that both its registration and the snap
+   conflict check read. Launchpad and the Window Switcher pair are reserved
+   only while their features are on (both unregister their keys when off).
+8. The queued hot key handler re-checks `windowSnapEnabled` and
+   `isRecordingShortcut` immediately before acting.
+9. Rounding (Codex). `roundedEdges` now rounds halves up (toward +infinity)
+   instead of away from zero. The rule is translation invariant, so two edges
+   an integer gap apart stay exactly that far apart wherever the shared
+   boundary falls. Checked for halves, thirds and quarters, horizontal and
+   vertical, gaps 1 and 2, on areas with negative, zero and positive
+   boundaries.
+
+### Deviations
+
+- Fix 9 changes the shared rounding rule rather than computing each shared
+  boundary once per action. It gives the same guarantee (exact integer gap at
+  every boundary) with one small change instead of reworking every tile
+  formula; it differs from the old rounding only for values ending in exactly
+  .5 below zero.
+- Fix 10 (Gemini: frame read right after a set is racy) disproved:
+  `liveFrame` is a direct synchronous `AXUIElementCopyAttributeValue` on the
+  live element, and the set before it is a synchronous round trip the app
+  answers after handling it. No settle poll added; a comment in `apply` says so.
+- Restore is still excluded from size re-anchoring: its target is the
+  window's own earlier size, and re-anchoring could move a window the user
+  had deliberately placed across a screen edge.
+- Codex's "revalidate conflicts when an owner is enabled again" is out of
+  scope: the settings pane only checks conflicts while recording, and there is
+  no live conflict display to refresh. If a user later turns Launchpad or the
+  switcher back on with a combination a snap action took meanwhile, the later
+  registration (Launchpad or the switcher, since snapping registered first)
+  is expected to fail with no warning. Not tested.
+- Restore history still stores frames only, not a display identity (Codex
+  suggested both). The clamp covers the unplugged case without it.
+- Gemini findings not on the fix list, seen and not addressed here: hot key
+  registration off the main thread (#4), one corrupt stored shortcut dropping
+  all of them (#5, flagged unverified by Gemini itself), and Control Command
+  combinations in Windows Keyboard Mode (#6).
+
+### Unverified
+
+- None of the AX paths (partial size failure, restore verification, retry
+  nudge, floating tool windows) were driven against real windows; they are
+  checked by reading and by the geometry checks only.
+- Whether a fixed-size app reports the size failure through
+  `AXUIElementSetAttributeValue` (as Codex assumed) or silently keeps its size
+  was not observed; both paths now reach the re-anchoring.
+- The retry nudge only knows about Wharf's own dock. With the macOS Dock on
+  the left and no Wharf dock there, the nudge is still the old left and up.
+- A restore that had to shrink an oversized frame keeps its entry if the app
+  then refuses the smaller size, so that window's Restore keeps reporting
+  failure until it is snapped again. Harmless, but new behavior.

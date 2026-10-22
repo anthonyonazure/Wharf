@@ -94,14 +94,17 @@ final class StartMenuService: ObservableObject {
         )
     }
 
+    /// Wharf: the fixed Start Menu combination, Control Option S. Registered
+    /// at launch and never unregistered, so the window snapping conflict
+    /// check reserves it from here and the two cannot drift apart.
+    static let shortcut = KeyboardShortcut(keyCode: UInt16(kVK_ANSI_S), modifierFlags: [.control, .option])
+
     private func registerHotKey() {
         // ⌃⌥S — picked because it's unlikely to collide with system
         // shortcuts and isn't already bound by Docky preferences.
-        let keyCode = UInt32(kVK_ANSI_S)
-        let modifiers = UInt32(controlKey | optionKey)
         RegisterEventHotKey(
-            keyCode,
-            modifiers,
+            UInt32(Self.shortcut.keyCode),
+            Self.shortcut.carbonModifierFlags,
             hotKeyID,
             GetApplicationEventTarget(),
             0,

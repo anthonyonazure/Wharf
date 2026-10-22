@@ -18,9 +18,12 @@
 //  and confirmed first; only then is the Dock preference written and read
 //  back; only then is the journal marked held (or, on release, cleared). A
 //  failure never turns the user's switch off: it is shown in Settings and
-//  tried again a few times, further apart each time. A Dock restart is
-//  recorded with the Dock's process IDs, so a later launch restarts the Dock
-//  only when that same Dock is still running, and only a few times in all.
+//  tried again a few times, further apart each time. The restart a Dock
+//  write needs is recorded before the write (the Dock's process ID and start
+//  time, and this boot's ID), so a write that takes effect but reports a
+//  failure, or a crash, still leaves it owed; a later run or launch restarts
+//  the Dock only when that same Dock is provably still running, and only a
+//  few times in all.
 //
 
 import AppKit
@@ -75,9 +78,9 @@ final class SpacesOrderService {
         restartedDuringApply = false
         apply()
         if owed == .restart, !restartedDuringApply {
-            // The last run changed the preference and the Dock it asked to
-            // quit is still the one running, so it may still use the old value.
-            restartDock()
+            // The last run changed the preference and the Dock it recorded is
+            // still the one running, so it may still use the old value.
+            finishOwedRestart()
         }
     }
 
@@ -118,7 +121,9 @@ final class SpacesOrderService {
             forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let self, Self.bundleID(in: note) == SpacesOrderPlan.dockDomain else { return }
-            self.clearRestartRecord()
+            // A Dock that started after the record clears it; one recorded
+            // (it started before a write) is still owed a restart.
+            self.finishOwedRestart()
             self.retryAttempt = 0
             self.retriesExhausted = false
             self.apply()
@@ -149,7 +154,9 @@ final class SpacesOrderService {
             saveJournal: { [weak self] in self?.saveJournal($0) ?? false },
             current: { [weak self] in self?.currentSetting() ?? .unsupported },
             writeDock: { [weak self] in self?.writeDock($0) ?? false },
-            restartDock: { [weak self] in self?.restartDock() }
+            oweRestart: { [weak self] in self?.recordRestartObligation() ?? false },
+            restartDock: { [weak self] in self?.restartDock() },
+            finishOwedRestart: { [weak self] in self?.finishOwedRestart() }
         )
     }
 
@@ -230,16 +237,54 @@ final class SpacesOrderService {
             attempts: preferences.spacesOrderDockRestartAttempts)
     }
 
-    /// Restarts the Dock so it reads the new value, through the gate shared
-    /// with SystemDockVisibilityService. The record (pending, process IDs,
-    /// time, attempts) is saved before the Dock is asked to quit; the Dock's
-    /// launch notification, or a new process seen a few seconds later,
-    /// clears it.
-    private func restartDock() {
-        restartedDuringApply = true
+    /// Saves the restart obligation before a Dock write: the Dock processes
+    /// running now (process ID plus start time), this boot's ID and the
+    /// attempt count, flushed and read back. A record for the same Docks
+    /// keeps its attempt count, so retries stay bounded across writes. False
+    /// when it could not be confirmed, and then the Dock is not written.
+    private func recordRestartObligation() -> Bool {
+        let docks = Set(DockRestartGate.runningDockIdentities().compactMap { $0 })
+        let sameDocks = preferences.spacesOrderDockRestartPending && preferences.spacesOrderDockRestartDocks == docks
+        if !sameDocks { preferences.spacesOrderDockRestartAttempts = 0 }
         preferences.spacesOrderDockRestartPending = true
-        preferences.spacesOrderDockRestartDocks = Set(DockRestartGate.runningDockIdentities().compactMap { $0 })
+        preferences.spacesOrderDockRestartDocks = docks
         preferences.spacesOrderDockRestartBootSession = DockRestartGate.bootSessionID()
+        let app = kCFPreferencesCurrentApplication
+        guard CFPreferencesAppSynchronize(app) else { return false }
+        typealias Keys = BehaviorExtrasPreferences.Keys
+        let pending = CFPreferencesCopyAppValue(Keys.spacesOrderDockRestartPending as CFString, app) as? Bool
+        return pending == true
+    }
+
+    /// Restarts the Dock after a write that took, so it reads the new value.
+    /// The record is saved again for the Docks running now.
+    private func restartDock() {
+        _ = recordRestartObligation()
+        submitRestart()
+    }
+
+    /// Settles a restart still on record: restarts the Dock only when the
+    /// one that owes it is provably still running, clears the record when it
+    /// is not, and gives up after a few attempts.
+    private func finishOwedRestart() {
+        switch launchRestartDecision() {
+        case .nothing:
+            break
+        case .clear:
+            clearRestartRecord()
+        case .restart:
+            submitRestart()
+        case .giveUp:
+            giveUpRestart()
+        }
+    }
+
+    /// Asks the Dock to quit through the gate shared with
+    /// SystemDockVisibilityService. The attempt is counted before the Dock is
+    /// asked; the Dock's launch notification, or the check a few seconds
+    /// later, settles the record.
+    private func submitRestart() {
+        restartedDuringApply = true
         preferences.spacesOrderDockRestartAttempts += 1
         CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
         switch DockRestartGate.shared.restart(reason: "Fixed Space order") {
@@ -258,17 +303,7 @@ final class SpacesOrderService {
             break
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.restartCheckDelay) { [weak self] in
-            guard let self else { return }
-            switch self.launchRestartDecision() {
-            case .nothing:
-                break
-            case .clear:
-                self.clearRestartRecord()
-            case .restart:
-                self.restartDock()
-            case .giveUp:
-                self.giveUpRestart()
-            }
+            self?.finishOwedRestart()
         }
     }
 

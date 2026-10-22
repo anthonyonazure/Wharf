@@ -121,6 +121,12 @@ private final class FakeStore {
     var failPhase: SpacesHoldPhase?
     var clearFails = false
     var failDockWrites = false
+    /// The write lands in the Dock but reports failure (synchronize failed
+    /// after the value was set).
+    var dockWritesTakeButFail = false
+    var failOwe = false
+    /// A restart the Dock still owes, saved before each write.
+    var owed = false
     var restarts = 0
 
     var runner: SpacesOrderRunner {
@@ -137,9 +143,22 @@ private final class FakeStore {
             writeDock: { value in
                 if self.failDockWrites { return false }
                 self.dock = value.map { $0 ? .on : .off } ?? .absent
+                return !self.dockWritesTakeButFail
+            },
+            oweRestart: {
+                if self.failOwe { return false }
+                self.owed = true
                 return true
             },
-            restartDock: { self.restarts += 1 }
+            restartDock: {
+                self.restarts += 1
+                self.owed = false
+            },
+            finishOwedRestart: {
+                guard self.owed else { return }
+                self.restarts += 1
+                self.owed = false
+            }
         )
     }
 }
@@ -210,6 +229,50 @@ private func testRunnerFailures() {
     store.dock = .on
     expect(store.runner.run(wanted: true) == .letGo, "user's own change: let go")
     expect(store.journal == nil, "journal cleared on let go")
+}
+
+/// Code review chunk 2 re-check: a write that lands but reports failure
+/// still gets its Dock restart.
+private func testRunnerOwedRestart() {
+    // Hold: the Dock takes "off" but the write reports failure.
+    var store = FakeStore()
+    store.dockWritesTakeButFail = true
+    expect(store.runner.run(wanted: true) == .failed(.dockNotWritten), "write reported failed")
+    expect(store.dock == .off && store.owed && store.restarts == 0, "Dock reads off, restart owed, not yet done")
+    store.dockWritesTakeButFail = false
+    expect(store.runner.run(wanted: true) == .done && store.journal?.phase == .held, "retry confirms the hold")
+    expect(store.restarts == 1 && !store.owed, "confirmHold restarts the Dock it owes (was skipped before)")
+    expect(store.runner.run(wanted: true) == .done && store.restarts == 1, "steady state: no further restart")
+
+    // Release: the old value lands but the write reports failure.
+    store.dockWritesTakeButFail = true
+    expect(store.runner.run(wanted: false) == .failed(.restoreNotWritten), "restore reported failed")
+    expect(store.dock == .on && store.owed && store.journal?.phase == .pendingRelease, "Dock reads on, restart owed")
+    store.dockWritesTakeButFail = false
+    expect(store.runner.run(wanted: false) == .done && store.journal == nil, "retry forgets the journal")
+    expect(store.restarts == 2 && !store.owed, "forget restarts the Dock it owes (was skipped before)")
+
+    // The obligation cannot be saved: the Dock is not written at all.
+    store = FakeStore()
+    store.failOwe = true
+    expect(store.runner.run(wanted: true) == .failed(.journalNotSaved), "obligation not saved: reported")
+    expect(store.dock == .on && store.restarts == 0, "Dock untouched without a saved obligation")
+    store = FakeStore()
+    _ = store.runner.run(wanted: true)
+    store.failOwe = true
+    expect(store.runner.run(wanted: false) == .failed(.journalNotSaved) && store.dock == .off,
+           "restore not written without a saved obligation; journal kept")
+    store.failOwe = false
+    expect(store.runner.run(wanted: false) == .done && store.dock == .on, "retry restores")
+
+    // Owed before the write: a crash right after the write leaves it owed,
+    // and the next launch (here: the next run) settles it.
+    store = FakeStore()
+    store.owed = true
+    store.dock = .off
+    store.journal = SpacesOrderJournal(restore: SpacesOrderPlan.restoreOn, phase: .held)
+    expect(store.runner.run(wanted: true) == .done && store.restarts == 1 && !store.owed,
+           "steady state still settles a restart owed from before")
 }
 
 private func testAvailability() {
@@ -301,6 +364,7 @@ enum FocusSpacesSafetyTests {
         testLookupTicket()
         testRunnerHappyPath()
         testRunnerFailures()
+        testRunnerOwedRestart()
         testAvailability()
         testRetryPolicy()
         testDockRestartPlan()

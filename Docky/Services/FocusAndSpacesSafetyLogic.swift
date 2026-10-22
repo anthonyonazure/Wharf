@@ -108,19 +108,30 @@ nonisolated struct SpacesOrderRunner {
     /// Saves (nil clears) the journal; false when it could not be confirmed.
     var saveJournal: (SpacesOrderJournal?) -> Bool
     var current: () -> SpacesRearrangeSetting
-    /// Writes `mru-spaces` (nil removes it); false when it did not take.
+    /// Writes `mru-spaces` (nil removes it); false when it did not take. A
+    /// write can take effect and still report false.
     var writeDock: (Bool?) -> Bool
+    /// Saves, and confirms, that the running Dock owes a restart. Called
+    /// before every Dock write, so a write that takes effect but reports a
+    /// failure (or a crash right after it) still leaves the restart on
+    /// record. False when it could not be confirmed.
+    var oweRestart: () -> Bool
+    /// Restarts the Dock after a write that took; settles the obligation.
     var restartDock: () -> Void
+    /// Restarts the Dock if a restart is still owed and the Dock that owes it
+    /// is still running; otherwise does nothing.
+    var finishOwedRestart: () -> Void
 
     func run(wanted: Bool) -> SpacesOrderOutcome {
         let saved = journal()
         switch SpacesOrderPlan.step(wanted: wanted, current: current(), journal: saved) {
         case .none:
+            finishOwedRestart()
             return .done
         case let .hold(restore):
-            // Without a confirmed record of what to put back, the Dock is
-            // not touched at all.
-            guard saveJournal(SpacesOrderJournal(restore: restore, phase: .pendingHold)) else {
+            // Without a confirmed record of what to put back, and of the
+            // restart the write will need, the Dock is not touched at all.
+            guard saveJournal(SpacesOrderJournal(restore: restore, phase: .pendingHold)), oweRestart() else {
                 return .failed(.journalNotSaved)
             }
             guard writeDock(false) else { return .failed(.dockNotWritten) }
@@ -130,15 +141,20 @@ nonisolated struct SpacesOrderRunner {
             // next run (confirmHold).
             return marked ? .done : .failed(.journalNotSaved)
         case .confirmHold:
+            // The Dock reads off, possibly from a write that reported a
+            // failure: the restart it owes is due whether or not the mark
+            // below is saved.
+            finishOwedRestart()
             guard let saved else { return .done }
             return saveJournal(SpacesOrderJournal(restore: saved.restore, phase: .held))
                 ? .done : .failed(.journalNotSaved)
         case .remember:
+            finishOwedRestart()
             return saveJournal(SpacesOrderJournal(restore: SpacesOrderPlan.restoreOff, phase: .held))
                 ? .done : .failed(.journalNotSaved)
         case let .release(removeKey):
             guard let saved else { return .done }
-            guard saveJournal(SpacesOrderJournal(restore: saved.restore, phase: .pendingRelease)) else {
+            guard saveJournal(SpacesOrderJournal(restore: saved.restore, phase: .pendingRelease)), oweRestart() else {
                 return .failed(.journalNotSaved)
             }
             // The journal stays on failure, so a retry still knows what to
@@ -148,8 +164,12 @@ nonisolated struct SpacesOrderRunner {
             restartDock()
             return cleared ? .done : .failed(.journalNotSaved)
         case .forget:
+            // A restore that took effect but reported a failure lands here
+            // on the retry: its restart is still owed.
+            finishOwedRestart()
             return saveJournal(nil) ? .done : .failed(.journalNotSaved)
         case .letGo:
+            finishOwedRestart()
             _ = saveJournal(nil)
             return .letGo
         }

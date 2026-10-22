@@ -32,6 +32,51 @@ nonisolated enum FocusFollowsMouseTiming {
     static func clampedDelay(_ milliseconds: Int) -> Int {
         min(max(milliseconds, delayRange.lowerBound), delayRange.upperBound)
     }
+
+    /// The delay to use for a stored value, and whether the store should be
+    /// rewritten so an out of range or malformed value does not come back on
+    /// the next launch.
+    static func storedDelay(_ raw: Any?) -> (value: Int, needsRewrite: Bool) {
+        guard let raw else { return (defaultDelayMilliseconds, false) }
+        guard let number = raw as? Int else { return (defaultDelayMilliseconds, true) }
+        let clamped = clampedDelay(number)
+        return (clamped, clamped != number)
+    }
+}
+
+// MARK: - App exclusion lists
+
+/// Bundle identifiers are case insensitive, so every exclusion list compares
+/// them lowercased. The list itself keeps the spelling it was added with, for
+/// display.
+nonisolated enum BundleIDList {
+    static func normalized(_ bundleID: String) -> String {
+        bundleID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// The set to match against at run time.
+    static func matchSet(_ bundleIDs: [String]) -> Set<String> {
+        Set(bundleIDs.map(normalized).filter { !$0.isEmpty })
+    }
+
+    static func contains(_ bundleIDs: [String], _ bundleID: String) -> Bool {
+        let key = normalized(bundleID)
+        return bundleIDs.contains { normalized($0) == key }
+    }
+
+    /// `bundleIDs` with `bundleID` appended, trimmed, unless it is empty or
+    /// already there in any case.
+    static func adding(_ bundleID: String, to bundleIDs: [String]) -> [String] {
+        let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !contains(bundleIDs, trimmed) else { return bundleIDs }
+        return bundleIDs + [trimmed]
+    }
+
+    /// Drops later entries that differ from an earlier one only in case.
+    static func deduplicated(_ bundleIDs: [String]) -> [String] {
+        var seen = Set<String>()
+        return bundleIDs.filter { seen.insert(normalized($0)).inserted && !normalized($0).isEmpty }
+    }
 }
 
 nonisolated struct HoverDwellEvaluation: Equatable {
@@ -168,6 +213,7 @@ nonisolated struct HoverFocusInput {
     var target: HoverWindowInfo?
     var targetBundleID: String?
     var ownPID: pid_t = 0
+    /// Normalized with `BundleIDList.matchSet`.
     var excludedBundleIDs: Set<String> = []
     var frontmostPID: pid_t?
     /// The focused window of the frontmost app, when Accessibility answers.
@@ -186,11 +232,12 @@ nonisolated enum HoverFocusGate {
         if !input.displayEnabled { return .skip(.displayNotEnabled) }
         guard let target = input.target else { return .skip(.noWindow) }
         if target.ownerPID == input.ownPID { return .skip(.wharfWindow) }
-        if input.targetBundleID == dockBundleID { return .skip(.dock) }
+        let bundleID = input.targetBundleID.map(BundleIDList.normalized)
+        if bundleID == dockBundleID { return .skip(.dock) }
         // Layer 0 is where ordinary app windows live. The Dock, the menu bar,
         // the desktop, banners and floating panels all sit elsewhere.
         if target.layer != 0 { return .skip(.notAnAppWindow) }
-        if let bundleID = input.targetBundleID, input.excludedBundleIDs.contains(bundleID) {
+        if let bundleID, input.excludedBundleIDs.contains(bundleID) {
             return .skip(.excludedApp)
         }
         if input.frontmostPID == target.ownerPID {
@@ -201,6 +248,35 @@ nonisolated enum HoverFocusGate {
             }
         }
         return .raise(windowID: target.windowID, pid: target.ownerPID)
+    }
+}
+
+/// The last look before a raise. Finding the window takes Accessibility
+/// calls off the main thread, and the world can change meanwhile: the pointer
+/// moves (even onto one of Wharf's own windows, which the global monitor
+/// does not see), a menu opens, a click or shortcut starts, or the feature is
+/// switched off. Everything is read fresh, right before raising.
+nonisolated struct HoverCommitCheck {
+    /// How far the live pointer may sit from where it rested, in points.
+    static let pointerTolerance: CGFloat = 3
+
+    var featureActive = true
+    var evaluationCurrent = true
+    var livePointer: CGPoint?
+    var receivingWindowID: CGWindowID?
+    var menuOpen = false
+    var buttonOrModifierHeld = false
+
+    func allowsRaise(of windowID: CGWindowID, restingAt point: CGPoint) -> Bool {
+        guard featureActive, evaluationCurrent, !menuOpen, !buttonOrModifierHeld,
+              let livePointer,
+              abs(livePointer.x - point.x) <= Self.pointerTolerance,
+              abs(livePointer.y - point.y) <= Self.pointerTolerance
+        else { return false }
+        // AppKit's answer is unknown only in odd cases; when known it must
+        // still be the same window.
+        if let receivingWindowID, receivingWindowID != windowID { return false }
+        return true
     }
 }
 
@@ -222,21 +298,46 @@ nonisolated enum SpacesRearrangeSetting: Equatable {
     }
 }
 
+/// How far a change to the Dock preference got. Saved, and flushed to disk,
+/// before the Dock preference is touched, so a crash at any point leaves
+/// enough behind to finish or undo the change on the next launch.
+nonisolated enum SpacesHoldPhase: String, Equatable {
+    /// About to turn rearranging off; the Dock may or may not have it yet.
+    case pendingHold
+    /// Rearranging is off and Wharf holds it.
+    case held
+    /// About to put the old value back; the Dock may or may not have it yet.
+    case pendingRelease
+}
+
+/// Wharf's recovery record for fixed Space order: what `mru-spaces` read
+/// before Wharf changed it, and how far the change got. Present only while
+/// Wharf holds the setting or is in the middle of changing it.
+nonisolated struct SpacesOrderJournal: Equatable {
+    /// One of the `SpacesOrderPlan.restore...` values.
+    var restore: String
+    var phase: SpacesHoldPhase
+}
+
 nonisolated enum SpacesOrderStep: Equatable {
     /// Nothing to change.
     case none
-    /// Save `marker`, then turn rearranging off and refresh the Dock.
-    case hold(marker: String)
-    /// Rearranging is already off: save the "off" marker without touching
-    /// the Dock, so turning the feature off later leaves it as it was.
+    /// Save a pending journal with `restore`, then turn rearranging off,
+    /// mark the journal held and refresh the Dock.
+    case hold(restore: String)
+    /// The Dock already reads off after an interrupted hold: mark it held.
+    case confirmHold
+    /// Rearranging is already off: save a held "off" journal without
+    /// touching the Dock, so turning the feature off later leaves it as it was.
     case remember
-    /// Put rearranging back (removing the key when it was missing before),
-    /// clear the marker and refresh the Dock.
+    /// Mark the journal pending release, put rearranging back (removing the
+    /// key when it was missing before), and clear the journal only once the
+    /// Dock reads the old value.
     case release(removeKey: Bool)
-    /// Clear the marker and leave the preference alone.
+    /// Clear the journal and leave the preference alone.
     case forget
     /// The user turned rearranging back on in System Settings while Wharf
-    /// held it off: clear the marker and turn the feature off, so their
+    /// held it off: clear the journal and turn the feature off, so their
     /// choice stands and the switch shows it.
     case letGo
 }
@@ -244,45 +345,67 @@ nonisolated enum SpacesOrderStep: Equatable {
 nonisolated enum SpacesOrderPlan {
     static let dockDomain = "com.apple.dock"
     static let preferenceKey = "mru-spaces"
-    /// Marker values saved in Wharf's defaults: what to put back.
+    /// Values for `SpacesOrderJournal.restore`: what to put back.
     static let restoreAbsent = "absent"
     static let restoreOn = "on"
     static let restoreOff = "off"
 
-    /// One step toward the wanted state. A saved marker means Wharf holds
-    /// rearranging off, whether it turned it off or found it off.
-    static func step(wanted: Bool, current: SpacesRearrangeSetting, marker: String?) -> SpacesOrderStep {
+    /// One step toward the wanted state. Only a held journal with rearranging
+    /// back on means the user changed it; a pending one means Wharf was cut
+    /// off mid change and should finish or undo it.
+    static func step(wanted: Bool, current: SpacesRearrangeSetting, journal: SpacesOrderJournal?) -> SpacesOrderStep {
+        if current == .unsupported {
+            // Managed now: never write, and drop any record of an old change.
+            return journal == nil ? .none : .forget
+        }
         if wanted {
-            switch current {
-            case .off: return marker == nil ? .remember : .none
-            case .unsupported: return .none
-            case .absent, .on:
-                guard marker == nil else { return .letGo }
-                return .hold(marker: current == .absent ? restoreAbsent : restoreOn)
+            guard let journal else {
+                if current == .off { return .remember }
+                return .hold(restore: current == .absent ? restoreAbsent : restoreOn)
+            }
+            switch journal.phase {
+            case .held:
+                return current == .off ? .none : .letGo
+            case .pendingHold:
+                // The Dock write may not have happened: retry it with the
+                // value saved before, which is still what to put back.
+                return current == .off ? .confirmHold : .hold(restore: journal.restore)
+            case .pendingRelease:
+                // Turned back on while a release was unfinished.
+                if current == .off { return .confirmHold }
+                return .hold(restore: current == .absent ? restoreAbsent : restoreOn)
             }
         }
-        guard let marker else { return .none }
+        guard let journal else { return .none }
         // Rearranging was already off when the feature turned on, so whatever
         // it reads now is the user's own.
-        guard marker != restoreOff else { return .forget }
-        return current == .off ? .release(removeKey: marker == restoreAbsent) : .forget
+        guard journal.restore != restoreOff else { return .forget }
+        // Still off: Wharf's write is in place (or might be), so put the old
+        // value back. Anything else is either the restored value or the
+        // user's own choice; leave it.
+        return current == .off ? .release(removeKey: journal.restore == restoreAbsent) : .forget
     }
 }
 
 // MARK: - Win key tap
 
 /// Recognizes a lone tap of the Win key, which macOS delivers as Command:
-/// pressed and released with no other key, no click and no other modifier in
-/// between, and not held so long that it reads as an abandoned shortcut.
+/// pressed and released with no other key, no click, no scroll, no mouse
+/// button held and no other modifier in between, and not held so long that
+/// it reads as an abandoned shortcut.
 nonisolated struct CommandTapDetector {
     static let maximumHoldSeconds: TimeInterval = 0.8
 
     enum Input {
         /// A modifier changed. `command` is whether Command is now down,
-        /// `otherModifiers` whether Shift, Control, Option or Fn is.
-        case flagsChanged(command: Bool, otherModifiers: Bool, time: TimeInterval)
+        /// `otherModifiers` whether Shift, Control, Option or Fn is, and
+        /// `mouseHeld` whether any mouse button is down right now (Command
+        /// during a drag changes the drag, it is not a tap).
+        case flagsChanged(command: Bool, otherModifiers: Bool, time: TimeInterval, mouseHeld: Bool = false)
         case keyDown
         case mouseDown
+        /// Command with the scroll wheel zooms in many apps.
+        case scrollWheel
     }
 
     private var commandDown = false
@@ -291,19 +414,19 @@ nonisolated struct CommandTapDetector {
     /// True exactly when the input completes a lone tap.
     mutating func handle(_ input: Input) -> Bool {
         switch input {
-        case .keyDown, .mouseDown:
+        case .keyDown, .mouseDown, .scrollWheel:
             armedAt = nil
             return false
-        case let .flagsChanged(command, otherModifiers, time):
+        case let .flagsChanged(command, otherModifiers, time, mouseHeld):
             defer { commandDown = command }
             if command, !commandDown {
                 // Command just went down. Only a press on its own can count.
-                armedAt = otherModifiers ? nil : time
+                armedAt = otherModifiers || mouseHeld ? nil : time
                 return false
             }
             if command {
                 // Still down; another modifier joining spoils the tap.
-                if otherModifiers { armedAt = nil }
+                if otherModifiers || mouseHeld { armedAt = nil }
                 return false
             }
             guard commandDown, let armedAt else {
@@ -311,7 +434,7 @@ nonisolated struct CommandTapDetector {
                 return false
             }
             self.armedAt = nil
-            return !otherModifiers && time - armedAt <= Self.maximumHoldSeconds
+            return !otherModifiers && !mouseHeld && time - armedAt <= Self.maximumHoldSeconds
         }
     }
 }

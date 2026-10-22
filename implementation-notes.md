@@ -769,3 +769,123 @@ expressions, and a watchdog thread that fails the run after 20 seconds.
 - Spotlight speed and result quality with a broad "contains" search on the
   whole local disk were not measured; a short query may take a moment.
 - The Option-Space registration failure path was not triggered.
+
+## 2026-10-22, Stage 3a review fixes
+
+Two independent adversarial reviews (Codex and Gemini) of Stage 3a found
+defects in the code that swallows input and can quit apps. Every claim was
+checked against the code before fixing. The rule applied throughout: when
+in doubt, do not swallow input and do not quit anything.
+
+### What changed
+
+- **Taps decide from cached answers only.** Quit protection keeps the app in
+  front and the policy as cached snapshots (refreshed from the activation
+  notification and the preference observer); with no cached app it protects
+  nothing. The HUD is shown and hidden off the tap. The green button tap no
+  longer asks Accessibility anything: a listen-only pointer monitor looks up
+  each window's green button ahead of time and caches it per window id; a
+  press is held back only when the cache matches the exact window in front
+  at that point, unmoved, with the point inside the real button frame (no
+  inflated frame). Otherwise the click goes to the app and the lookup runs
+  for next time.
+- **Confirmations are bound to their target.** The app is captured at the
+  first press, and for Close the focused window too (read just after the
+  tap, never in it). Switching apps cancels the wait. Right before acting,
+  the app must still be running and in front, and for Close the focused
+  window must still be the captured one. Quit is a normal terminate request
+  only; if it is refused nothing else is tried. Close sends Command-W to the
+  captured app alone (postToPid), so a browser still closes a tab. The old
+  fallback that posted a global Command-Q or Command-W is gone; a failure
+  shows a short HUD note instead.
+- **Press twice needs the same app twice.** A second press in another app
+  starts that app's own sequence. The old test that expected the first app
+  to be quit was reversed.
+- **Held keys are owned by physical key code** until their release, apart
+  from the pending protection, so a cancel, an expiry, a Command release or
+  Escape can no longer let autorepeats or the release through. Escape's own
+  release is now swallowed. Releases match by key code, never by the
+  character the current input source types.
+- **Quit on close counts everything and doubts loudly.** Window counts come
+  from an unfiltered Accessibility window list and from window server levels
+  0 to 19 (floating panels, modal dialogs); a failed read counts as windows
+  present. A window seen again, or the app being activated, stops pending
+  looks. After a quit request, no second one is sent until the app shows a
+  standard window again (so cancelling a save prompt does not loop).
+- **One deterministic keyboard order.** The quit protection tap is now tail
+  appended on the session tap, after every head inserted tap, so Windows
+  keyboard translation always runs first and a translated Control-W is
+  protected. Head inserted taps run in reverse install order, which is why
+  the old result depended on which switch was turned on last; with the tail
+  placement both toggle orders reduce to the same chain. This cannot be unit
+  tested; scripts/test-window-behavior.sh checks the placement in the source.
+- **Remote screens and virtual machines pass through by default**
+  (Windows App and Microsoft Remote Desktop, VMware Fusion and Horizon,
+  Parallels, UTM, Citrix Viewer, Jump Desktop, VirtualBox, Screen Sharing and
+  similar, list adapted from Vorssaint). An explicit per-app mode still wins.
+- **Green button pairs.** GreenButtonPairTracker keeps a held back press and
+  its release together, and swallows drags in between. Any interruption (tap
+  disabled, tap removed, permission lost) forgets the held press so its
+  release passes and no stale action runs; a press the app saw never has its
+  release swallowed. At action time Accessibility must find the zoom or full
+  screen button itself (or a child of it) at the click point, else the click
+  is dropped. A click on a window of a background app focuses that window.
+  In a right-to-left language the button area is mirrored to the top right.
+- **Hold-to-tile decision.** Swallowing the press would hide the macOS tiling
+  menu that opens on a held green button. If the button is still down after
+  0.45 s, Wharf hands the original press back to the app (marked so its own
+  tap lets it by) and lets the release through, so the app runs its own hold
+  from there. A quick click maximizes as before. The menu opens about half a
+  second later than without Wharf; the hover tiling menu is untouched.
+- **Secure Input.** The Window Behavior pane shows an orange note while
+  Secure Event Input is on, since macOS then hides key presses from every
+  tap and protection is paused.
+- New checks: target binding, app switch cancel, physical key ownership,
+  Escape release, double press target, quit-on-close episode record, failed
+  reads, panel levels, RTL hit area, remote pass-through, green button pairs,
+  plus source guards for the global post and the tap placement. 135 logic
+  checks (was 85).
+
+### Deviations
+
+- **Taps still run on the main run loop.** Moving them to their own thread
+  would remove the remaining dependency on a busy main thread, but under the
+  project's MainActor default isolation it is the likeliest way to add a data
+  race. Instead all slow work left the callbacks: no Accessibility, no HUD,
+  no app lookups. The green button callback still reads the window server
+  list once per press, which is not an app and does not hang the way an
+  unresponsive app's Accessibility does.
+- **A change of focused window inside the same app is not watched.** It is
+  caught by the check right before acting (the captured window must still be
+  focused), which is where it matters.
+- **The first click on a window the pointer never rested over is native.**
+  The hover lookup usually finishes in a few milliseconds, but a pointer that
+  jumps onto the button and clicks at once gets the app's own green button.
+  That is the fail-safe direction.
+- **A window replaced after more than 1.8 s** (an app rebuilding its only
+  window) still looks like a last-window close. Activation and any window
+  seen again cancel the looks, but a silent replacement cannot be told apart
+  from a close. Only listed apps are affected.
+- **An Accessibility read that returns "no value" counts as unknown**, not
+  as zero windows. An app that answers that way when windowless will not be
+  quit. Fail safe, by design.
+- **Right-to-left is taken from the user's first preferred language**, not
+  from each app, since an app's own layout direction cannot be read cheaply.
+  An app localized against that direction falls back to its own green
+  button.
+- **No review claim was disproved.** Gemini's background window finding
+  assumes macOS activates a window when its green button is clicked; that
+  native behavior was not checked, the fix follows the brief.
+
+### Unverified
+
+- No live run (same reason as Stage 1). Not seen working: the hover cache,
+  the held press replay opening the tiling menu, Command-W delivered with
+  postToPid (Chromium and Electron apps in particular), the tail placement
+  ordering against Windows keyboard mode, the Secure Input note.
+- Bundle ids confirmed on this Mac: com.microsoft.rdc.macos (Windows App),
+  com.citrix.receiver.icaviewer.mac (Citrix Viewer). The others come from
+  Vorssaint's list and were not checked against installed apps.
+- Whether some apps report the green button only as a child element that
+  Accessibility hit testing returns at more than four levels deep; such a
+  click would be dropped rather than performed.

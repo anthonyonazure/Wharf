@@ -541,6 +541,10 @@ final class MainWindow: NSPanel {
             _ = preferences.effectiveWindowAxisSizing
             _ = preferences.windowPosition
             _ = preferences.windowDisplayTarget
+            // Wharf: rows change the dock's thickness. Without this the tile
+            // view redrew in several rows while the panel kept its one row
+            // frame, clipping every extra row until something else resized it.
+            _ = preferences.dockRowCount
             _ = dockSettings.orientation
             _ = dockSettings.tileSize
             _ = dockSettings.largeSize

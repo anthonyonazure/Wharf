@@ -235,11 +235,13 @@ struct TileContainerView: View {
     /// keep left-to-right reading order rather than being dealt round-robin
     /// down the columns.
     static func chunk(_ tiles: [Tile], intoRows rowCount: Int) -> [[Tile]] {
-        guard rowCount > 1, tiles.count > rowCount else { return [tiles] }
-        let perRow = Int(ceil(Double(tiles.count) / Double(rowCount)))
-        return stride(from: 0, to: tiles.count, by: perRow).map { start in
-            Array(tiles[start..<min(start + perRow, tiles.count)])
-        }
+        DockRowLayout.chunk(tiles, intoRows: rowCount)
+    }
+
+    /// The two divider tiles the view lays out between sections rather than
+    /// inside one. Sizing splits on the same IDs so it wraps what is drawn.
+    static func isSectionBreak(_ tile: Tile) -> Bool {
+        tile.id == "divider:running" || tile.id == "divider:trailing"
     }
 
     @ViewBuilder
@@ -754,7 +756,7 @@ struct TileContainerView: View {
         }
 
         for tile in displayTiles {
-            if tile.id == "divider:running" || tile.id == "divider:trailing" {
+            if Self.isSectionBreak(tile) {
                 appendCurrentSection()
                 components.append(.divider(tile))
                 currentSectionID = tile.id == "divider:running" ? "running" : "trailing"
@@ -1056,17 +1058,20 @@ struct TileContainerView: View {
     /// list with base sizes. Spacings are uniform across sections and
     /// dividers, so a single cumulative pass matches the rendered layout.
     private func restAxisCenter(forTileID id: String) -> CGFloat? {
-        // Measure within the tile's own row. The walk accumulates along-axis
-        // offsets, which is only correct for a single strip: with rows enabled
-        // a tile in row two was measured as though it followed every tile in
-        // row one, so hovering it magnified the wrong tile entirely.
-        let rowCount = min(max(DockyPreferences.shared.dockRowCount, 1), 5)
-        let rows = Self.chunk(displayTiles, intoRows: rowCount)
-        let tiles = rows.first { row in row.contains { $0.id == id } } ?? displayTiles
-
+        // Measure within the tile's own row and section, the way the view
+        // wraps them. A single cumulative walk is only right for one strip:
+        // with rows enabled a tile in row two was measured as though it
+        // followed every tile in row one, so hovering it magnified the wrong
+        // tile entirely.
         let spacing = effectiveTileSpacing
-        var runningOffset: CGFloat = effectiveEdgePadding
-        for (index, tile) in tiles.enumerated() {
+        let center = DockRowLayout.restAlongCenter(
+            where: { $0.id == id },
+            in: DockRowLayout.components(displayTiles, isSectionBreak: Self.isSectionBreak),
+            rowCount: DockyPreferences.shared.dockRowCount,
+            spacing: Double(spacing),
+            edgePadding: Double(effectiveEdgePadding),
+            emptyCross: Double(tileHeight)
+        ) { tile in
             let restSize = Self.size(
                 for: tile,
                 tileSize: effectiveTileSize,
@@ -1075,16 +1080,9 @@ struct TileContainerView: View {
                 position: position,
                 compactWidgets: layout.compactsWidgetsForOverflow
             )
-            let extent = projected(size: restSize)
-            if tile.id == id {
-                return runningOffset + extent / 2
-            }
-            runningOffset += extent
-            if index < tiles.count - 1 {
-                runningOffset += spacing
-            }
+            return DockRowLayout.Extent(along: Double(projected(size: restSize)), cross: 0)
         }
-        return nil
+        return center.map { CGFloat($0) }
     }
 
     /// Icon-side extent for a tile after applying the magnification
@@ -2213,40 +2211,27 @@ struct TileContainerView: View {
         compactWidgets: Bool = false,
         edgePadding: CGFloat = Self.edgePadding
     ) -> CGSize {
-        // Wharf: multi-row docks measure per row. Summing every tile along one
-        // axis is only correct for a single strip; with rows enabled it
-        // reports a dock far too long and far too thin, and the extra rows get
-        // clipped out of the chrome.
-        let rowCount = min(max(DockyPreferences.shared.dockRowCount, 1), 5)
-        let rows = chunk(tiles, intoRows: rowCount)
-
-        let rowMetrics: [(along: CGFloat, cross: CGFloat)] = rows.map { row in
-            let sizes = row.map {
-                size(for: $0, tileSize: tileSize, tileHeight: tileHeight, tileSpacing: tileSpacing, position: position, compactWidgets: compactWidgets)
-            }
-            let spacings = max(0, CGFloat(row.count) - 1) * tileSpacing
-            if position.isVertical {
-                return (
-                    along: sizes.reduce(CGFloat(0)) { $0 + $1.height } + spacings,
-                    cross: sizes.map(\.width).max() ?? tileSize
-                )
-            }
-            return (
-                along: sizes.reduce(CGFloat(0)) { $0 + $1.width } + spacings,
-                cross: sizes.map(\.height).max() ?? tileHeight
-            )
+        // Wharf: multi-row docks measure per row, and per section, exactly as
+        // `sectionTilesView` wraps them. Wrapping the flat list instead (the
+        // section dividers included) asked for a panel shaped differently
+        // from the rows actually drawn.
+        let extent = DockRowLayout.contentExtent(
+            DockRowLayout.components(tiles, isSectionBreak: isSectionBreak),
+            rowCount: DockyPreferences.shared.dockRowCount,
+            spacing: Double(tileSpacing),
+            edgePadding: Double(edgePadding),
+            emptyCross: Double(position.isVertical ? tileSize : tileHeight)
+        ) { tile in
+            let size = size(for: tile, tileSize: tileSize, tileHeight: tileHeight, tileSpacing: tileSpacing, position: position, compactWidgets: compactWidgets)
+            return position.isVertical
+                ? DockRowLayout.Extent(along: Double(size.height), cross: Double(size.width))
+                : DockRowLayout.Extent(along: Double(size.width), cross: Double(size.height))
         }
-
-        // Along-axis is the longest row; cross-axis stacks every row plus the
-        // gaps between them.
-        let alongAxis = (rowMetrics.map(\.along).max() ?? 0) + edgePadding * 2
-        let crossAxis = rowMetrics.reduce(CGFloat(0)) { $0 + $1.cross }
-            + max(0, CGFloat(rowMetrics.count) - 1) * tileSpacing
 
         if position.isVertical {
-            return CGSize(width: crossAxis, height: alongAxis)
+            return CGSize(width: extent.cross, height: extent.along)
         }
-        return CGSize(width: alongAxis, height: crossAxis)
+        return CGSize(width: extent.along, height: extent.cross)
     }
 
     static func previewedTiles(

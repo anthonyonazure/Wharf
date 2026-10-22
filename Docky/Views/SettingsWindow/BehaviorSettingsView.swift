@@ -489,6 +489,18 @@ struct BehaviorSettingsView: View {
                 Text(preferences.maximizedWindowBehavior.detail)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if preferences.maximizedWindowBehavior == .resizeWindow,
+                   PermissionsService.shared.accessibility != .granted {
+                    HStack {
+                        Text("Accessibility is not granted, so Resize Windows is doing nothing.")
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Button("Reset Permission") {
+                            Task { await PermissionsService.shared.resetPermission(for: .accessibility) }
+                        }
+                    }
+                }
             }
             .padding(.vertical, 4)
 

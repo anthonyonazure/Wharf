@@ -68,6 +68,12 @@ struct PermissionsSettingsView: View {
                         requestButton(for: permission)
                     }
 
+                    if service.canReset(permission) {
+                        Button("Reset Permission") {
+                            Task { await service.resetPermission(for: permission) }
+                        }
+                    }
+
                     if permission == .finderAutomation, service.finderAutomation != .notDetermined {
                         Button("Forget Status") {
                             service.clearAutomationStatus(for: permission)

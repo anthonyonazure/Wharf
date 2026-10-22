@@ -303,6 +303,39 @@ final class PermissionsService: ObservableObject {
         }
     }
 
+    /// The service name `tccutil` uses for this permission, or nil when macOS
+    /// has no per-app reset for it (location, folder access).
+    private func tccService(for permission: Permission) -> String? {
+        switch permission {
+        case .accessibility: return "Accessibility"
+        case .screenCapture: return "ScreenCapture"
+        case .calendar: return "Calendar"
+        case .reminders: return "Reminders"
+        case .finderAutomation, .systemEventsAutomation: return "AppleEvents"
+        case .userFolders, .location: return nil
+        }
+    }
+
+    func canReset(_ permission: Permission) -> Bool {
+        tccService(for: permission) != nil
+    }
+
+    /// Wipes macOS's stored decision for this app, then asks again. This is
+    /// the fix for a grant that shows as on in System Settings but no longer
+    /// matches the rebuilt app's signature.
+    func resetPermission(for permission: Permission) async {
+        guard let service = tccService(for: permission),
+              let bundleID = Bundle.main.bundleIdentifier else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", service, bundleID]
+        try? process.run()
+        process.waitUntilExit()
+        clearAutomationStatus(for: permission)
+        refresh()
+        _ = await requestPermission(for: permission)
+    }
+
     @discardableResult
     func requestAccessibilityPermission(prompt: Bool) -> Bool {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt] as CFDictionary

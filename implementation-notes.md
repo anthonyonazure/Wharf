@@ -819,8 +819,10 @@ list was confirmed by reading the code; none was disproved. Fixes:
 9. **The clamped hover delay is saved,** and an out of range or malformed
    stored value is rewritten at launch.
 10. **Keyboard tap teardown race fixed.** The tap, its runloop source and
-    runloop are behind the existing lock, held through the whole teardown
-    and through the tap thread's re-enable.
+    runloop are behind the existing lock. Teardown takes them out under
+    the lock and tears down after releasing it; the tap thread's re-enable
+    uses a reference copied under the lock, so it can never touch a freed
+    tap and never waits on teardown.
 
 `scripts/test-focus-and-wintap.sh` now prints `PASS: 109 checks`, with new
 checks for every journal phase, case-insensitive bundle IDs (including the
@@ -833,7 +835,13 @@ pass; the Debug build succeeds.
 - **No polling for external Space order changes.** Rechecks happen on
   System Settings deactivate or quit and on Dock launch. A change made by
   `defaults write` in Terminal is noticed only at the next of those or at
-  the next launch.
+  the next launch. Residual gap: turning rearranging on and then off again
+  inside System Settings, without leaving it, is never seen as "on", so a
+  later release still puts back the value from before Wharf held it.
+- **Journal key order.** The phase is written before the marker and
+  removed after it, so a crash between the two never leaves a marker that
+  reads as held. At launch a Dock restart left pending by the last run is
+  retried only if `apply` did not just restart the Dock itself.
 - **Held mouse is sampled from the hardware state** at Command press and
   release (`CGEventSource.buttonState`) rather than tracked from mouse up
   events, so a button release the tap never saw cannot leave it stuck.

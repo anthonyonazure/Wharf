@@ -40,8 +40,10 @@ final class SpacesOrderService {
     func start() {
         observePreference()
         observeExternalChanges()
+        // Read before `apply`, which may restart the Dock itself and set it.
+        let restartWasPending = preferences.spacesOrderDockRestartPending
         apply()
-        if preferences.spacesOrderDockRestartPending {
+        if restartWasPending, restartAttempts == 0 {
             // The last run changed the preference but never saw the Dock
             // come back, so it may still be using the old value.
             restartDock()

@@ -218,10 +218,11 @@ final class FocusFollowsMouseService {
                 if case .skip = HoverFocusGate.decide(focusedInput) { raise = false }
             }
             if raise {
+                // A fresh element gets the short timeout inside
+                // `windowElement`, which also bounds the calls `focus` makes
+                // with it. The cached one belongs to the registry and keeps
+                // its own timeout.
                 element = cachedElement ?? Self.windowElement(pid: target.pid, windowID: target.windowID)
-                // Bounds the Accessibility calls `focus` makes on the main
-                // thread with this element.
-                if let element { AXUIElementSetMessagingTimeout(element.element, Self.axTimeout) }
             }
             DispatchQueue.main.async {
                 self?.finishLookup(evaluation, target: target, element: element, cached: cached, startedAt: startedAt)
@@ -352,9 +353,13 @@ final class FocusFollowsMouseService {
                 app, kAXWindowsAttribute as CFString, 0, maximumWindowsScanned, &raw) == .success,
               let elements = raw as? [AXUIElement]
         else { return nil }
+        // The same total budget as the registry's own enumeration.
+        let deadline = DispatchTime.now() + .milliseconds(750)
         for element in elements {
+            if DispatchTime.now() > deadline { break }
             var id: CGWindowID = 0
             if hoverAXWindowID(element, &id) == .success, id == windowID {
+                AXUIElementSetMessagingTimeout(element, axTimeout)
                 return HoverAXElement(element: element)
             }
         }

@@ -85,10 +85,13 @@ final class BehaviorExtrasPreferences {
             let phase = defaults.string(forKey: Keys.spacesOrderPhase).flatMap(SpacesHoldPhase.init(rawValue:)) ?? .held
             return SpacesOrderJournal(restore: restore, phase: phase)
         }
+        // Phase written before the marker and removed after it, so a crash
+        // between the two reads back as the whole record or as none, never
+        // as a marker with the phase missing (which reads as held).
         set {
             if let newValue {
-                defaults.set(newValue.restore, forKey: Keys.spacesOrderRestoreMarker)
                 defaults.set(newValue.phase.rawValue, forKey: Keys.spacesOrderPhase)
+                defaults.set(newValue.restore, forKey: Keys.spacesOrderRestoreMarker)
             } else {
                 defaults.removeObject(forKey: Keys.spacesOrderRestoreMarker)
                 defaults.removeObject(forKey: Keys.spacesOrderPhase)

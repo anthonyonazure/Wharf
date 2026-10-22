@@ -286,23 +286,28 @@ final class WindowsKeyboardService {
         writeStatus("ACTIVE: event tap installed; Control translates to Command, terminals excluded.")
     }
 
-    /// Under the lock for the whole teardown, so the tap thread's re-enable
-    /// in `handle` can never run against a tap being invalidated.
+    /// The references are taken out under the lock and torn down after it is
+    /// released, so the tap thread never waits on CoreFoundation teardown.
+    /// `handle` only ever uses a reference it copied under the lock, which
+    /// keeps the tap alive while it does; re-enabling a tap that is then
+    /// invalidated is harmless.
     private func removeTap() {
         stateLock.lock()
-        if let eventTap = _eventTap {
-            CGEvent.tapEnable(tap: eventTap, enable: false)
-            if let runLoopSource = _runLoopSource, let tapRunLoop = _tapRunLoop {
-                CFRunLoopRemoveSource(tapRunLoop, runLoopSource, .commonModes)
-            }
-            CFMachPortInvalidate(eventTap)
-        }
+        let eventTap = _eventTap
+        let runLoopSource = _runLoopSource
         let tapRunLoop = _tapRunLoop
         _tapRunLoop = nil
         _eventTap = nil
         _runLoopSource = nil
         stateLock.unlock()
 
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+            if let runLoopSource, let tapRunLoop {
+                CFRunLoopRemoveSource(tapRunLoop, runLoopSource, .commonModes)
+            }
+            CFMachPortInvalidate(eventTap)
+        }
         tapThread?.cancel()
         if let tapRunLoop { CFRunLoopWakeUp(tapRunLoop) }
         tapThread = nil
@@ -315,10 +320,11 @@ final class WindowsKeyboardService {
         // revoked permission for. Re-arm rather than silently going dead.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             stateLock.lock()
-            if let eventTap = _eventTap {
+            let eventTap = _eventTap
+            stateLock.unlock()
+            if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
-            stateLock.unlock()
             return Unmanaged.passUnretained(event)
         }
 

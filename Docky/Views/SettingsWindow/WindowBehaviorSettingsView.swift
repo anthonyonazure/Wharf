@@ -196,12 +196,10 @@ struct WindowBehaviorSettingsView: View {
                         Text(modifier.title).tag(modifier)
                     }
                 }
-                if preferences.quitGuardExtraModifier != .option {
-                    Text("Shift-Command-Q (Log Out) and Control-Command-Q (Lock Screen) belong to macOS and always pass through, so Command-Q confirms with Option-Command-Q instead. Command-W uses \(preferences.quitGuardExtraModifier.title).")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text("In Extra modifier mode, Option-Command-Q is the confirm key for Quit, whichever modifier is chosen here: Shift-Command-Q (Log Out) and Control-Command-Q (Lock Screen) belong to macOS and always pass through. This replaces Option-Command-Q's usual meaning in apps that offer it, Quit and Keep Windows. Command-W uses \(preferences.quitGuardExtraModifier.title).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 QuitGuardOverridesEditor(overrides: $preferences.quitGuardOverrides)
 

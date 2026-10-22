@@ -1392,3 +1392,95 @@ locale-aware number parsing, and the file path filter.
 - The new conflict check turns the hot key off on a conflict. Wharf's own
   defaults (Launchpad unset, Window Switcher Option-Tab) do not collide with
   the bar's Option-Space, so a fresh install is unaffected.
+
+## 2026-10-22, Code review chunk 1 patches (green button)
+
+Branch `cr1-green-button`, from `feature/vorssaint-parity`. Files:
+`Docky/Services/GreenButtonMaximizeService.swift`, the green button parts of
+`Docky/Services/WindowBehaviorLogic.swift`,
+`Tests/WindowBehavior/WindowBehaviorLogicTests.swift`,
+`scripts/test-window-behavior.sh`. The quit guard code was not touched.
+
+1. HIGH, done. The hit test now ends on any on screen window that covers
+   the point and is not fully transparent (menus, popovers, floating
+   panels, small windows, Wharf's own windows): the click goes to that
+   window. Only layer 0 app windows get the traffic light area test. The
+   two old checks that expected menus and small windows to be seen through
+   now expect nil; new checks cover a menu layer window, a floating panel,
+   a same app popover, a Wharf window, a transparent window and a menu that
+   does not cover the point.
+2. HIGH, done. Every give-up path in `perform` (missed hit, window not
+   found, nothing to restore, maximize and native press both failed,
+   disabled button, sheet or modal) replays the held press and release to
+   the app with the synthetic marker. A source guard in the test script
+   counts the replay calls.
+3. MED, done. A preflight right before acting re-reads the button's
+   enabled state, looks for an attached sheet among the window's children,
+   and checks the window list for a modal panel (level 8) of the same app.
+   Any of these replays the click.
+4. MED, done. The move throttle keeps a trailing check
+   (`GreenButtonMoveThrottle`, tested). A release after a passed drag
+   refills the cache for the window under the pointer. After a successful
+   move the cached answer follows the window at once (button shifted with
+   the window's top leading corner, `GreenButtonLogic.shiftedButton`,
+   tested), then a fresh lookup runs at 0, 0.15 and 0.6 seconds. Lookups
+   use one serial queue per app.
+5. MED, partial. The tap reads the window list only when a cached button
+   frame is under the press; a press near a title bar with no cached answer
+   schedules a lookup after the event is passed; a press elsewhere costs a
+   scan of a short array. The system wide element is gone: the hit test
+   asks the app element, with the timeout set on it. Because an app scoped
+   hit test cannot see another app's window that came in front after the
+   press, the preflight first checks the window server that the target is
+   still the front window at the point (the cover the system wide hit test
+   used to give); if not, the click is replayed. The hit test, enabled
+   and sheet checks, modal check and frame read run on the app's lookup
+   queue. Left on main: `WindowRegistry.liveWindows`, `focus`,
+   `setFullscreen`, `liveFrame` (only as a fallback) and
+   `WindowSnapService.perform`, because those services are main actor.
+6. LOW, done. The window is focused when its app is not in front or when
+   the window is not the app's main window (read in the preflight).
+7. LOW, skipped. See Deviations.
+
+### Deviations
+
+- Item 7 was not applied because the claim does not hold for this class.
+  `WindowBehaviorPreferences` is `@Observable`, and the macro turns each
+  property into an accessor, so assigning the clamped value inside `didSet`
+  runs `didSet` again and stores it. A reduced model (an `@Observable` class
+  with the same clamp and return) was compiled and run: setting 50 with a
+  cap of 10 left 10 and ran the store branch with 10. Note the review's
+  premise is true for a plain class, so the clamp would break if
+  `@Observable` were ever removed.
+- Item 4 asked for "a deadline". Each Accessibility element already has a
+  0.35 second messaging timeout; with one queue per app, a hung app only
+  delays its own lookups, so no separate overall deadline was added.
+- A click is not replayed when the user has pressed again before Wharf
+  finished with it: replaying it then would land inside the newer press and
+  split that press from its release. That case is logged and the old click
+  is dropped.
+- The modal check uses the window server (an app window at level 8)
+  instead of asking the app element for its focused window, to keep the
+  rule of never questioning the application element beyond its window
+  list.
+- The raise in item 6 uses the window's main flag from the preflight rather
+  than `WindowRegistry.frontmostWindow()`, which would ask the application
+  element on main.
+
+### Unverified
+
+- Nothing was clicked on real windows. Only the build, the logic checks and
+  a read only window list were run.
+- The read only window list showed Wharf's dock strips as layer 0 windows
+  and Notification Center widgets at a desktop layer. Neither sits over a
+  title bar in normal use, but a window dragged under a Wharf dock now has
+  its green button left to the app there (the click goes to the dock).
+- A replayed click is posted at the original press location, so if the
+  pointer moved in the few milliseconds before the replay the cursor jumps
+  back there. On a full screen style green button the replayed click enters
+  native full screen, the same tradeoff the existing native press path
+  already makes.
+- Whether `NSAlert` run modally always sits at window level 8 in every app,
+  and whether every app exposes sheets as children with the sheet role.
+- Asking the app element for the element at a point (instead of the system
+  wide element) was not checked against Chromium apps.

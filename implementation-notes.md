@@ -1677,3 +1677,88 @@ Unverified:
 - Whether a canceled click in a real app feels like a missed click rather
   than a stuck state (the press and release are both withheld, so no
   stuck button is expected).
+## 2026-10-22, Code review chunk 1 re-check (quit guard)
+
+Codex and Gemini re-attacked the chunk 1 quit guard fixes. Each claim was
+checked against the code first. Principle throughout: when unsure, never
+swallow input and never quit anything; for the focus check that means
+protect.
+
+Done:
+1. Stale focus owner (Codex 2, real). The cached "who has keyboard focus"
+   answer now lives in `QuitGuardFocusCache`: every fresh key press makes it
+   unknown (Escape or Return can dismiss a panel, Command-W can close one),
+   an answer older than 1.5 s is unknown, and a read that started before an
+   invalidation is dropped. Unknown protects. Reads refresh on Command or
+   Control going down (the Windows translation rewrites only key events, so
+   its modifier event never carries Command) and after each Command key.
+   Reads are coalesced: one in flight, at most one more queued.
+2. Helper processes (Gemini 2). `QuitGuardProcess.belongs(to:)` counts a
+   focus owner as the front app when it is the same process, its child, a
+   bundle id under the front app's (dot boundary), or a bundle inside the
+   front app's bundle. One way only. Used in the tap and in the revalidation
+   right before a confirmed action.
+3. Dialogs re-arming quit on close (Codex 4, Gemini 4, real). Windows are
+   classified by `QuitOnCloseWindowKind.classify` from subrole and AXModal.
+   A modal window is a dialog whatever its subrole; dialog, panel and
+   AXUnknown subroles never re-arm; an unreadable subrole or modal flag is a
+   doubt and never re-arms. A standard window re-arms; an ordinary
+   (readable custom subrole, not modal) window re-arms only after the user
+   activated the app. Activation alone never re-arms.
+4. System wide timeout (Codex 6, real). The call is gone; the focus read
+   runs on its own queue under the 1 s default AppDelegate sets. The
+   revalidation before a confirmed action no longer blocks the main thread:
+   it reads on the focus queue and gives up after 0.3 s (unknown).
+5. Ownership expiry (Codex 8, Gemini 10, real). `prune` ran before the
+   arriving key's own ownership check, so a repeat after a quiet gap passed.
+   Now the arriving key is checked first; a key quiet past 10 s leaves
+   flight but stays in `quietOwned`, so its repeats refresh and are
+   swallowed and its key-up is swallowed. Only its key-up, a fresh press, or
+   switching protection off ends ownership. The service routes such keys to
+   the machine even when nothing is in flight.
+6. Retry counter (Gemini 6, real). `QuitGuardTapRetry` resets the count once
+   a rebuilt tap has stayed enabled for 10 s. A tap that dies right after
+   each rebuild still backs off and stops after five tries.
+8. False "could not confirm" (Codex 9, Gemini 11, real). The post check and
+   its message are removed: unchanged title and count is always ambiguous
+   for tabbed apps. Nothing is said after a Command-W is sent.
+9. Option-Command-Q (Gemini 9). Rule unchanged. The settings line now shows
+   always and says Option-Command-Q is the confirm key for Quit in Extra
+   modifier mode and that it replaces Quit and Keep Windows.
+
+Regression checks: QuitGuardReviewTests sections 9 and 12 to 15, plus
+source guards in scripts/test-window-behavior.sh (no timeout on the system
+wide element, no "could not confirm", quiet keys routed to the machine,
+AXModal read, settings text).
+
+### Deviations
+- Item 7 (Gemini 8) disproved, no change. The Windows keyboard translation
+  rewrites flags only, never the key code (WindowsKeyboardService line 385),
+  so `keyState` on the physical key code is right. Dvorak and other layouts
+  change characters, not key codes. Modifier remaps in System Settings are
+  applied below the event system and show in the combined session state.
+  A tool that rewrites key codes inside its own event tap would make a hold
+  cancel, which is the safe direction.
+- Gemini 10's "hold longer than 10 s" only happened with key repeat turned
+  off in System Settings (otherwise repeats refresh ownership); Codex 8's
+  quiet gap then repeat was the real path. Both are fixed by item 5.
+- Focus changes are not observed directly (no public notification for the
+  system wide focused app); invalidation on every key plus the 1.5 s age
+  limit stands in. Accepted cost: a fast second Command-W into a Spotlight
+  style panel, or Command-W after holding Command over 1.5 s in one, is
+  protected (the HUD shows; a confirm then finds the front app no longer
+  owns focus and does nothing).
+- Items 1 to 6 and 8 share files, so they are one commit rather than one per
+  item; item 9 is its own commit.
+- An app whose windows never report a readable subrole and AXModal stays
+  "already asked" for that windowless stretch until it quits or relaunches.
+
+### Unverified
+- Whether Accessibility ever reports a helper process (Safari Web Content,
+  a plug-in) as the focused application. The family check only widens
+  "agrees", the safe direction. WebKit's shared helpers live outside the
+  app bundle and do not share its bundle id, so they would not match.
+- AXModal support in non AppKit windows (Java, some game engines); a missing
+  value is treated as a doubt.
+- No live run: the tap, the HUD and quit on close were not driven against
+  real apps in this pass.

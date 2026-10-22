@@ -396,8 +396,38 @@ nonisolated enum QuitOnCloseLogic {
     }
 }
 
+/// What a window an app shows after its quit request says about re-arming.
+nonisolated enum QuitOnCloseWindowKind: Int, Comparable {
+    /// A dialog, sheet, alert, panel, or a modal window of any subrole: the
+    /// app's own quit or save prompt looks like this, so it never re-arms.
+    case dialog
+    /// The subrole or the modal flag could not be read.
+    case unknown
+    /// Readable, not modal, and not a dialog or panel, but not a standard
+    /// window either (some apps draw their own window chrome).
+    case ordinary
+    /// A standard window that is not modal: a new work window.
+    case standard
+
+    static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+
+    static let dialogSubroles: Set<String> = [
+        "AXDialog", "AXSystemDialog", "AXFloatingWindow", "AXSystemFloatingWindow", "AXUnknown"
+    ]
+
+    /// `isModal` is the window's AXModal value, nil when it cannot be read.
+    /// Any doubt is `.unknown` or `.dialog`, neither of which re-arms.
+    static func classify(subrole: String?, isModal: Bool?) -> Self {
+        if isModal == true { return .dialog }
+        guard let subrole, !subrole.isEmpty else { return .unknown }
+        if dialogSubroles.contains(subrole) { return .dialog }
+        guard isModal == false else { return .unknown }
+        return subrole == "AXStandardWindow" ? .standard : .ordinary
+    }
+}
+
 /// One quit request per windowless stretch of an app. The record is set when
-/// the request goes out and cleared only once the app shows a standard
+/// the request goes out and cleared only once the app shows a new work
 /// window again, or quits.
 nonisolated struct QuitOnCloseEpisodes: Equatable {
     private(set) var quitSent: Set<Int32> = []
@@ -411,16 +441,22 @@ nonisolated struct QuitOnCloseEpisodes: Equatable {
         activatedSinceRequest.remove(pid)
     }
 
-    /// The user brought the app forward: whatever window it shows next
-    /// starts a fresh stretch, even one whose subrole is not standard.
+    /// The user brought the app forward. That alone never re-arms: the app
+    /// may only be showing its quit or save prompt. It lets an ordinary
+    /// (non standard, non dialog) window count as a new work window.
     mutating func activated(_ pid: Int32) {
         if quitSent.contains(pid) { activatedSinceRequest.insert(pid) }
     }
 
-    /// A dialog or panel does not end the stretch on its own; a standard
-    /// window does, and so does any window after the user activated the app.
-    mutating func sawWindow(of pid: Int32, isStandard: Bool) {
-        if isStandard || activatedSinceRequest.contains(pid) { forget(pid) }
+    /// `kind` is the strongest of the app's windows. A standard window ends
+    /// the stretch; an ordinary one does after the user activated the app; a
+    /// dialog, sheet, modal or unreadable window never does, activated or not.
+    mutating func sawWindow(of pid: Int32, kind: QuitOnCloseWindowKind) {
+        switch kind {
+        case .standard: forget(pid)
+        case .ordinary: if activatedSinceRequest.contains(pid) { forget(pid) }
+        case .dialog, .unknown: break
+        }
     }
 
     mutating func forget(_ pid: Int32) {
@@ -657,10 +693,22 @@ nonisolated struct QuitGuardStateMachine {
     private(set) var pending: Pending?
     /// Physical keys whose press was swallowed and whose release has not
     /// come yet, with the time each was last seen. Their repeats and release
-    /// are swallowed too. A key not seen for `ownershipTimeout` is dropped,
-    /// so a release missed while Secure Input was on cannot leave it stuck.
+    /// are swallowed too. A key not seen for `ownershipTimeout` stops being
+    /// in flight, so a release missed while Secure Input was on cannot leave
+    /// the guard busy, but it moves to `quietOwned` rather than being freed.
     private(set) var owned: [Int64: UInt64] = [:]
+    /// Owned keys that went quiet past the timeout. Not in flight any more,
+    /// yet a repeat of one still refreshes and is swallowed, and its release
+    /// is still swallowed: only its key-up or a fresh press ends ownership.
+    private(set) var quietOwned: Set<Int64> = []
     var ownedKeyCodes: Set<Int64> { Set(owned.keys) }
+
+    /// The key's press was held back and it has not come up yet, fresh or
+    /// quiet. The service routes such a key's repeats and release here even
+    /// when nothing is in flight.
+    func remembers(keyCode: Int64) -> Bool {
+        owned[keyCode] != nil || quietOwned.contains(keyCode)
+    }
     /// The tap was disabled and turned back on, so a press may have reached
     /// the app unseen. Until the next key-up or fresh press, a repeat of a
     /// protected shortcut with Command held is swallowed, never passed.
@@ -699,16 +747,21 @@ nonisolated struct QuitGuardStateMachine {
         mode: QuitGuardMode,
         target: Int32
     ) -> Decision {
-        prune(now: timestamp)
-        if owned[keyCode] != nil {
+        // This key's own ownership is checked before anything is pruned, so
+        // a repeat after a long quiet gap is still recognized as held back.
+        if remembers(keyCode: keyCode) {
             // Still held from a press that was swallowed.
             if isRepeat {
+                quietOwned.remove(keyCode)
                 owned[keyCode] = timestamp
+                prune(now: timestamp)
                 return .swallow
             }
             // A fresh press means the old release was missed; judge it anew.
             owned[keyCode] = nil
+            quietOwned.remove(keyCode)
         }
+        prune(now: timestamp)
         if isRecovering {
             if isRepeat {
                 // The press itself may have been missed while the tap was off.
@@ -781,10 +834,12 @@ nonisolated struct QuitGuardStateMachine {
     /// Matched by physical key, never by the character it types now: the
     /// input source can change between press and release.
     mutating func keyUp(keyCode: Int64, timestamp: UInt64? = nil) -> Decision {
+        let wasOwned = owned.removeValue(forKey: keyCode) != nil
+        let wasQuiet = quietOwned.remove(keyCode) != nil
         if let timestamp { prune(now: timestamp) }
         isRecovering = false
         recoveringSince = nil
-        guard owned.removeValue(forKey: keyCode) != nil else { return .pass }
+        guard wasOwned || wasQuiet else { return .pass }
         if let current = pending, current.keyCode == keyCode, current.mode == .hold {
             // Let go too early: nothing happens, and the release is swallowed.
             pending = nil
@@ -821,7 +876,10 @@ nonisolated struct QuitGuardStateMachine {
         pending = nil
         guard keyStillDown, commandStillDown else {
             // A key that is up has no release left to swallow.
-            if !keyStillDown { owned[current.keyCode] = nil }
+            if !keyStillDown {
+                owned[current.keyCode] = nil
+                quietOwned.remove(current.keyCode)
+            }
             return .cancel
         }
         confirmedSequence = sequence
@@ -840,6 +898,7 @@ nonisolated struct QuitGuardStateMachine {
     mutating func reset() {
         pending = nil
         owned.removeAll()
+        quietOwned.removeAll()
         isRecovering = false
         recoveringSince = nil
     }
@@ -854,10 +913,14 @@ nonisolated struct QuitGuardStateMachine {
         recoveringSince = nil
     }
 
-    /// Forgets owned keys and recovery that have gone quiet for longer than
-    /// `ownershipTimeout`.
+    /// Moves owned keys that have gone quiet for longer than
+    /// `ownershipTimeout` out of flight (see `quietOwned`), and ends a
+    /// recovery that went quiet as long.
     private mutating func prune(now: UInt64) {
-        owned = owned.filter { now < $0.value || now - $0.value <= Self.ownershipTimeout }
+        for (keyCode, seen) in owned where now >= seen && now - seen > Self.ownershipTimeout {
+            owned[keyCode] = nil
+            quietOwned.insert(keyCode)
+        }
         if isRecovering {
             if let since = recoveringSince {
                 if now >= since, now - since > Self.ownershipTimeout {
@@ -879,6 +942,113 @@ nonisolated struct QuitGuardStateMachine {
         nextSequence += 1
         owned[keyCode] = timestamp
         pending = Pending(key: key, keyCode: keyCode, mode: mode, timestamp: timestamp, target: target, sequence: nextSequence)
+    }
+}
+
+/// A process as quit protection sees it, for telling whether the app that
+/// owns keyboard focus is the app in front or one of its helpers.
+nonisolated struct QuitGuardProcess: Equatable {
+    var pid: Int32
+    var bundleIdentifier: String?
+    /// The bundle's folder on disk, nil for a bare executable.
+    var bundlePath: String?
+    var parentPid: Int32?
+
+    /// True when `self` (the focus owner) is `front` or belongs to it: its
+    /// child process, a bundle id under the front app's (com.x.App.helper
+    /// under com.x.App), or a bundle inside the front app's bundle (helper
+    /// apps in Contents/Frameworks). One way only: the front app is never
+    /// counted as part of a panel's family.
+    func belongs(to front: QuitGuardProcess) -> Bool {
+        if pid == front.pid { return true }
+        if let parentPid, parentPid == front.pid { return true }
+        if let mine = bundleIdentifier?.lowercased(), let theirs = front.bundleIdentifier?.lowercased(),
+           !theirs.isEmpty, mine.hasPrefix(theirs + ".") {
+            return true
+        }
+        if let mine = bundlePath, let theirs = front.bundlePath, !theirs.isEmpty {
+            let folder = theirs.hasSuffix("/") ? theirs : theirs + "/"
+            if mine.hasPrefix(folder) { return true }
+        }
+        return false
+    }
+}
+
+/// The cached answer to "which app owns keyboard focus", read off the tap.
+/// Protection steps aside only on a fresh, readable answer naming another
+/// app's family; anything stale, unknown or invalidated protects.
+nonisolated struct QuitGuardFocusCache: Equatable {
+    /// A read older than this is unknown. Keyboard focus can move without
+    /// any key event (a click dismissing a panel), so an old answer cannot
+    /// be trusted to still hold.
+    static let maxAge: UInt64 = 1_500_000_000
+
+    private(set) var owner: QuitGuardProcess?
+    private(set) var readAt: UInt64?
+    /// Bumped by every invalidation, so a read that started before it is
+    /// dropped when it lands.
+    private(set) var generation = 0
+
+    /// Focus may have moved: an app switch, a key that can dismiss a panel,
+    /// a modifier going down. The answer is unknown until read again.
+    mutating func invalidate() {
+        owner = nil
+        readAt = nil
+        generation += 1
+    }
+
+    /// Stores a read that started at `generation`. False when the read is
+    /// stale (an invalidation came in between) and was dropped.
+    @discardableResult
+    mutating func store(_ owner: QuitGuardProcess?, readAt: UInt64, startedAt generation: Int) -> Bool {
+        guard generation == self.generation else { return false }
+        self.owner = owner
+        self.readAt = readAt
+        return true
+    }
+
+    /// Whether keys should be treated as going somewhere other than `front`
+    /// (protection off). Only a fresh read of another family says so.
+    func stepsAside(front: QuitGuardProcess?, now: UInt64) -> Bool {
+        guard let front, let owner, let readAt, now >= readAt, now - readAt <= Self.maxAge else { return false }
+        return !owner.belongs(to: front)
+    }
+}
+
+/// How often a dead quit protection tap is rebuilt. The count resets only
+/// after a rebuilt tap has stayed up for `stableSeconds`, so recoveries
+/// spread over a long session never use the tries up, while a tap that
+/// dies as soon as it is built still backs off and stops.
+nonisolated struct QuitGuardTapRetry: Equatable {
+    static let maxRetries = 5
+    static let stableSeconds: TimeInterval = 10
+    static let quietResetSeconds: TimeInterval = 60
+
+    private(set) var count = 0
+    private(set) var lastRetry: TimeInterval?
+    private(set) var healthySince: TimeInterval?
+
+    /// The tap is confirmed enabled. Keeps the earliest time, so a settings
+    /// change that rechecks a healthy tap does not restart the clock.
+    mutating func confirmedEnabled(now: TimeInterval) {
+        if healthySince == nil { healthySince = now }
+    }
+
+    /// The tap died. Returns the delay before the next rebuild, or nil when
+    /// the tries are used up.
+    mutating func died(now: TimeInterval) -> TimeInterval? {
+        if let healthySince, now - healthySince >= Self.stableSeconds { count = 0 }
+        if let lastRetry, now - lastRetry > Self.quietResetSeconds { count = 0 }
+        healthySince = nil
+        guard count < Self.maxRetries else { return nil }
+        count += 1
+        lastRetry = now
+        return 0.5 * pow(2, Double(count - 1))
+    }
+
+    /// Protection was switched off: start over.
+    mutating func reset() {
+        self = QuitGuardTapRetry()
     }
 }
 
@@ -922,27 +1092,6 @@ nonisolated enum QuitGuardCloseCheck {
             case .noFocusedWindow, .unreadable: return .windowChanged
             }
         }
-    }
-
-    /// What can be seen of the target app before and after Command-W.
-    struct Snapshot: Equatable {
-        /// The window that was in front still exists.
-        var windowExists: Bool?
-        var windowTitle: String?
-        var windowCount: Int?
-        var focusedIsSameWindow: Bool?
-
-        var isBlank: Bool { windowExists == nil && windowTitle == nil && windowCount == nil }
-    }
-
-    /// True when Command-W visibly did something (a window or tab went, a
-    /// sheet asked to save), or when nothing could be read to tell. Only a
-    /// readable "nothing changed at all" is reported as unconfirmed.
-    static func looksHandled(before: Snapshot, after: Snapshot) -> Bool {
-        if before.isBlank || after.isBlank { return true }
-        if after.windowExists == false { return true }
-        if after.focusedIsSameWindow == false { return true }
-        return before.windowTitle != after.windowTitle || before.windowCount != after.windowCount
     }
 }
 

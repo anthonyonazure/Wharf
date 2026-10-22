@@ -91,6 +91,21 @@ if grep -n 'lineLimit(1)' "$GUARD"; then
     echo "FAIL: the HUD clips long app names"
     exit 1
 fi
+# Chunk 1 re-check: a timeout on the system wide element changes it for all
+# of Wharf; a Command-W whose effect cannot be seen is never called a
+# failure; the key-up of a long held key still reaches the machine; quit on
+# close never re-arms on a modal dialog.
+if grep -n 'SetMessagingTimeout(system' "$GUARD"; then
+    echo "FAIL: quit protection sets a timeout on the system wide element"
+    exit 1
+fi
+if grep -n 'could not confirm' "$GUARD"; then
+    echo "FAIL: quit protection reports an unseen Command-W as a failure"
+    exit 1
+fi
+grep -q 'machine.remembers(keyCode: keyCode)' "$GUARD" || { echo "FAIL: a quiet owned key is not routed to the machine"; exit 1; }
+grep -q 'kAXModalAttribute' "$ROOT/Docky/Services/QuitOnCloseService.swift" || { echo "FAIL: quit on close does not read the modal flag"; exit 1; }
+grep -q 'Quit and Keep Windows' "$ROOT/Docky/Views/SettingsWindow/WindowBehaviorSettingsView.swift" || { echo "FAIL: the settings text does not name Quit and Keep Windows"; exit 1; }
 for SERVICE in "$GUARD" "$ROOT/Docky/Services/QuitOnCloseService.swift"; do
     grep -q 'guard !started else { return }' "$SERVICE" || { echo "FAIL: start() is not idempotent in $SERVICE"; exit 1; }
 done

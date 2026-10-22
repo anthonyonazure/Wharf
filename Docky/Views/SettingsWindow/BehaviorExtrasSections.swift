@@ -39,7 +39,8 @@ struct WindowsKeyboardExtrasSections: View {
         Section {
             BundleIDListEditor(
                 bundleIDs: $preferences.windowsKeyboardExcludedBundleIDs,
-                emptyText: "No apps excluded. Control keeps its Windows meaning everywhere."
+                emptyText: "No apps excluded. Control keeps its Windows meaning everywhere.",
+                allowsExecutableNames: true
             )
 
             VStack(alignment: .leading, spacing: 4) {

@@ -250,15 +250,23 @@ final class WindowsKeyboardService {
         }
     }
 
+    /// Bundle ID, or the executable's name for an app without one, so such
+    /// an app can still be excluded. Matches what the Settings list stores.
+    private static func matchKey(for app: NSRunningApplication?) -> String? {
+        guard let app else { return nil }
+        return BundleIDList.matchKey(bundleID: app.bundleIdentifier,
+                                     executableName: app.executableURL?.lastPathComponent)
+    }
+
     private func observeFrontmostApplication() {
-        frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier.map(BundleIDList.normalized)
+        frontmostBundleID = Self.matchKey(for: NSWorkspace.shared.frontmostApplication)
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            self?.frontmostBundleID = app?.bundleIdentifier.map(BundleIDList.normalized)
+            self?.frontmostBundleID = Self.matchKey(for: app)
         }
     }
 

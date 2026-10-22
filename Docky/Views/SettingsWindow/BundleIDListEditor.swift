@@ -15,8 +15,14 @@ import UniformTypeIdentifiers
 struct BundleIDListEditor: View {
     @Binding var bundleIDs: [String]
     var emptyText = "No apps added."
+    /// Whether an app without a bundle ID may be added by its executable's
+    /// name. Only for lists whose service matches by that name too
+    /// (`BundleIDList.matchKey`); elsewhere such an entry would never match.
+    var allowsExecutableNames = false
 
     @State private var typedBundleID = ""
+    /// Why the last pick could not be added, shown until the next pick.
+    @State private var pickerMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -68,6 +74,13 @@ struct BundleIDListEditor: View {
                 Spacer()
             }
 
+            if let pickerMessage {
+                Text(pickerMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack {
                 TextField("Bundle ID, for example com.apple.Terminal", text: $typedBundleID)
                     .textFieldStyle(.roundedBorder)
@@ -110,7 +123,9 @@ struct BundleIDListEditor: View {
         return NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
             .compactMap { app -> (name: String, bundleID: String)? in
-                guard let id = app.bundleIdentifier else { return nil }
+                guard let id = app.bundleIdentifier
+                        ?? (allowsExecutableNames ? app.executableURL?.lastPathComponent : nil)
+                else { return nil }
                 let key = BundleIDList.normalized(id)
                 guard !listed.contains(key), seen.insert(key).inserted else { return nil }
                 return (app.localizedName ?? id, id)
@@ -124,10 +139,18 @@ struct BundleIDListEditor: View {
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.allowsMultipleSelection = false
         panel.prompt = "Add"
-        guard panel.runModal() == .OK,
-              let url = panel.url,
-              let identifier = Bundle(url: url)?.bundleIdentifier else { return }
-        add(identifier)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        pickerMessage = nil
+        let bundle = Bundle(url: url)
+        let name = FileManager.default.displayName(atPath: url.path)
+        if let identifier = bundle?.bundleIdentifier {
+            add(identifier)
+        } else if allowsExecutableNames, let executable = bundle?.executableURL?.lastPathComponent {
+            add(executable)
+            pickerMessage = "\(name) has no bundle ID, so it was added by its program name, \(executable)."
+        } else {
+            pickerMessage = "\(name) could not be added: it has no bundle ID for Wharf to match it by."
+        }
     }
 
     /// Friendly name, falling back to the bundle ID when the app is not

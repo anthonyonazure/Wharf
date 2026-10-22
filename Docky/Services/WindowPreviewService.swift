@@ -105,7 +105,40 @@ final class WindowPreviewService: ObservableObject {
     }
 
     func setContextMenuPresented(_ presented: Bool) {
+        let changed = isContextMenuPresented != presented
         isContextMenuPresented = presented
+        // Menus opened from the preview (Snap, a card's actions) hold it open
+        // while they track, then hand back to the pointer when they close.
+        if changed {
+            WindowPreviewWindowController.shared.contextMenuPresentationChanged(presented)
+        }
+    }
+
+    /// Drops a card once its window has really closed. Checked against the
+    /// live window list a few times, so a window held open by a save sheet
+    /// the user cancels keeps its card.
+    func removeWindowOnceClosed(_ window: AppWindow) {
+        let identifier = window.windowIdentifier
+        Task { @MainActor [weak self] in
+            var elapsed = 0.0
+            for delay in PreviewActionsPolicy.closeRecheckDelays {
+                try? await Task.sleep(for: .seconds(delay - elapsed))
+                elapsed = delay
+                guard let self, self.windows.contains(where: { $0.windowIdentifier == identifier }) else { return }
+                let live = WindowRegistry.shared.liveWindows(for: window.processIdentifier).map {
+                    (windowNumber: $0.cgWindowID, key: $0.windowIdentifier)
+                }
+                let stillOpen = PreviewActionsPolicy.isStillOpen(
+                    windowNumber: window.cgWindowID,
+                    key: identifier,
+                    live: live
+                )
+                if !stillOpen {
+                    self.removeWindow(withIdentifier: identifier)
+                    return
+                }
+            }
+        }
     }
 
     func windowPreview(for window: AppWindow) -> NSImage? {

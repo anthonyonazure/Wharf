@@ -38,6 +38,19 @@ nonisolated enum PreviewCardOutcome: Equatable {
     case keepCard
     /// The user is moving to the window; close the preview.
     case dismissPreview
+    /// The app accepted a close request but may still ask to save first;
+    /// keep the card until the window is really gone from the live list.
+    case removeCardOnceGone
+}
+
+/// What the preview does once a menu opened from it closes.
+nonisolated enum PreviewMenuCloseOutcome: Equatable {
+    /// The pointer is back over the preview; treat it as hovered.
+    case keepHovered
+    /// The pointer is over the dock; the tile's own hover decides.
+    case leaveToDock
+    /// The pointer is elsewhere; start the normal dismissal grace.
+    case requestDismiss
 }
 
 nonisolated struct PreviewActionsSettings: Equatable {
@@ -78,12 +91,46 @@ nonisolated enum PreviewActionsPolicy {
     /// and even then the card's dimmed look is not refreshed until the next
     /// hover, so it is dropped either way: a card that still looks live for a
     /// window that just left the screen reads as a failed click.
+    ///
+    /// Close only means the app took the request: a document with unsaved
+    /// changes shows a save sheet and stays open if the user cancels. Its
+    /// card goes once the window has left the live window list.
     static func outcome(after action: PreviewCardAction, succeeded: Bool) -> PreviewCardOutcome {
         guard succeeded else { return .keepCard }
         switch action {
-        case .close, .minimize: return .removeCard
+        case .close: return .removeCardOnceGone
+        case .minimize: return .removeCard
         case .restore, .snap: return .dismissPreview
         }
+    }
+
+    /// Delays, in seconds after the close request, at which the live window
+    /// list is checked. Most windows go within the first check; the later
+    /// ones catch slow apps. A window still listed after the last one is
+    /// waiting on the user, so its card stays.
+    static let closeRecheckDelays: [Double] = [0.25, 0.75, 1.5, 3]
+
+    /// Whether a window is still in the live list, matched by its window
+    /// server number when it has one, otherwise by its accessibility key.
+    static func isStillOpen(
+        windowNumber: UInt32?,
+        key: String,
+        live: [(windowNumber: UInt32?, key: String)]
+    ) -> Bool {
+        live.contains { entry in
+            if let windowNumber, let liveNumber = entry.windowNumber {
+                return windowNumber == liveNumber
+            }
+            return entry.key == key
+        }
+    }
+
+    /// What to do when a menu opened from the preview closes, given where
+    /// the pointer is now.
+    static func afterMenuCloses(pointerInPreview: Bool, pointerInDock: Bool) -> PreviewMenuCloseOutcome {
+        if pointerInPreview { return .keepHovered }
+        if pointerInDock { return .leaveToDock }
+        return .requestDismiss
     }
 }
 

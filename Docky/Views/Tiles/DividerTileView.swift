@@ -41,8 +41,10 @@ struct DividerTileView: View {
 
     private var dividerContextActions: [ContextAction] {
         [
-            .action(preferences.autohidesWindow ? "Turn Hiding Off" : "Turn Hiding On") {
-                preferences.autohidesWindow.toggle()
+            // Hiding and position act on this dock: its display's override
+            // when it has one, otherwise the global setting it follows.
+            .action(dock.resolvedAutohides ? "Turn Hiding Off" : "Turn Hiding On") { [dock] in
+                dock.setAutohides(!dock.resolvedAutohides)
             },
             .action(dockSettings.magnification ? "Turn Magnification Off" : "Turn Magnification On") {
                 dockSettings.setMagnification(!dockSettings.magnification)
@@ -78,9 +80,10 @@ struct DividerTileView: View {
     }
 
     private var positionActions: [ContextAction] {
-        DockWindowPosition.allCases.map { position in
-            .action(position.title, isOn: preferences.windowPosition == position) {
-                preferences.windowPosition = position
+        let current = dock.effectivePositionSetting
+        return DockWindowPosition.allCases.map { position in
+            .action(position.title, isOn: current == position) { [dock] in
+                dock.setPosition(position)
             }
         }
     }

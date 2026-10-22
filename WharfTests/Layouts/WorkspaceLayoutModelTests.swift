@@ -269,10 +269,19 @@ final class WorkspaceLayoutModelTests: LayoutTestCase {
 
     // MARK: - Display resolution for restore
 
-    func testPlacementWithoutDisplayUUIDKeepsStoredFrame() {
+    func testPlacementWithoutDisplayUUIDOffscreenIsClampedOntoMain() {
         let placement = makePlacement(frame: CGRect(x: -9000, y: -9000, width: 400, height: 300), display: nil)
         let resolved = WorkspaceLayoutService.resolvedFrame(for: placement, displays: [.primary], main: .primary)
-        XCTAssertEqual(resolved, placement.frame)
+        XCTAssertTrue(LayoutDisplay.primary.visibleFrame.contains(resolved))
+        XCTAssertEqual(resolved.size, placement.frame.size)
+    }
+
+    func testPlacementWithoutDisplayUUIDOnScreenKeepsStoredFrame() {
+        let visible = LayoutDisplay.primary.visibleFrame
+        let frame = CGRect(x: visible.minX + 10, y: visible.minY + 10, width: 400, height: 300)
+        let placement = makePlacement(frame: frame, display: nil)
+        let resolved = WorkspaceLayoutService.resolvedFrame(for: placement, displays: [.primary], main: .primary)
+        XCTAssertEqual(resolved, frame)
     }
 
     func testPlacementOnAttachedDisplayKeepsStoredFrameWhenInsideVisibleArea() {

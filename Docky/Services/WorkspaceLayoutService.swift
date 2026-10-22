@@ -397,7 +397,22 @@ final class WorkspaceLayoutService: ObservableObject {
         displays: [LayoutDisplay],
         main: LayoutDisplay?
     ) -> CGRect {
-        guard let uuid = placement.displayUUID else { return placement.frame }
+        guard let uuid = placement.displayUUID else {
+            // No display was recorded, usually because the window sat off
+            // every screen at capture. Keep the frame only when it is fully on
+            // a screen today; otherwise bring it onto the screen it overlaps
+            // most, or the main one, rather than replaying it off-screen.
+            if let overlapUUID = displayUUID(containing: placement.frame, in: displays),
+               let overlapping = displays.first(where: { $0.uuid == overlapUUID }) {
+                let visible = overlapping.visibleFrame
+                return visible.contains(placement.frame) ? placement.frame : clamp(placement.frame, into: visible)
+            }
+            if let overlapping = displays.first(where: { !$0.frame.intersection(placement.frame).isNull }) {
+                return clamp(placement.frame, into: overlapping.visibleFrame)
+            }
+            guard let fallback = main ?? displays.first else { return placement.frame }
+            return clamp(placement.frame, into: fallback.visibleFrame)
+        }
 
         if let attached = displays.first(where: { $0.uuid == uuid }) {
             // Attached is not the same as unmoved. Rearranging displays in

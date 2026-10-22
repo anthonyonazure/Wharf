@@ -31,23 +31,31 @@ enum LayoutMenuActions {
     }
 
     private static func submenuActions() -> [ContextAction] {
-        // Read when the submenu opens: holding Option while pointing at
-        // Layouts shows, and performs, the launching variant.
-        let launches = NSEvent.modifierFlags.contains(.option)
-        return rows().map { row in
+        // Each layout is a pair of native alternates, as in the menu bar
+        // item: AppKit swaps the row while Option is held, so the label the
+        // user clicks is always the action that runs.
+        rows().flatMap { row -> [ContextAction] in
             switch row {
             case .restore(let id, let title):
-                return .action(LayoutMenuModel.restoreTitle(title, launchesMissingApps: launches)) {
-                    restore(id: id, launchingMissingApps: launches || NSEvent.modifierFlags.contains(.option))
-                }
+                return [
+                    .action(LayoutMenuModel.restoreTitle(title, launchesMissingApps: false)) {
+                        restore(id: id, launchingMissingApps: false)
+                    },
+                    .action(
+                        LayoutMenuModel.restoreTitle(title, launchesMissingApps: true),
+                        alternateModifiers: .option
+                    ) {
+                        restore(id: id, launchingMissingApps: true)
+                    },
+                ]
             case .empty:
-                return .action(String(localized: "No Saved Layouts")) {}
+                return [.action(String(localized: "No Saved Layouts")) {}]
             case .divider:
-                return .divider
+                return [.divider]
             case .save:
-                return .action(String(localized: "Save Current Layout...")) { promptToSave() }
+                return [.action(String(localized: "Save Current Layout...")) { promptToSave() }]
             case .undo:
-                return .action(String(localized: "Undo Last Restore")) { service.undoLastRestore() }
+                return [.action(String(localized: "Undo Last Restore")) { service.undoLastRestore() }]
             }
         }
     }
@@ -131,7 +139,9 @@ enum LayoutMenuActions {
             guard alert.runModal() == .alertFirstButtonReturn,
                   let name = LayoutMenuModel.validatedName(field.stringValue) else { return }
 
-            if LayoutMenuModel.replacesExisting(name, existing: existing) {
+            // Names read again now: the alert is modal, and another save may
+            // have landed while it was open.
+            if LayoutMenuModel.replacesExisting(name, existing: service.layouts.map(\.name)) {
                 let confirm = NSAlert()
                 confirm.messageText = "Replace \u{201C}\(name)\u{201D}?"
                 confirm.informativeText = "A layout with this name already exists. Saving replaces it with the current arrangement."

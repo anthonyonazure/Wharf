@@ -169,4 +169,30 @@ enum PerScreenResolution {
         result.autohide = nil
         return result.isEmpty ? nil : result
     }
+
+    // MARK: - Editing from a dock's own menu
+
+    /// The override to store when the user picks an edge from a dock's own
+    /// menu, or nil when that dock follows the global settings and the
+    /// global edge is what should change. A theme or float offset alone does
+    /// not count as customized, matching the Displays section's toggle.
+    static func settingPosition(_ position: String, in existing: DisplayOverride?) -> DisplayOverride? {
+        guard var result = existing, result.hasDockSettings else { return nil }
+        result.position = position
+        return result
+    }
+
+    /// Same rule as `settingPosition`, for hiding.
+    static func settingAutohide(_ autohide: Bool, in existing: DisplayOverride?) -> DisplayOverride? {
+        guard var result = existing, result.hasDockSettings else { return nil }
+        result.autohide = autohide
+        return result
+    }
+
+    /// Whether magnified icons have room to grow on a dock: the peak size
+    /// must beat this dock's own resting size, which a per-display tile size
+    /// can make smaller (or larger) than the global one.
+    static func magnificationHasRoom(peakSize: Double, restingSize: Double) -> Bool {
+        peakSize > restingSize
+    }
 }

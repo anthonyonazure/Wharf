@@ -972,7 +972,13 @@ struct TileContainerView: View {
         guard dockSettings.magnification else { return false }
         guard !editMode.isActive else { return false }
         guard draggedTileID == nil else { return false }
-        guard dockSettings.largeSize > dockSettings.tileSize else { return false }
+        // Against this dock's own resting size, as the magnification model
+        // and MainWindow's headroom use, not the global tile size: a smaller
+        // per-display size still has room to grow.
+        guard PerScreenResolution.magnificationHasRoom(
+            peakSize: Double(dockSettings.largeSize),
+            restingSize: Double(effectiveTileSize)
+        ) else { return false }
         if preferences.overflowBehavior == .scroll {
             let canvasAxisLength = projected(size: layout.tileCanvasFrame.size)
             if canvasAxisLength > 0,

@@ -23,6 +23,7 @@ final class CommandBarWindowController: NSWindowController {
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     private var resignObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
     private let panelSize = NSSize(width: 640, height: 480)
 
     private init() {
@@ -112,6 +113,17 @@ final class CommandBarWindowController: NSWindowController {
         ) { [weak self] _ in
             self?.service.dismiss()
         }
+        // The panel never activates Wharf, so Command-Tab to another app does
+        // not make it resign key. Leaving the app the bar was opened over
+        // closes it, so keystrokes and commands never land somewhere else.
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            self?.service.applicationDidActivate(app)
+        }
     }
 
     private func removeMonitors() {
@@ -124,6 +136,10 @@ final class CommandBarWindowController: NSWindowController {
         if let resignObserver {
             NotificationCenter.default.removeObserver(resignObserver)
             self.resignObserver = nil
+        }
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+            self.activationObserver = nil
         }
     }
 }
@@ -161,12 +177,17 @@ private struct CommandBarView: View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 field
-                if !service.results.isEmpty || service.showsActions {
+                if !service.results.isEmpty || service.showsActions || service.statusMessage != nil {
                     Divider()
                     if service.showsActions, let result = service.selectedResult {
                         actionList(for: result)
-                    } else {
+                    } else if !service.results.isEmpty {
                         resultList
+                    }
+                    if let confirmation = service.pendingConfirmation {
+                        notice(confirmation.message + " Esc cancels.", symbol: "exclamationmark.triangle.fill", color: .red)
+                    } else if let status = service.statusMessage {
+                        notice(status, symbol: "exclamationmark.circle", color: .orange)
                     }
                     Divider()
                     footer
@@ -223,10 +244,25 @@ private struct CommandBarView: View {
             }
             .frame(maxHeight: 340)
             .onChange(of: service.selectedIndex) { index in
-                guard service.results.indices.contains(index) else { return }
+                guard let index, service.results.indices.contains(index) else { return }
                 proxy.scrollTo(service.results[index].id)
             }
         }
+    }
+
+    /// The confirmation a destructive command waits for, or why the last
+    /// choice did not run.
+    private func notice(_ text: String, symbol: String, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .foregroundStyle(color)
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     private func row(_ result: CommandBarResult, selected: Bool) -> some View {
@@ -245,6 +281,7 @@ private struct CommandBarView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(result.title)
                     .font(.system(size: 14, weight: result.kind == .calculation || result.kind == .conversion ? .semibold : .regular))
+                    .foregroundStyle(result.isDestructive ? Color.red : Color.primary)
                     .lineLimit(1)
                 Text(result.subtitle)
                     .font(.system(size: 11))
@@ -284,6 +321,7 @@ private struct CommandBarView: View {
                         .foregroundStyle(.secondary)
                     Text(action.title)
                         .font(.system(size: 14))
+                        .foregroundStyle(action.isDestructive ? Color.red : Color.primary)
                     Spacer()
                 }
                 .padding(.horizontal, 10)
@@ -302,7 +340,7 @@ private struct CommandBarView: View {
     private var footer: some View {
         HStack(spacing: 14) {
             Spacer()
-            hint("Return", service.showsActions ? "Run" : "Open")
+            hint("Return", service.pendingConfirmation != nil ? "Confirm" : service.showsActions ? "Run" : "Open")
             hint("Tab", service.showsActions ? "Back" : "Actions")
             hint("Esc", "Close")
         }

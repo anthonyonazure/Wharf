@@ -462,8 +462,14 @@ nonisolated struct CommandTapDetector {
         armedAt = nil
     }
 
+    /// Whether the last input was a release that only the hardware key check
+    /// stopped, for the status file. If that check ever counted Command
+    /// itself, every tap would end here.
+    private(set) var lastCancelledByHardwareKey = false
+
     /// True exactly when the input completes a lone tap.
     mutating func handle(_ input: Input) -> Bool {
+        lastCancelledByHardwareKey = false
         switch input {
         case .keyDown, .systemDefined, .mouseDown, .scrollWheel:
             armedAt = nil
@@ -486,6 +492,7 @@ nonisolated struct CommandTapDetector {
             }
             self.armedAt = nil
             if let lastOtherKeyAt, lastOtherKeyAt >= armedAt - Self.otherKeySlackSeconds {
+                lastCancelledByHardwareKey = true
                 return false
             }
             let held = time - armedAt

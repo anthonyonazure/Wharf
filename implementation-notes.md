@@ -1856,6 +1856,9 @@ bundle ID validation, executable-name match key.
   both readings and falls back to the old behavior when neither fits.
 - That `secondsSinceLastEventType(.hidSystemState, .keyDown)` never counts a
   modifier key. Modifier keys are flag changes at the HID layer, so it should
-  not; if it did, every tap would be cancelled (the safe failure).
+  not; if it did, every tap would be cancelled (the safe failure). To make
+  that visible, a tap stopped only by this check writes a line to
+  `wharf-keyboard-status.txt` (from a background queue, never the tap
+  thread): if every tap reports it, this assumption is wrong.
 - No live run of the tap, the snip in an excluded app or the Settings
   changes.

@@ -492,7 +492,15 @@ final class WindowsKeyboardService {
             guard type.rawValue == WinTapEvents.systemDefinedType else { return }
             input = .systemDefined
         }
-        guard winTapDetector.handle(input) else { return }
+        guard winTapDetector.handle(input) else {
+            if winTapDetector.lastCancelledByHardwareKey {
+                // Off the tap thread: file I/O has no place in the input path.
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    self?.writeStatus("ACTIVE: last Win key tap ignored because the hardware saw another key during the press (Command+Tab, Command+Space or a media key, for example).")
+                }
+            }
+            return
+        }
         DispatchQueue.main.async {
             switch action {
             case .startMenu: StartMenuService.shared.toggle()

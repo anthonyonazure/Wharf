@@ -401,6 +401,9 @@ private func testCommandTapReviewFixes() {
     _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10))
     expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.3, lastOtherKeyAt: 10.1)),
            "key seen by the hardware during the hold cancels")
+    expect(d.lastCancelledByHardwareKey, "cancel by hardware key is reported")
+    _ = d.handle(.keyDown)
+    expect(!d.lastCancelledByHardwareKey, "report clears on the next input")
     d = D()
     _ = d.handle(.flagsChanged(command: true, otherModifiers: false, time: 10))
     expect(!d.handle(.flagsChanged(command: false, otherModifiers: false, time: 10.3, lastOtherKeyAt: 9.98)),

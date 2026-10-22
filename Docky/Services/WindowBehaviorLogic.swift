@@ -65,9 +65,10 @@ nonisolated enum TrafficLightHitTest {
         button: TrafficLightButton,
         ownProcessID: Int32,
         rightToLeft: Bool = false,
+        ignoredWindowIDs: Set<UInt32> = [],
         pidIsEligible: (Int32) -> Bool = { _ in true }
     ) -> TrafficLightCandidate? {
-        guard let front = frontWindow(in: windows, at: point, ownProcessID: ownProcessID),
+        guard let front = frontWindow(in: windows, at: point, ownProcessID: ownProcessID, ignoredWindowIDs: ignoredWindowIDs),
               pidIsEligible(front.pid),
               contains(point, inTrafficLightAreaOf: front.frame, button: button, rightToLeft: rightToLeft)
         else { return nil }
@@ -78,15 +79,25 @@ nonisolated enum TrafficLightHitTest {
     /// is in front there. Only a fully transparent window is seen through.
     /// Menus, popovers, floating panels, small windows and Wharf's own windows
     /// all end the scan with nil: the click is theirs, never the window's
-    /// behind them.
+    /// behind them. `ignoredWindowIDs` are windows known to let clicks
+    /// through (Wharf's own panels that ignore the mouse); the window server
+    /// list does not say which windows do, so other apps' click-through
+    /// overlays still end the scan, and the click then goes to the app.
+    /// Bounds are the window frame without its shadow (checked against the
+    /// Accessibility frame of real windows), so no shadow margin is needed.
     static func frontWindow(
         in windows: [[String: Any]],
         at point: CGPoint,
-        ownProcessID: Int32
+        ownProcessID: Int32,
+        ignoredWindowIDs: Set<UInt32> = []
     ) -> TrafficLightCandidate? {
         for window in windows {
             guard let bounds = bounds(from: window), bounds.contains(point) else { continue }
             guard (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0 else { continue }
+            if let number = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+               ignoredWindowIDs.contains(number) {
+                continue
+            }
 
             guard let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue,
                   layer == 0,
@@ -226,6 +237,96 @@ nonisolated struct GreenButtonMoveThrottle {
     mutating func trailingRan(at now: TimeInterval) {
         lastRun = now
         trailingScheduled = false
+    }
+}
+
+/// What a green button action did to the window.
+nonisolated enum GreenButtonOutcome: Equatable {
+    /// The move or press went through.
+    case completed
+    /// Nothing changed: the click may go back to the app.
+    case noAction
+    /// The window changed but not as asked, or its frame could not be read
+    /// to tell. The click must not also reach the app.
+    case partialOrUnknown
+}
+
+extension GreenButtonLogic {
+    /// Sorts a snap result. A move that reports failure may still have
+    /// moved the window (position taken, size refused), so failure counts as
+    /// no action only when the frame is readable and unchanged.
+    static func outcome(succeeded: Bool, before: CGRect?, after: CGRect?, tolerance: CGFloat = 1) -> GreenButtonOutcome {
+        if succeeded { return .completed }
+        guard let before, let after else { return .partialOrUnknown }
+        let unchanged = abs(before.minX - after.minX) <= tolerance
+            && abs(before.minY - after.minY) <= tolerance
+            && abs(before.width - after.width) <= tolerance
+            && abs(before.height - after.height) <= tolerance
+        return unchanged ? .noAction : .partialOrUnknown
+    }
+
+    /// A held back click goes back only to the exact window and control it
+    /// was aimed at: that window still in front at the point, at the same
+    /// place and size, and Accessibility still finding the green button
+    /// there. Anything else cancels the click.
+    static func mayReplay(
+        frontWindowID: UInt32?,
+        frontBounds: CGRect?,
+        targetWindowID: UInt32,
+        targetBounds: CGRect,
+        hitIsOnButton: Bool,
+        tolerance: CGFloat = 1
+    ) -> Bool {
+        guard hitIsOnButton, frontWindowID == targetWindowID, let frontBounds else { return false }
+        return abs(frontBounds.minX - targetBounds.minX) <= tolerance
+            && abs(frontBounds.minY - targetBounds.minY) <= tolerance
+            && abs(frontBounds.width - targetBounds.width) <= tolerance
+            && abs(frontBounds.height - targetBounds.height) <= tolerance
+    }
+
+    /// Whether work started for a click may still act: the feature has not
+    /// been switched off or its tap rebuilt (`generation`), and no newer
+    /// press has arrived since (`serial`).
+    static func isCurrent(clickGeneration: Int, clickSerial: Int, generation: Int, serial: Int, enabled: Bool) -> Bool {
+        enabled && clickGeneration == generation && clickSerial == serial
+    }
+}
+
+/// A second, independent guard against Wharf swallowing its own replayed
+/// click, next to the event marker: each replay leaves a short lived token
+/// at its point, and a press that matches one passes untouched. Each press
+/// may be replayed at most once, and a burst of replays stops replaying
+/// altogether, so a loop cannot form even if both guards failed.
+nonisolated struct GreenButtonReplayGuard {
+    static let tokenLifetime: TimeInterval = 0.5
+    static let matchDistance: CGFloat = 2
+    static let burstWindow: TimeInterval = 2
+    static let burstLimit = 4
+
+    private var tokens: [(point: CGPoint, time: TimeInterval)] = []
+    private var recent: [TimeInterval] = []
+    private var lastReplayedSerial: Int?
+
+    /// Call right before posting a replay. False means do not post.
+    mutating func shouldReplay(serial: Int, point: CGPoint, now: TimeInterval) -> Bool {
+        guard serial != lastReplayedSerial else { return false }
+        recent.removeAll { now - $0 > Self.burstWindow }
+        guard recent.count < Self.burstLimit else { return false }
+        recent.append(now)
+        lastReplayedSerial = serial
+        tokens.removeAll { now - $0.time > Self.tokenLifetime }
+        tokens.append((point, now))
+        return true
+    }
+
+    /// Whether a press is one Wharf just replayed. A match spends its token.
+    mutating func isOwnReplay(point: CGPoint, now: TimeInterval) -> Bool {
+        tokens.removeAll { now - $0.time > Self.tokenLifetime }
+        guard let index = tokens.firstIndex(where: {
+            abs($0.point.x - point.x) <= Self.matchDistance && abs($0.point.y - point.y) <= Self.matchDistance
+        }) else { return false }
+        tokens.remove(at: index)
+        return true
     }
 }
 

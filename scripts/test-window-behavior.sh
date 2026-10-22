@@ -44,13 +44,43 @@ if grep -n 'AXUIElementCreateSystemWide' "$GREEN"; then
     echo "FAIL: the green button uses the system wide Accessibility element"
     exit 1
 fi
-# A click the green button held back must go back to the app when Wharf does
-# nothing with it: every give-up path calls replay.
-REPLAYS=$(grep -c 'replay(click, release: release)' "$GREEN")
-if [ "$REPLAYS" -lt 5 ]; then
-    echo "FAIL: expected the held click to be replayed on every give-up path, found $REPLAYS"
+# Chunk 1 re-check (green button). The pure decisions, as their own program.
+xcrun swiftc -O \
+    "$ROOT/Docky/Services/WindowBehaviorLogic.swift" \
+    "$ROOT/Tests/WindowBehavior/GreenButtonReviewTests.swift" \
+    -o "$OUT-green-review"
+"$OUT-green-review"
+# A held back click goes back only to its exact window and button: replay
+# and the hold path both go through the gate and the replay guard.
+awk '/private func replay\(_ click/,/private func isMaximized/' "$GREEN" > "$OUT.replay"
+grep -q 'GreenButtonLogic.mayReplay' "$OUT.replay" || { echo "FAIL: replay does not check the original target"; exit 1; }
+grep -q 'hitIsOnButton' "$OUT.replay" || { echo "FAIL: replay does not recheck the button"; exit 1; }
+grep -q 'replayGuard.shouldReplay' "$OUT.replay" || { echo "FAIL: replay is not capped"; exit 1; }
+awk '/private func holdElapsed/,/private static func markReplay/' "$GREEN" > "$OUT.hold"
+grep -q 'GreenButtonLogic.mayReplay' "$OUT.hold" || { echo "FAIL: the hold replay does not check the original window"; exit 1; }
+grep -q 'replayGuard.shouldReplay' "$OUT.hold" || { echo "FAIL: the hold replay is not capped"; exit 1; }
+# A click whose window changed under it is canceled, never replayed.
+awk '/case \.missed:/,/case \.blocked:/' "$GREEN" | grep -v 'case \.blocked' > "$OUT.missed"
+[ -s "$OUT.missed" ] || { echo "FAIL: the missed branch was not found"; exit 1; }
+if grep -n 'replay(' "$OUT.missed"; then
+    echo "FAIL: a missed click is replayed onto whatever is there now"
     exit 1
 fi
+# A partial move is neither replayed nor followed by a native press.
+awk '/case \.partialOrUnknown:/,/case \.noAction:/' "$GREEN" | grep -v 'case \.noAction' > "$OUT.partial"
+[ -s "$OUT.partial" ] || { echo "FAIL: the partial move branch was not found"; exit 1; }
+if grep -nE 'replay\(|press\(click' "$OUT.partial"; then
+    echo "FAIL: a partial move is followed by another click"
+    exit 1
+fi
+# The tap recognizes its own replays a second way, and late work checks
+# the generation and serial.
+grep -q 'replayGuard.isOwnReplay' "$OUT.handle" || { echo "FAIL: the tap has no second replay guard"; exit 1; }
+[ "$(grep -c 'guard isCurrent(click)' "$GREEN")" -ge 3 ] || { echo "FAIL: late green button work is not checked"; exit 1; }
+# The native button press runs on a lookup queue, in one place only.
+[ "$(grep -c 'AXUIElementPerformAction' "$GREEN")" -eq 1 ] || { echo "FAIL: the native press is called in more than one place"; exit 1; }
+awk '/private func press\(_ click/,/private func replay\(_ click/' "$GREEN" | grep -q 'lookUpQueue(for:' \
+    || { echo "FAIL: the native press is not on a lookup queue"; exit 1; }
 # Chunk 1 review fixes in the quit services: the hold rechecks the physical
 # key, a dead tap is noticed and rebuilt, the focus owner is checked, the
 # HUD text wraps, and start() runs once.

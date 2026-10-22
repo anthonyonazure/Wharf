@@ -25,17 +25,24 @@
 //  The press and release of a click are kept together by
 //  GreenButtonPairTracker. Holding the button down hands the press back to
 //  the app after a moment, so the macOS tiling menu still opens on a hold.
-//  When Wharf ends up doing nothing with a click it held back (the check
-//  failed, the button is disabled, the move failed), the press and release
-//  are handed back to the app: a held click is never dropped.
+//  When Wharf ends up doing nothing with a click it held back (the button
+//  is disabled, a sheet blocks the window, the move changed nothing), the
+//  press and release are handed back, but only to the exact window and
+//  button they were aimed at: that window still in front at the point,
+//  unmoved, and Accessibility still finding the green button there. When
+//  that cannot be confirmed (another window came in front, the window
+//  moved, a newer click arrived, the feature was switched off, or a move
+//  half happened) the click is canceled quietly instead: a lost click is
+//  a nuisance, a click landing on something else can do damage.
 //
 //  Threads: the tap and the decisions run on main. Accessibility questions
 //  this file asks itself (the lookup, the hit test, the enabled and sheet
-//  checks, the window frame) run on a queue per app, each element bounded by
-//  a short messaging timeout, so one hung app holds up neither main nor the
-//  other apps. Focus, full screen and the snap move go through
-//  WindowRegistry and WindowSnapService, which are main actor services; those
-//  calls stay on main.
+//  checks, the window frame, the native button press) run on a queue per
+//  app, each element bounded by a short messaging timeout, so one hung app
+//  holds up neither main nor the other apps. Focus, full screen and the snap
+//  move go through WindowRegistry and WindowSnapService, which are main
+//  actor services; those calls stay on main, bounded by the registry's own
+//  timeout.
 //
 
 import AppKit
@@ -61,6 +68,10 @@ final class GreenButtonMaximizeService {
     /// Counts real presses, so a click handed back late never lands after a
     /// newer press the app already has.
     private var pressSerial = 0
+    /// Bumped when the tap is built or removed, the settings change, or
+    /// events may have been missed: work started before then is dropped.
+    private var generation = 0
+    private var replayGuard = GreenButtonReplayGuard()
     /// A press passed to the app was dragged: probably a window move, after
     /// which the cache is refilled where the pointer let go.
     private var sawPassedDrag = false
@@ -118,6 +129,7 @@ final class GreenButtonMaximizeService {
     private struct PendingClick {
         let token: Int
         let serial: Int
+        let generation: Int
         let target: ZoomTarget
         let point: CGPoint
         let action: GreenButtonAction
@@ -131,6 +143,7 @@ final class GreenButtonMaximizeService {
             _ = WindowBehaviorPreferences.shared.maximizeEnabled
             _ = WindowBehaviorPreferences.shared.maximizeExceptions
             self?.cache.removeAll()
+            self?.generation += 1
             self?.syncTapState()
         }
         .store(in: &cancellables)
@@ -152,6 +165,7 @@ final class GreenButtonMaximizeService {
 
     private func installTap() {
         guard tap == nil else { return }
+        generation += 1
         // Apps follow the user's first language, so its writing direction
         // says which corner the traffic lights sit in.
         rightToLeft = Locale.Language(identifier: Locale.preferredLanguages.first ?? "en").characterDirection == .rightToLeft
@@ -201,8 +215,9 @@ final class GreenButtonMaximizeService {
     }
 
     /// Events may have passed unseen: forget the held press so its release
-    /// goes through, and drop the pending action.
+    /// goes through, and drop the pending action and any work in flight.
     private func interrupt() {
+        generation += 1
         pair.interrupted()
         sawPassedDrag = false
         clearPending()
@@ -219,11 +234,21 @@ final class GreenButtonMaximizeService {
             return Unmanaged.passUnretained(event)
         }
         if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker {
+            // Spend the replay's token too, so it cannot let a real press by.
+            if type == .leftMouseDown {
+                _ = replayGuard.isOwnReplay(point: event.location, now: ProcessInfo.processInfo.systemUptime)
+            }
             return Unmanaged.passUnretained(event)
         }
 
         switch type {
         case .leftMouseDown:
+            // The marker above is known to survive a post at the HID level;
+            // this token check is a second, independent way to recognize a
+            // press Wharf just replayed, so it is never swallowed again.
+            if replayGuard.isOwnReplay(point: event.location, now: ProcessInfo.processInfo.systemUptime) {
+                return Unmanaged.passUnretained(event)
+            }
             pressSerial += 1
             pair.pressPassed()
             clearPending()
@@ -242,7 +267,8 @@ final class GreenButtonMaximizeService {
 
             let token = pair.pressSwallowed()
             pendingClick = PendingClick(
-                token: token, serial: pressSerial, target: target, point: event.location, action: action, press: press
+                token: token, serial: pressSerial, generation: generation,
+                target: target, point: event.location, action: action, press: press
             )
             let work = DispatchWorkItem { [weak self] in self?.holdElapsed(token: token) }
             holdWork = work
@@ -305,7 +331,8 @@ final class GreenButtonMaximizeService {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
         guard let candidate = TrafficLightHitTest.candidate(
-            in: windows, at: point, button: .zoom, ownProcessID: getpid(), rightToLeft: rightToLeft
+            in: windows, at: point, button: .zoom, ownProcessID: getpid(), rightToLeft: rightToLeft,
+            ignoredWindowIDs: Self.ownClickThroughWindowIDs()
         ) else { return nil }
         guard let target = cache[candidate.windowID],
               target.isUsable,
@@ -326,12 +353,47 @@ final class GreenButtonMaximizeService {
     private func holdElapsed(token: Int) {
         guard pair.holdElapsed(token: token) == .replayPress else { return }
         // Held down: the user wants the app's own hold (the tiling menu).
-        // Hand the press back where it happened; its release will follow.
-        if let press = pendingClick?.press {
-            press.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
-            press.post(tap: .cghidEventTap)
+        // Hand the press back where it happened, only while the same window
+        // is still in front there, unmoved; its release will follow. Within
+        // the hold time the button was just confirmed by the cache, so the
+        // window server check is enough here and main asks no Accessibility.
+        if let click = pendingClick {
+            let front = Self.frontWindow(at: click.point, ignoring: Self.ownClickThroughWindowIDs())
+            if GreenButtonLogic.mayReplay(
+                frontWindowID: front?.windowID, frontBounds: front?.frame,
+                targetWindowID: click.target.windowID, targetBounds: click.target.windowBounds,
+                hitIsOnButton: true
+            ), replayGuard.shouldReplay(serial: click.serial, point: click.point, now: ProcessInfo.processInfo.systemUptime) {
+                Self.markReplay(click.press)
+                click.press.post(tap: .cghidEventTap)
+            } else {
+                NSLog("[Wharf] Green button maximize: the window changed during a hold; the press was not handed back")
+            }
         }
         clearPending()
+    }
+
+    /// Marks a replayed event so the tap lets it by, and makes it a single
+    /// click: the app may never have seen the press before it, and a stale
+    /// double click count would turn a click on a disabled button into a
+    /// title bar double click.
+    nonisolated private static func markReplay(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: syntheticMarker)
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+    }
+
+    /// Wharf's own windows that let clicks through (the quit protection HUD,
+    /// any overlay panel). The window server list cannot tell, so the hit
+    /// test is told. In-process AppKit only, no Accessibility.
+    private static func ownClickThroughWindowIDs() -> Set<UInt32> {
+        Set(NSApp.windows.filter { $0.ignoresMouseEvents && $0.windowNumber > 0 }.map { UInt32($0.windowNumber) })
+    }
+
+    /// The ordinary window in front at `point`, from the window server.
+    nonisolated private static func frontWindow(at point: CGPoint, ignoring ignored: Set<UInt32>) -> TrafficLightCandidate? {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        return TrafficLightHitTest.frontWindow(in: windows, at: point, ownProcessID: getpid(), ignoredWindowIDs: ignored)
     }
 
     private func clearPending() {
@@ -385,9 +447,11 @@ final class GreenButtonMaximizeService {
             as? [[String: Any]] ?? []
         let ownPID = getpid()
         titleBarFrames = TrafficLightHitTest.titleBarWindowFrames(in: windows, ownProcessID: ownPID)
+        let ignored = Self.ownClickThroughWindowIDs()
         let found = wholeWindow
-            ? TrafficLightHitTest.frontWindow(in: windows, at: point, ownProcessID: ownPID)
-            : TrafficLightHitTest.candidate(in: windows, at: point, button: .zoom, ownProcessID: ownPID, rightToLeft: rightToLeft)
+            ? TrafficLightHitTest.frontWindow(in: windows, at: point, ownProcessID: ownPID, ignoredWindowIDs: ignored)
+            : TrafficLightHitTest.candidate(in: windows, at: point, button: .zoom, ownProcessID: ownPID,
+                                            rightToLeft: rightToLeft, ignoredWindowIDs: ignored)
         guard let candidate = found else { return }
         if let cached = cache[candidate.windowID],
            Self.sameRect(cached.windowBounds, candidate.frame),
@@ -485,7 +549,8 @@ final class GreenButtonMaximizeService {
     /// What the checks right before acting found, read on the app's lookup
     /// queue.
     nonisolated private enum Preflight {
-        /// The press did not land on the green button after all.
+        /// Another window is in front at the point now, or Accessibility no
+        /// longer finds the green button there: the click is canceled.
         case missed
         /// The button is disabled, or a sheet or modal panel blocks the
         /// window: the app decides what the click does.
@@ -493,29 +558,48 @@ final class GreenButtonMaximizeService {
         case clear(isMainWindow: Bool, frame: CGRect?)
     }
 
+    /// Work for a click may go on only while the feature is on, its tap is
+    /// the one the click came through, and no newer press has arrived. A
+    /// rapid double click therefore drops the first click's pending work and
+    /// lets the second click act alone: one toggle, never a click landing
+    /// inside the newer one.
+    private func isCurrent(_ click: PendingClick) -> Bool {
+        GreenButtonLogic.isCurrent(
+            clickGeneration: click.generation, clickSerial: click.serial,
+            generation: generation, serial: pressSerial,
+            enabled: tap != nil && preferences.maximizeEnabled
+        )
+    }
+
+    /// Drops a held back click without handing it to anything.
+    private func cancel(_ reason: String) {
+        NSLog("[Wharf] Green button maximize: click canceled, %@", reason)
+    }
+
     private func perform(_ click: PendingClick, release: CGEvent?) {
-        guard let button = click.target.button else {
-            replay(click, release: release)
-            return
-        }
+        guard isCurrent(click) else { return cancel("a newer click or a settings change came first") }
+        guard let button = click.target.button else { return cancel("there is no button to check it against") }
         let target = click.target
         let point = click.point
+        // Read on main: AppKit's window list is not for other threads.
+        let ignored = Self.ownClickThroughWindowIDs()
         lookUpQueue(for: target.pid).async { [weak self] in
-            let preflight = Self.preflight(pid: target.pid, windowID: target.windowID, button: button, greenButtons: target.greenButtons, at: point)
+            let preflight = Self.preflight(pid: target.pid, windowID: target.windowID, button: button,
+                                           greenButtons: target.greenButtons, at: point, ignoring: ignored)
             DispatchQueue.main.async { self?.act(on: click, release: release, preflight: preflight) }
         }
     }
 
     private func act(on click: PendingClick, release: CGEvent?, preflight: Preflight) {
+        guard isCurrent(click) else { return cancel("a newer click or a settings change came first") }
         let isMainWindow: Bool
         let axFrame: CGRect?
         switch preflight {
         case .missed:
-            // The window changed under the click: forget the answer and give
-            // the click to whatever is there now.
+            // The window changed under the click: forget the answer, and do
+            // not hand the click to whatever is there now.
             cache[click.target.windowID] = nil
-            replay(click, release: release)
-            return
+            return cancel("the window or button under it changed")
         case .blocked:
             replay(click, release: release)
             return
@@ -528,9 +612,13 @@ final class GreenButtonMaximizeService {
         guard let window = registry.liveWindows(for: click.target.pid)
                 .first(where: { $0.cgWindowID == click.target.windowID })
         else {
-            if !pressNatively(click) { replay(click, release: release) }
+            press(click, allowFullScreenButton: click.action == .nativeFullScreen, release: release)
             return
         }
+
+        // Right before changing anything, the window is still where the
+        // click found it.
+        guard windowIsUnchanged(click) else { return cancel("the window moved before Wharf acted") }
 
         // A green button click on a window behind others brings it forward,
         // as a click on any part of a window does, also when its app is
@@ -539,59 +627,120 @@ final class GreenButtonMaximizeService {
             registry.focus(window)
         }
 
-        let handled: Bool
         switch click.action {
         case .passThrough:
-            handled = false
+            replay(click, release: release)
         case .nativeFullScreen:
-            // Option asked for the real full screen, so pressing either kind
-            // of green button is fine here.
             if registry.setFullscreen(window, fullscreen: true) {
-                handled = true
-            } else if let button = click.target.button {
-                handled = AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
+                finished(click)
             } else {
-                handled = false
+                // Option asked for the real full screen, so pressing either
+                // kind of green button is fine here.
+                press(click, allowFullScreenButton: true, release: release)
             }
         case .toggleMaximize:
-            let snap = WindowSnapService.shared
-            if isMaximized(window, axFrame: axFrame) {
-                // Nothing to restore (maximized some other way): the click
-                // goes back to the app, as if Wharf were not there.
-                handled = snap.perform(.restore, on: window)
-            } else {
-                handled = snap.perform(.maximize, on: window) || pressNatively(click)
+            let before = axFrame ?? registry.liveFrame(of: window)
+            let restoring = isMaximized(window, axFrame: axFrame)
+            let succeeded = WindowSnapService.shared.perform(restoring ? .restore : .maximize, on: window)
+            let after = succeeded ? nil : registry.liveFrame(of: window)
+            switch GreenButtonLogic.outcome(succeeded: succeeded, before: before, after: after) {
+            case .completed:
+                finished(click)
+            case .partialOrUnknown:
+                // The window moved but not all the way (an app refusing the
+                // size), or its frame could not be read: the click is spent.
+                // A native press or a replay on top would act twice.
+                cancel("the window only partly moved")
+                finished(click)
+            case .noAction:
+                if restoring {
+                    // Nothing to restore (maximized some other way): the
+                    // click goes back to the app, as if Wharf were not there.
+                    replay(click, release: release)
+                } else {
+                    press(click, allowFullScreenButton: false, release: release)
+                }
             }
-        }
-
-        guard handled else {
-            replay(click, release: release)
-            return
-        }
-        // The window moved: keep its answer in step right away, and again
-        // once any animation has settled.
-        let target = click.target
-        followMove(of: target)
-        for delay in [0.15, 0.6] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.followMove(of: target) }
         }
     }
 
-    /// Hands a held back click to the app, press then release, marked so the
-    /// tap lets both by. Skipped when the user has pressed again since: the
-    /// old click would land inside the newer one and split its pair.
-    private func replay(_ click: PendingClick, release: CGEvent?) {
-        guard click.serial == pressSerial else {
-            NSLog("[Wharf] Green button maximize: a newer press arrived; the held click was not handed back")
+    /// The window still has the frame the click was aimed at.
+    private func windowIsUnchanged(_ click: PendingClick) -> Bool {
+        guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], click.target.windowID) as? [[String: Any]])?.first,
+              let bounds = TrafficLightHitTest.bounds(from: info)
+        else { return false }
+        return Self.sameRect(bounds, click.target.windowBounds)
+    }
+
+    /// The window moved: keep its answer in step right away, and again once
+    /// any animation has settled, unless the feature went off meanwhile.
+    private func finished(_ click: PendingClick) {
+        let target = click.target
+        let started = generation
+        followMove(of: target)
+        for delay in [0.15, 0.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.generation == started else { return }
+                self.followMove(of: target)
+            }
+        }
+    }
+
+    /// Presses the green button for the app, on its lookup queue so a hung
+    /// app cannot stall main. Only the classic zoom button, unless
+    /// `allowFullScreenButton` (Option asked for full screen). A press the
+    /// app refused changed nothing, so the click goes back to it; a press
+    /// that timed out may still have happened, so the click is spent.
+    private func press(_ click: PendingClick, allowFullScreenButton: Bool, release: CGEvent?) {
+        guard allowFullScreenButton || click.target.allowsNativeFallback, let button = click.target.button else {
+            replay(click, release: release)
             return
         }
-        let up = release ?? CGEvent(
-            mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: click.point, mouseButton: .left
-        )
-        click.press.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
-        up?.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
-        click.press.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        lookUpQueue(for: click.target.pid).async { [weak self] in
+            let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success: self.finished(click)
+                case .cannotComplete: self.cancel("the app did not answer the button press in time")
+                default: self.replay(click, release: release)
+                }
+            }
+        }
+    }
+
+    /// Hands a held back click to the app, press then release, only onto
+    /// the exact window and button it was aimed at; anything else cancels
+    /// it. Accessibility confirms the button on the app's queue, then the
+    /// window server confirms the window on main right before posting. The
+    /// replay guard allows one replay per press and recognizes the replay
+    /// when it comes back through the tap.
+    private func replay(_ click: PendingClick, release: CGEvent?) {
+        guard isCurrent(click) else { return cancel("a newer press arrived before it could be handed back") }
+        let target = click.target
+        let point = click.point
+        lookUpQueue(for: target.pid).async { [weak self] in
+            let onButton = Self.hitIsOnButton(pid: target.pid, buttons: target.greenButtons, at: point)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard self.isCurrent(click) else { return self.cancel("a newer press arrived before it could be handed back") }
+                let front = Self.frontWindow(at: point, ignoring: Self.ownClickThroughWindowIDs())
+                guard GreenButtonLogic.mayReplay(
+                    frontWindowID: front?.windowID, frontBounds: front?.frame,
+                    targetWindowID: target.windowID, targetBounds: target.windowBounds,
+                    hitIsOnButton: onButton
+                ) else { return self.cancel("the window or button under it changed") }
+                guard self.replayGuard.shouldReplay(serial: click.serial, point: point, now: ProcessInfo.processInfo.systemUptime)
+                else { return self.cancel("it was already handed back once") }
+                let up = release ?? CGEvent(
+                    mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left
+                )
+                Self.markReplay(click.press)
+                if let up { Self.markReplay(up) }
+                click.press.post(tap: .cghidEventTap)
+                up?.post(tap: .cghidEventTap)
+            }
+        }
     }
 
     /// Whether the window already sits on the Maximize rectangle. Worked out
@@ -614,13 +763,6 @@ final class GreenButtonMaximizeService {
         return GreenButtonLogic.isMaximized(current, target: target)
     }
 
-    /// Presses the classic zoom button for the app. False when there is no
-    /// such button or the press failed.
-    private func pressNatively(_ click: PendingClick) -> Bool {
-        guard click.target.allowsNativeFallback, let button = click.target.button else { return false }
-        return AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
-    }
-
     // MARK: - Accessibility helpers (never called from the tap)
 
     /// The checks right before acting: the click is on the green button, the
@@ -631,13 +773,14 @@ final class GreenButtonMaximizeService {
         windowID: CGWindowID,
         button: AXUIElement,
         greenButtons: [AXUIElement],
-        at point: CGPoint
+        at point: CGPoint,
+        ignoring ignored: Set<UInt32>
     ) -> Preflight {
         // The app scoped hit test below cannot see another app's window
         // that came in front since the press; the window server can.
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
-        guard TrafficLightHitTest.frontWindow(in: windows, at: point, ownProcessID: getpid())?.windowID == windowID,
+        guard TrafficLightHitTest.frontWindow(in: windows, at: point, ownProcessID: getpid(), ignoredWindowIDs: ignored)?.windowID == windowID,
               hitIsOnButton(pid: pid, buttons: greenButtons, at: point)
         else { return .missed }
         guard boolAttribute(button, kAXEnabledAttribute as String, default: true) else { return .blocked }

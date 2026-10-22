@@ -181,10 +181,32 @@ nonisolated enum HoverWindowScan {
         return windows.first { $0.layer < cursorLayer && $0.bounds.contains(point) }
     }
 
-    /// True while any menu is open anywhere: the menu bar, a context menu or
-    /// a pop-up button. Raising a window then would close the menu.
-    static func isMenuOpen(in windows: [HoverWindowInfo]) -> Bool {
-        windows.contains { $0.layer == popUpMenuLayer }
+    /// True while another app shows a menu: the menu bar, a context menu, a
+    /// pop-up button or a menu bar extra. Raising a window then would close
+    /// the menu. A window at the menu level counts only when its owner is one
+    /// that shows menus (`menuOwnerPIDs`: the frontmost app and background
+    /// or accessory apps such as menu bar extras), never Wharf itself
+    /// (`ownPID`): Wharf's own menus are known from its menu tracking
+    /// instead, so its panels cannot block hover focus. Nil `menuOwnerPIDs`
+    /// accepts any owner.
+    static func isMenuOpen(in windows: [HoverWindowInfo], ownPID: pid_t = 0,
+                           menuOwnerPIDs: Set<pid_t>? = nil) -> Bool {
+        windows.contains { window in
+            window.layer == popUpMenuLayer
+                && window.ownerPID != ownPID
+                && (menuOwnerPIDs?.contains(window.ownerPID) ?? true)
+        }
+    }
+
+    /// True when the frontmost app shows an ordinary window that covers a
+    /// whole display, the way a full-screen app or game does. `displayBounds`
+    /// are in the same top-left global coordinates as the window list.
+    static func isFullScreen(pid: pid_t?, in windows: [HoverWindowInfo], displayBounds: [CGRect]) -> Bool {
+        guard let pid else { return false }
+        return windows.contains { window in
+            window.ownerPID == pid && window.layer == 0
+                && displayBounds.contains { $0.integral == window.bounds.integral }
+        }
     }
 }
 
@@ -198,6 +220,11 @@ nonisolated enum HoverSkipReason: Equatable {
     case dock
     case excludedApp
     case alreadyFocused
+    /// The app in front is on the excluded list: hovering never takes focus
+    /// away from it.
+    case frontmostExcluded
+    /// The app in front is full screen (often a game holding the pointer).
+    case frontmostFullScreen
 }
 
 nonisolated enum HoverFocusDecision: Equatable {
@@ -216,6 +243,8 @@ nonisolated struct HoverFocusInput {
     /// Normalized with `BundleIDList.matchSet`.
     var excludedBundleIDs: Set<String> = []
     var frontmostPID: pid_t?
+    var frontmostBundleID: String?
+    var frontmostIsFullScreen = false
     /// The focused window of the frontmost app, when Accessibility answers.
     var focusedWindowID: CGWindowID?
 }
@@ -230,6 +259,11 @@ nonisolated enum HoverFocusGate {
         if input.menuOpen { return .skip(.menuOpen) }
         if input.mouseButtonsDown || input.modifiersHeld { return .skip(.buttonOrModifierHeld) }
         if !input.displayEnabled { return .skip(.displayNotEnabled) }
+        if let front = input.frontmostBundleID.map(BundleIDList.normalized),
+           input.excludedBundleIDs.contains(front) {
+            return .skip(.frontmostExcluded)
+        }
+        if input.frontmostIsFullScreen { return .skip(.frontmostFullScreen) }
         guard let target = input.target else { return .skip(.noWindow) }
         if target.ownerPID == input.ownPID { return .skip(.wharfWindow) }
         let bundleID = input.targetBundleID.map(BundleIDList.normalized)
@@ -273,10 +307,9 @@ nonisolated struct HoverCommitCheck {
               abs(livePointer.x - point.x) <= Self.pointerTolerance,
               abs(livePointer.y - point.y) <= Self.pointerTolerance
         else { return false }
-        // AppKit's answer is unknown only in odd cases; when known it must
-        // still be the same window.
-        if let receivingWindowID, receivingWindowID != windowID { return false }
-        return true
+        // AppKit's answer must name the same window. Unknown means unsure,
+        // and unsure means no raise.
+        return receivingWindowID == windowID
     }
 }
 

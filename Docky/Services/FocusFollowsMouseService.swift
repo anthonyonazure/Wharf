@@ -13,9 +13,16 @@
 //  The decisions live in FocusAndWinTapLogic.swift.
 //
 //  Accessibility calls go to the target app and can stall for as long as
-//  that app is busy, so none run on the main thread: they run one at a time
-//  on a worker queue with short timeouts, and everything is checked again on
-//  the main thread right before raising (HoverCommitCheck).
+//  that app is busy, so the lookup runs on a worker queue, one at a time,
+//  with a short timeout on every element it touches. A lookup that misses
+//  its deadline is abandoned by a watchdog and its late answer ignored, so
+//  one stuck app never blocks hover focus for the others. The worker also
+//  checks that the window answers (one position read) before anything is
+//  raised. The raise itself (WindowRegistry.focus) stays on the main thread
+//  because it shares the registry's state; its few Accessibility calls are
+//  bounded by the element's timeout: 0.25 s for an element found here, the
+//  process-wide 1 s for one from the registry. Everything is checked again
+//  on the main thread right before raising (HoverCommitCheck).
 //
 
 import AppKit
@@ -53,7 +60,10 @@ final class FocusFollowsMouseService {
 
     /// Serial, so a hung app costs one stuck lookup, never a pile of them.
     private let worker = DispatchQueue(label: "wharf.focus-follows-mouse.lookup", qos: .userInitiated)
-    private var lookupInFlight = false
+    private var lookup = HoverLookupTicket()
+    /// Wharf's own menus being tracked. Wharf's windows are left out of the
+    /// window server menu check, so its own menus are known from here.
+    private var ownMenuDepth = 0
 
     private init() {}
 
@@ -64,6 +74,22 @@ final class FocusFollowsMouseService {
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.sync() }
+            .store(in: &cancellables)
+        let center = NotificationCenter.default
+        // Plugging in or removing a display can arm or disarm the feature
+        // (see `isWanted`), so this one stays registered while uninstalled.
+        center.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.sync() }
+            .store(in: &cancellables)
+        center.publisher(for: NSMenu.didBeginTrackingNotification)
+            .sink { [weak self] _ in self?.ownMenuDepth += 1 }
+            .store(in: &cancellables)
+        center.publisher(for: NSMenu.didEndTrackingNotification)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.ownMenuDepth = max(0, self.ownMenuDepth - 1)
+            }
             .store(in: &cancellables)
         sync()
     }
@@ -80,10 +106,21 @@ final class FocusFollowsMouseService {
         }
     }
 
+    /// Needs a connected display among the saved ones: a saved monitor
+    /// that is unplugged must not keep the monitors installed.
     private var isWanted: Bool {
         preferences.focusFollowsMouseEnabled
-            && !preferences.focusFollowsMouseDisplays.isEmpty
+            && FocusDisplaySelection.hasConnectedMatch(
+                saved: preferences.focusFollowsMouseDisplays, connected: Self.connectedDisplayKeys())
             && AXIsProcessTrusted()
+    }
+
+    static func connectedDisplayKeys() -> [String] {
+        NSScreen.screens.compactMap { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            else { return nil }
+            return PerDisplaySettings.key(for: CGDirectDisplayID(number.uint32Value))
+        }
     }
 
     /// Runs only while it can do something: switched on, at least one display
@@ -166,7 +203,7 @@ final class FocusFollowsMouseService {
         }
         // One lookup at a time. A pending rest waits (the timer keeps
         // ticking) until the previous lookup answers or is abandoned.
-        guard !lookupInFlight,
+        guard !lookup.isBusy,
               let evaluation = state.nextEvaluation(
                 at: ProcessInfo.processInfo.systemUptime,
                 delayMilliseconds: preferences.focusFollowsMouseDelay)
@@ -206,8 +243,15 @@ final class FocusFollowsMouseService {
             $0.processIdentifier == target.pid && $0.cgWindowID == target.windowID
         }
         let cachedElement = cached.map { HoverAXElement(element: $0.element) }
-        let startedAt = ProcessInfo.processInfo.systemUptime
-        lookupInFlight = true
+        let ticket = lookup.begin()
+
+        // The watchdog: a lookup still out at the deadline is abandoned, so a
+        // stalled app cannot hold up hover focus everywhere else.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.lookupDeadline) { [weak self] in
+            guard let self, self.lookup.settle(ticket) else { return }
+            self.state.finishEvaluation(evaluation)
+            self.startTimerIfNeeded()
+        }
 
         worker.async { [weak self] in
             var element: HoverAXElement?
@@ -223,26 +267,28 @@ final class FocusFollowsMouseService {
                 // with it. The cached one belongs to the registry and keeps
                 // its own timeout.
                 element = cachedElement ?? Self.windowElement(pid: target.pid, windowID: target.windowID)
+                // The raise on the main thread talks to this window again.
+                // A window that does not answer here is left alone.
+                if let found = element, !Self.isResponsive(found.element) { element = nil }
             }
             DispatchQueue.main.async {
-                self?.finishLookup(evaluation, target: target, element: element, cached: cached, startedAt: startedAt)
+                self?.finishLookup(evaluation, ticket: ticket, target: target, element: element, cached: cached)
             }
         }
     }
 
     private func finishLookup(_ evaluation: HoverDwellEvaluation,
+                              ticket: UInt64,
                               target: (windowID: CGWindowID, pid: pid_t),
                               element: HoverAXElement?,
-                              cached: AppWindow?,
-                              startedAt: TimeInterval) {
-        lookupInFlight = false
+                              cached: AppWindow?) {
+        // Already abandoned by the watchdog: the moment passed.
+        guard lookup.settle(ticket) else { return }
         defer {
             state.finishEvaluation(evaluation)
             startTimerIfNeeded()
         }
-        guard let element,
-              ProcessInfo.processInfo.systemUptime - startedAt <= Self.lookupDeadline
-        else { return }
+        guard let element else { return }
 
         // Read everything fresh: the lookup took time.
         var check = HoverCommitCheck()
@@ -251,7 +297,7 @@ final class FocusFollowsMouseService {
         check.evaluationCurrent = state.isCurrent(evaluation)
         check.livePointer = Self.livePointer()
         check.receivingWindowID = check.livePointer.flatMap(Self.receivingWindow(at:))
-        check.menuOpen = HoverWindowScan.isMenuOpen(in: Self.onScreenWindows())
+        check.menuOpen = isMenuOpen(in: Self.onScreenWindows())
         check.buttonOrModifierHeld = Self.isButtonOrModifierHeld
         guard check.allowsRaise(of: target.windowID, restingAt: evaluation.point) else { return }
 
@@ -287,14 +333,41 @@ final class FocusFollowsMouseService {
         input.displayEnabled = isDisplayEnabled(at: point)
 
         let windows = Self.onScreenWindows()
-        input.menuOpen = HoverWindowScan.isMenuOpen(in: windows)
+        input.menuOpen = isMenuOpen(in: windows)
         input.target = HoverWindowScan.target(in: windows, at: point, pointerWindowID: Self.receivingWindow(at: point))
 
         if let target = input.target, let app = NSRunningApplication(processIdentifier: target.ownerPID) {
             input.targetBundleID = app.bundleIdentifier
         }
-        input.frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        input.frontmostPID = frontmost?.processIdentifier
+        input.frontmostBundleID = frontmost?.bundleIdentifier
+        input.frontmostIsFullScreen = HoverWindowScan.isFullScreen(
+            pid: frontmost?.processIdentifier, in: windows, displayBounds: Self.displayBounds())
         return input
+    }
+
+    /// A menu of another app (window server list, owners that show menus:
+    /// the frontmost app and background or accessory apps such as menu bar
+    /// extras), or one of Wharf's own menus (menu tracking).
+    private func isMenuOpen(in windows: [HoverWindowInfo]) -> Bool {
+        if ownMenuDepth > 0 { return true }
+        let workspace = NSWorkspace.shared
+        var owners = Set(workspace.runningApplications
+            .filter { $0.activationPolicy != .regular }
+            .map { $0.processIdentifier })
+        if let front = workspace.frontmostApplication?.processIdentifier { owners.insert(front) }
+        return HoverWindowScan.isMenuOpen(
+            in: windows, ownPID: ProcessInfo.processInfo.processIdentifier, menuOwnerPIDs: owners)
+    }
+
+    /// Every active display's bounds, top-left global coordinates.
+    private static func displayBounds() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).map { CGDisplayBounds($0) }
     }
 
     private static func onScreenWindows() -> [HoverWindowInfo] {
@@ -331,6 +404,12 @@ final class FocusFollowsMouseService {
 
     // MARK: - Worker queue only
 
+    /// One position read, with whatever timeout the element carries.
+    private nonisolated static func isResponsive(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &value) == .success
+    }
+
     private nonisolated static func focusedWindowID(of pid: pid_t) -> CGWindowID? {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, axTimeout)
@@ -357,9 +436,11 @@ final class FocusFollowsMouseService {
         let deadline = DispatchTime.now() + .milliseconds(750)
         for element in elements {
             if DispatchTime.now() > deadline { break }
+            // Every element gets the short timeout before it is asked
+            // anything, not only the match.
+            AXUIElementSetMessagingTimeout(element, axTimeout)
             var id: CGWindowID = 0
             if hoverAXWindowID(element, &id) == .success, id == windowID {
-                AXUIElementSetMessagingTimeout(element, axTimeout)
                 return HoverAXElement(element: element)
             }
         }

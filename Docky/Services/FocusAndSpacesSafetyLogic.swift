@@ -108,19 +108,30 @@ nonisolated struct SpacesOrderRunner {
     /// Saves (nil clears) the journal; false when it could not be confirmed.
     var saveJournal: (SpacesOrderJournal?) -> Bool
     var current: () -> SpacesRearrangeSetting
-    /// Writes `mru-spaces` (nil removes it); false when it did not take.
+    /// Writes `mru-spaces` (nil removes it); false when it did not take. A
+    /// write can take effect and still report false.
     var writeDock: (Bool?) -> Bool
+    /// Saves, and confirms, that the running Dock owes a restart. Called
+    /// before every Dock write, so a write that takes effect but reports a
+    /// failure (or a crash right after it) still leaves the restart on
+    /// record. False when it could not be confirmed.
+    var oweRestart: () -> Bool
+    /// Restarts the Dock after a write that took; settles the obligation.
     var restartDock: () -> Void
+    /// Restarts the Dock if a restart is still owed and the Dock that owes it
+    /// is still running; otherwise does nothing.
+    var finishOwedRestart: () -> Void
 
     func run(wanted: Bool) -> SpacesOrderOutcome {
         let saved = journal()
         switch SpacesOrderPlan.step(wanted: wanted, current: current(), journal: saved) {
         case .none:
+            finishOwedRestart()
             return .done
         case let .hold(restore):
-            // Without a confirmed record of what to put back, the Dock is
-            // not touched at all.
-            guard saveJournal(SpacesOrderJournal(restore: restore, phase: .pendingHold)) else {
+            // Without a confirmed record of what to put back, and of the
+            // restart the write will need, the Dock is not touched at all.
+            guard saveJournal(SpacesOrderJournal(restore: restore, phase: .pendingHold)), oweRestart() else {
                 return .failed(.journalNotSaved)
             }
             guard writeDock(false) else { return .failed(.dockNotWritten) }
@@ -130,15 +141,20 @@ nonisolated struct SpacesOrderRunner {
             // next run (confirmHold).
             return marked ? .done : .failed(.journalNotSaved)
         case .confirmHold:
+            // The Dock reads off, possibly from a write that reported a
+            // failure: the restart it owes is due whether or not the mark
+            // below is saved.
+            finishOwedRestart()
             guard let saved else { return .done }
             return saveJournal(SpacesOrderJournal(restore: saved.restore, phase: .held))
                 ? .done : .failed(.journalNotSaved)
         case .remember:
+            finishOwedRestart()
             return saveJournal(SpacesOrderJournal(restore: SpacesOrderPlan.restoreOff, phase: .held))
                 ? .done : .failed(.journalNotSaved)
         case let .release(removeKey):
             guard let saved else { return .done }
-            guard saveJournal(SpacesOrderJournal(restore: saved.restore, phase: .pendingRelease)) else {
+            guard saveJournal(SpacesOrderJournal(restore: saved.restore, phase: .pendingRelease)), oweRestart() else {
                 return .failed(.journalNotSaved)
             }
             // The journal stays on failure, so a retry still knows what to
@@ -148,8 +164,12 @@ nonisolated struct SpacesOrderRunner {
             restartDock()
             return cleared ? .done : .failed(.journalNotSaved)
         case .forget:
+            // A restore that took effect but reported a failure lands here
+            // on the retry: its restart is still owed.
+            finishOwedRestart()
             return saveJournal(nil) ? .done : .failed(.journalNotSaved)
         case .letGo:
+            finishOwedRestart()
             _ = saveJournal(nil)
             return .letGo
         }
@@ -183,24 +203,57 @@ nonisolated enum DockRestartDecision: Equatable {
     case giveUp
 }
 
+/// One process, told apart from a later process that reuses its ID by the
+/// time the kernel says it started (microseconds since 1970). Saved as
+/// "pid:start".
+nonisolated struct DockProcessIdentity: Hashable {
+    let pid: pid_t
+    let startMicroseconds: Int64
+
+    var stored: String { "\(pid):\(startMicroseconds)" }
+
+    init(pid: pid_t, startMicroseconds: Int64) {
+        self.pid = pid
+        self.startMicroseconds = startMicroseconds
+    }
+
+    init?(stored: String) {
+        let parts = stored.split(separator: ":")
+        guard parts.count == 2, let pid = pid_t(parts[0]), let start = Int64(parts[1]), pid > 0 else {
+            return nil
+        }
+        self.init(pid: pid, startMicroseconds: start)
+    }
+}
+
 nonisolated enum DockRestartPlan {
     /// The most restarts one change may cost, across launches.
     static let maximumAttempts = 3
 
-    /// Whether a restart recorded earlier is still owed. `killedPIDs` are the
-    /// Dock processes Wharf asked to quit, `runningPIDs` the Dock processes
-    /// now. `rebootedSince` is true when the Mac started after the restart was
-    /// asked for, which makes a matching process ID a coincidence.
-    static func decide(pending: Bool, killedPIDs: Set<pid_t>, runningPIDs: [pid_t],
-                       rebootedSince: Bool, attempts: Int) -> DockRestartDecision {
+    /// Whether a restart recorded earlier is still owed. `recorded` are the
+    /// Dock processes that may still use the old value, `running` the Dock
+    /// processes now (nil for one whose start time could not be read). The
+    /// boot sessions are the kernel's ID for each boot, saved with the record
+    /// and read now; a different one means the Mac restarted. No clocks are
+    /// compared, so sleep never looks like a reboot.
+    ///
+    /// Restart only when every running Dock is provably one recorded: same
+    /// process ID and same start time. Anything less is grounds to leave the
+    /// Dock alone.
+    static func decide(pending: Bool, recorded: Set<DockProcessIdentity>, running: [DockProcessIdentity?],
+                       savedBootSession: String?, currentBootSession: String?,
+                       attempts: Int) -> DockRestartDecision {
         guard pending else { return .nothing }
-        if rebootedSince { return .clear }
+        // A different boot: the Dock running now started after the change.
+        if let savedBootSession, let currentBootSession, savedBootSession != currentBootSession {
+            return .clear
+        }
         // Not running: it reads the preference when it next starts.
-        if runningPIDs.isEmpty { return .clear }
-        // A Dock under a process ID Wharf never asked to quit has restarted.
-        // Without a record (an earlier build), a running Dock is treated as
-        // restarted too: when unsure, do nothing.
-        if killedPIDs.isEmpty || runningPIDs.contains(where: { !killedPIDs.contains($0) }) {
+        if running.isEmpty { return .clear }
+        // A Dock that is not provably a recorded one has restarted, or cannot
+        // be told apart from one that has. Without a record (an earlier build
+        // saved process IDs only), the same: when unsure, do nothing.
+        if recorded.isEmpty || !running.allSatisfy({ $0.map(recorded.contains) ?? false }) {
             return .clear
         }
         return attempts < maximumAttempts ? .restart : .giveUp
@@ -220,5 +273,46 @@ nonisolated enum DockRestartPlan {
             return false
         }
         return runningPIDs.allSatisfy { killedPIDs.contains($0) }
+    }
+}
+
+/// What a request to the shared Dock restart gate came to.
+nonisolated enum DockRestartResult: Equatable {
+    /// No Dock was running; it reads the preferences when it starts.
+    case notRunning
+    /// Every running Dock accepted the request to quit.
+    case submitted(Set<pid_t>)
+    /// Rode on a restart already under way.
+    case joined(Set<pid_t>)
+    /// At least one running Dock did not accept the request: the change is
+    /// not applied yet, so callers keep their recovery state.
+    case refused
+
+    /// True when the Dock will read the preferences as they are now.
+    var willApply: Bool { self != .refused }
+}
+
+/// The gate's memory of the last restart it submitted. Only Docks that
+/// accepted the request are recorded, so a request that failed is never
+/// joined by a later one.
+nonisolated struct DockRestartLedger {
+    private(set) var killedPIDs: Set<pid_t> = []
+    private(set) var killedAt: TimeInterval?
+
+    func canJoin(now: TimeInterval, runningPIDs: [pid_t]) -> Bool {
+        DockRestartPlan.canCoalesce(killedPIDs: killedPIDs, killedAt: killedAt, now: now, runningPIDs: runningPIDs)
+    }
+
+    /// Records the outcome of asking `requested` to quit, of which
+    /// `accepted` took the request. Nothing accepted leaves the ledger as it
+    /// was. A Dock that refused stays out of the record, so it is never
+    /// mistaken for one on its way out.
+    mutating func record(requested: Set<pid_t>, accepted: Set<pid_t>, at now: TimeInterval) -> DockRestartResult {
+        guard !requested.isEmpty else { return .notRunning }
+        let taken = accepted.intersection(requested)
+        guard !taken.isEmpty else { return .refused }
+        killedPIDs = taken
+        killedAt = now
+        return taken == requested ? .submitted(taken) : .refused
     }
 }

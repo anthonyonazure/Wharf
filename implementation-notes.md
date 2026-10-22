@@ -2081,3 +2081,106 @@ a refusal.
   the status file names the cause only when the release is what stops it.
 - A settings change resets the retry count, so after the four retries run
   out, changing the Win tap setting starts a fresh round.
+## 2026-10-22, Code review chunk 2 re-check (Space order and Dock)
+
+Codex and Gemini re-attacked the chunk 2 Space order and Dock restart fixes
+(scratchpad report codex-cr3.txt). Three findings were in this area. Each was
+checked against the code before fixing; all three were real. Principle: never
+lose a user setting, never leave the Dock in the wrong state, and never kill
+the Dock unless sure it is the one that needs it.
+
+### 1. A failed Dock termination swallowed later restarts (Codex 1)
+- Confirmed: `DockRestartGate` saved the Docks it asked to quit before asking,
+  and kept them when every request failed. A second request within five
+  seconds joined a restart that never happened. Visibility restore then
+  deleted its snapshot and watchdog state, so a Dock still running with the
+  hidden settings had no record left to restore from.
+- Fix: the gate's memory moved into `DockRestartLedger`
+  (FocusAndSpacesSafetyLogic.swift). It records only Docks that accepted the
+  request to quit; nothing accepted leaves it unchanged. `restart(reason:)`
+  returns `DockRestartResult` (notRunning, submitted, joined, refused). One
+  of several Docks refusing counts as refused.
+- `SystemDockVisibilityService.restore(using:)` removes the snapshot and the
+  watchdog state only when the result will apply. On refused both stay, so
+  the watchdog (when Wharf exits) and the next launch restore again.
+  `hide()` and `setOrientation` are unchanged.
+- Fixed Space order: refused keeps the restart record and the check five
+  seconds later tries again, bounded by the attempt count; joined does not
+  cost an attempt.
+
+### 2. A write that landed but reported failure lost its Dock restart (Codex 2)
+- Confirmed: `writeDock(false)` sets the value, then synchronizes. If the
+  synchronize failed the runner returned without a restart; the retry saw
+  `.off`, took `confirmHold` and reported done with the Dock never
+  restarted. Restore had the same hole through `forget`.
+- Fix: the runner has `oweRestart` (save and confirm that the running Dock
+  owes a restart), called before every Dock write; a failure to save it
+  means the Dock is not written at all. `confirmHold`, `forget`, `remember`,
+  `none` and `letGo` call `finishOwedRestart`, which restarts only when a
+  restart is on record and the Dock that owes it is provably still running.
+  The obligation lives in the restart record (BehaviorExtrasPreferences),
+  not in the journal or step types, which sit in FocusAndWinTapLogic.swift.
+- The Dock launch notification now settles the record by identity instead of
+  clearing it blindly, so a Dock that started before a write keeps its owed
+  restart.
+- Fake store: `dockWritesTakeButFail` makes the write land and report false;
+  `failOwe` makes the obligation fail to save.
+
+### 3. Sleep looked like a reboot; a reused process ID looked like the old Dock (Codex 8 and 9)
+- Confirmed: the reboot test compared wall clock time since the request with
+  `systemUptime`, which stops during sleep. A night of sleep could clear a
+  restart that was still owed. Matching on process ID alone could also kill
+  a later Dock that reused the ID.
+- Fix: the record saves each Dock as `DockProcessIdentity` (process ID plus
+  the kernel's start time, from sysctl KERN_PROC_PID) and the boot session
+  ID (sysctl kern.bootsessionuuid). `DockRestartPlan.decide` compares them
+  directly, no clocks. A different boot session clears the record. A running
+  Dock that is not provably a recorded one (other ID, other start time, or a
+  start time that cannot be read) clears the record: when unsure, do not
+  kill. Unknown boot session on one side falls back to the start time, which
+  alone tells Docks apart.
+- New keys `wharf.spacesOrder.dockRestartDocks` and
+  `wharf.spacesOrder.dockRestartBootSession`. The earlier build's
+  `dockRestartPIDs` and `dockRestartRequestedAt` are never read and are
+  removed on the next save; such a record proves nothing and clears.
+
+### Checks added (scripts/test-focus-and-wintap.sh, safety section)
+- Ledger: refused is reported and never joined; a partial refusal is refused
+  and blocks joining; accepted is joined; no Dock is notRunning.
+- Runner: write lands but reports failure, then confirmHold restarts the
+  Dock; restore lands but reports failure, then forget restarts it; an
+  obligation that cannot be saved leaves the Dock untouched; an obligation
+  owed from before is settled in the steady state.
+- Plan: sleep (same boot session, long wall gap) still restarts; reused
+  process ID with another start time is never killed; unreadable start time
+  is never killed; boot session missing on one side still matches by start
+  time; malformed stored identities prove nothing.
+- Safety checks went from 74 to 104. Build succeeded, every
+  scripts/test-*.sh passes, and the XCTest suite ends TEST SUCCEEDED.
+
+### Deviations
+- None of the three claims was disproved.
+- `finishOwedRestart` also runs on the `none`, `remember` and `letGo` paths,
+  not only confirm and forget, so a restart owed from any earlier run is
+  settled whenever the runner does not write. It is bounded by the same
+  three attempt limit and coalesces in the gate.
+- The obligation is saved again for the Docks running at restart time;
+  attempts carry over only while the recorded Docks are the same.
+- Trade made on purpose: the obligation is saved before the write, so a
+  write that failed outright (never landed) still leaves a restart owed. If
+  the user turns the switch off before the retry, `forget` restarts the Dock
+  once for nothing. That is a single flicker, never a wrong state, and it is
+  the price of never missing a restart after a write that did land.
+
+### Unverified
+- No live Dock refusal, no real sleep or reboot, no write that lands but
+  fails: those paths are covered by the in-memory checks only.
+- A read-only probe on this Mac returned a boot session UUID and the Dock's
+  start time through the same sysctl calls, and the kernel's returned record
+  size (648 bytes) equals Swift's `kinfo_proc` size and stride, so the size
+  guard in `processIdentity` passes. The restart decision itself was not
+  driven against a real Dock.
+- A Dock that restarts on its own in the moment between saving the
+  obligation and writing the value would be cleared as restarted and miss
+  the new value until its next start. The window is the length of one
+  preference write.

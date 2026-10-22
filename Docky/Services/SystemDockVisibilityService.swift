@@ -112,9 +112,16 @@ final class SystemDockVisibilityService {
         }
 
         applySnapshot(snapshot)
+        // The snapshot and the watchdog state are the only record of the
+        // user's Dock settings. They go only once the Dock is sure to read
+        // them back; when it refused to quit they stay, so the watchdog (when
+        // Wharf exits) and the next launch restore again.
+        guard restartDock() else {
+            NSLog("[Wharf] System Dock not restored yet: keeping the saved settings to try again.")
+            return
+        }
         defaults.removeObject(forKey: Self.snapshotKey)
         defaults.synchronize()
-        restartDock()
         clearActiveState()
     }
 
@@ -154,10 +161,12 @@ final class SystemDockVisibilityService {
         CFPreferencesAppSynchronize(Self.dockDomain)
     }
 
-    private func restartDock() {
+    /// False when the Dock refused to quit, so the change is not applied yet.
+    @discardableResult
+    private func restartDock() -> Bool {
         // Shared with Fixed Space order, so the two never restart the Dock
         // twice in a row (see DockRestartGate).
-        DockRestartGate.shared.restart(reason: "system Dock visibility")
+        DockRestartGate.shared.restart(reason: "system Dock visibility").willApply
     }
 
     private var stateFileURL: URL? {

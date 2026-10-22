@@ -29,12 +29,17 @@ final class BehaviorExtrasPreferences {
         static let spacesOrderPhase = "wharf.spacesOrder.phase"
         /// Set before Wharf restarts the Dock, cleared once it is back.
         static let spacesOrderDockRestartPending = "wharf.spacesOrder.dockRestartPending"
-        /// The Dock process IDs Wharf asked to quit, when it asked, and how
-        /// many restarts this change has cost so far (across launches), so a
-        /// later launch compares instead of restarting the Dock blindly.
+        /// The Dock processes that may still use the old value (process ID
+        /// plus start time), the boot they were recorded in, and how many
+        /// restarts this change has cost so far (across launches), so a later
+        /// launch compares instead of restarting the Dock blindly.
+        static let spacesOrderDockRestartDocks = "wharf.spacesOrder.dockRestartDocks"
+        static let spacesOrderDockRestartBootSession = "wharf.spacesOrder.dockRestartBootSession"
+        static let spacesOrderDockRestartAttempts = "wharf.spacesOrder.dockRestartAttempts"
+        /// Saved by an earlier build (process IDs and wall clock time only,
+        /// not enough to prove the same Dock). Read never; removed on clear.
         static let spacesOrderDockRestartPIDs = "wharf.spacesOrder.dockRestartPIDs"
         static let spacesOrderDockRestartRequestedAt = "wharf.spacesOrder.dockRestartRequestedAt"
-        static let spacesOrderDockRestartAttempts = "wharf.spacesOrder.dockRestartAttempts"
         static let winTapAction = "wharf.windowsKeyboardWinTap.action"
         static let snipInExcludedApps = "wharf.windowsKeyboardSnip.inExcludedApps"
     }
@@ -117,19 +122,28 @@ final class BehaviorExtrasPreferences {
         set { defaults.set(newValue, forKey: Keys.spacesOrderDockRestartPending) }
     }
 
-    @ObservationIgnored var spacesOrderDockRestartPIDs: Set<pid_t> {
-        get { Set((defaults.array(forKey: Keys.spacesOrderDockRestartPIDs) as? [Int] ?? []).map { pid_t($0) }) }
-        set { defaults.set(newValue.map { Int($0) }.sorted(), forKey: Keys.spacesOrderDockRestartPIDs) }
+    @ObservationIgnored var spacesOrderDockRestartDocks: Set<DockProcessIdentity> {
+        get { Set((defaults.stringArray(forKey: Keys.spacesOrderDockRestartDocks) ?? []).compactMap(DockProcessIdentity.init(stored:))) }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: Keys.spacesOrderDockRestartDocks)
+            } else {
+                defaults.set(newValue.map(\.stored).sorted(), forKey: Keys.spacesOrderDockRestartDocks)
+            }
+            // The earlier build's record is never needed again.
+            defaults.removeObject(forKey: Keys.spacesOrderDockRestartPIDs)
+            defaults.removeObject(forKey: Keys.spacesOrderDockRestartRequestedAt)
+        }
     }
 
-    /// Seconds since 1970, or nil when no restart is recorded.
-    @ObservationIgnored var spacesOrderDockRestartRequestedAt: Date? {
-        get { (defaults.object(forKey: Keys.spacesOrderDockRestartRequestedAt) as? Double).map(Date.init(timeIntervalSince1970:)) }
+    /// The kernel's boot session ID when the record was saved, nil when none.
+    @ObservationIgnored var spacesOrderDockRestartBootSession: String? {
+        get { defaults.string(forKey: Keys.spacesOrderDockRestartBootSession) }
         set {
             if let newValue {
-                defaults.set(newValue.timeIntervalSince1970, forKey: Keys.spacesOrderDockRestartRequestedAt)
+                defaults.set(newValue, forKey: Keys.spacesOrderDockRestartBootSession)
             } else {
-                defaults.removeObject(forKey: Keys.spacesOrderDockRestartRequestedAt)
+                defaults.removeObject(forKey: Keys.spacesOrderDockRestartBootSession)
             }
         }
     }

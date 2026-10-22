@@ -61,12 +61,14 @@ grep -q 'GreenButtonLogic.mayReplay' "$OUT.hold" || { echo "FAIL: the hold repla
 grep -q 'replayGuard.shouldReplay' "$OUT.hold" || { echo "FAIL: the hold replay is not capped"; exit 1; }
 # A click whose window changed under it is canceled, never replayed.
 awk '/case \.missed:/,/case \.blocked:/' "$GREEN" | grep -v 'case \.blocked' > "$OUT.missed"
+[ -s "$OUT.missed" ] || { echo "FAIL: the missed branch was not found"; exit 1; }
 if grep -n 'replay(' "$OUT.missed"; then
     echo "FAIL: a missed click is replayed onto whatever is there now"
     exit 1
 fi
 # A partial move is neither replayed nor followed by a native press.
 awk '/case \.partialOrUnknown:/,/case \.noAction:/' "$GREEN" | grep -v 'case \.noAction' > "$OUT.partial"
+[ -s "$OUT.partial" ] || { echo "FAIL: the partial move branch was not found"; exit 1; }
 if grep -nE 'replay\(|press\(click' "$OUT.partial"; then
     echo "FAIL: a partial move is followed by another click"
     exit 1

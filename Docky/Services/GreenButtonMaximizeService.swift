@@ -14,9 +14,17 @@
 //  The frame math and the move go through WindowSnapService, so this feature
 //  and the Maximize shortcut land on exactly the same rectangle.
 //
-//  The tap can swallow events, which a listen-only tap cannot: the press and
-//  release of a confirmed green button click are the only events it holds
-//  back. Everything else passes untouched.
+//  The tap never asks Accessibility anything. Each window's green button is
+//  looked up ahead of time, when the pointer moves over a title bar, and
+//  kept in a small cache; a press is held back only when the cache already
+//  says, for the exact window in front at that point, that the press landed
+//  on its green button. Anything else (no answer yet, a window that moved,
+//  a cache from another window) passes through to the app untouched. Right
+//  before acting, Accessibility confirms the click really hit that button.
+//
+//  The press and release of a click are kept together by
+//  GreenButtonPairTracker. Holding the button down hands the press back to
+//  the app after a moment, so the macOS tiling menu still opens on a hold.
 //
 
 import AppKit
@@ -27,24 +35,60 @@ import CoreGraphics
 final class GreenButtonMaximizeService {
     static let shared = GreenButtonMaximizeService()
 
+    /// Set on presses this service hands back, so its own tap lets them by.
+    nonisolated static let syntheticMarker: Int64 = 0x5748_4742 // "WHGB"
+
     private let preferences = WindowBehaviorPreferences.shared
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var pendingClick: PendingClick?
+    private var moveMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
+
+    private var pair = GreenButtonPairTracker()
+    private var pendingClick: PendingClick?
+    private var heldPress: CGEvent?
+    private var holdWork: DispatchWorkItem?
+
+    private var cache: [CGWindowID: ZoomTarget] = [:]
+    private var fillsInFlight: Set<CGWindowID> = []
+    private var lastMoveCheck = Date.distantPast
+    private var rightToLeft = false
 
     private let messagingTimeout: Float = 0.35
     private let mouseUpTolerance: CGFloat = 8
+    /// How long a cached answer is trusted, as long as the window has not
+    /// moved or resized since.
+    private let cacheLifetime: TimeInterval = 120
 
-    private struct PendingClick {
-        let candidate: TrafficLightCandidate
-        let button: AXUIElement
+    /// What Accessibility said about one window's green button, read off the
+    /// tap. Coordinates are global, top down, like the window server's.
+    private struct ZoomTarget {
+        let pid: pid_t
+        let windowID: CGWindowID
+        let bundleIdentifier: String?
+        let windowBounds: CGRect
         let buttonFrame: CGRect
-        let action: GreenButtonAction
+        let button: AXUIElement?
+        /// The window's zoom and full screen button elements. Some apps
+        /// report the green button under either; a hit on any of them is a
+        /// hit on the green button.
+        let greenButtons: [AXUIElement]
         /// The classic zoom button may be pressed for the app when Wharf
         /// cannot move the window; a full screen button may not, since that
         /// would do the very thing the user turned this feature on to avoid.
         let allowsNativeFallback: Bool
+        /// False for windows to leave alone: excepted apps, full screen
+        /// windows, or no green button found. Cached so the lookup is not
+        /// repeated on every move.
+        let isUsable: Bool
+        let filledAt: Date
+    }
+
+    private struct PendingClick {
+        let token: Int
+        let target: ZoomTarget
+        let point: CGPoint
+        let action: GreenButtonAction
     }
 
     private init() {}
@@ -52,6 +96,8 @@ final class GreenButtonMaximizeService {
     func start() {
         observeChanges { [weak self] in
             _ = WindowBehaviorPreferences.shared.maximizeEnabled
+            _ = WindowBehaviorPreferences.shared.maximizeExceptions
+            self?.cache.removeAll()
             self?.syncTapState()
         }
         .store(in: &cancellables)
@@ -73,8 +119,12 @@ final class GreenButtonMaximizeService {
 
     private func installTap() {
         guard tap == nil else { return }
+        // Apps follow the user's first language, so its writing direction
+        // says which corner the traffic lights sit in.
+        rightToLeft = Locale.Language(identifier: Locale.preferredLanguages.first ?? "en").characterDirection == .rightToLeft
         let mask = CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
             | CGEventMask(1 << CGEventType.leftMouseUp.rawValue)
+            | CGEventMask(1 << CGEventType.leftMouseDragged.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -95,38 +145,54 @@ final class GreenButtonMaximizeService {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+
+        // Listen only: looks the green button up ahead of a click.
+        moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+        }
     }
 
     private func removeTap() {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
+        if let moveMonitor { NSEvent.removeMonitor(moveMonitor) }
+        moveMonitor = nil
         tap = nil
         runLoopSource = nil
-        pendingClick = nil
+        interrupt()
+        cache.removeAll()
     }
 
-    // MARK: - Event routing
+    /// Events may have passed unseen: forget the held press so its release
+    /// goes through, and drop the pending action.
+    private func interrupt() {
+        pair.interrupted()
+        pendingClick = nil
+        heldPress = nil
+        holdWork?.cancel()
+        holdWork = nil
+    }
+
+    // MARK: - Event routing (cached answers only)
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap, preferences.maximizeEnabled, AXIsProcessTrusted() {
+            interrupt()
+            if let tap, preferences.maximizeEnabled {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
             return Unmanaged.passUnretained(event)
         }
-
-        // A revoked permission would make the Accessibility hit test below
-        // hang and freeze the pointer, so never ask without it.
-        guard AXIsProcessTrusted() else {
-            pendingClick = nil
-            DispatchQueue.main.async { [weak self] in self?.syncTapState() }
+        if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker {
             return Unmanaged.passUnretained(event)
         }
 
         switch type {
         case .leftMouseDown:
+            pair.pressPassed()
             pendingClick = nil
+            holdWork?.cancel()
             let flags = event.flags
             let action = GreenButtonLogic.action(
                 command: flags.contains(.maskCommand),
@@ -135,66 +201,177 @@ final class GreenButtonMaximizeService {
                 shift: flags.contains(.maskShift)
             )
             guard action != .passThrough,
-                  let click = findClick(at: event.location, action: action)
+                  let target = cachedTarget(at: event.location)
             else { return Unmanaged.passUnretained(event) }
-            pendingClick = click
+
+            let token = pair.pressSwallowed()
+            pendingClick = PendingClick(token: token, target: target, point: event.location, action: action)
+            heldPress = event.copy()
+            let work = DispatchWorkItem { [weak self] in self?.holdElapsed(token: token) }
+            holdWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + GreenButtonPairTracker.holdSeconds, execute: work)
             return nil
 
+        case .leftMouseDragged:
+            return pair.dragged() == .swallow ? nil : Unmanaged.passUnretained(event)
+
         case .leftMouseUp:
-            guard let click = pendingClick else { return Unmanaged.passUnretained(event) }
-            pendingClick = nil
-            // Releasing away from the button cancels, as it does natively.
-            if click.buttonFrame.insetBy(dx: -mouseUpTolerance, dy: -mouseUpTolerance).contains(event.location) {
-                DispatchQueue.main.async { [weak self] in self?.perform(click) }
+            let inside = pendingClick.map {
+                $0.target.buttonFrame.insetBy(dx: -mouseUpTolerance, dy: -mouseUpTolerance).contains(event.location)
+            } ?? false
+            switch pair.released(insideButton: inside) {
+            case .pass, .replayPress:
+                return Unmanaged.passUnretained(event)
+            case .swallow:
+                clearPending()
+                return nil
+            case .perform(let token):
+                if let click = pendingClick, click.token == token {
+                    DispatchQueue.main.async { [weak self] in self?.perform(click) }
+                }
+                clearPending()
+                return nil
             }
-            return nil
 
         default:
             return Unmanaged.passUnretained(event)
         }
     }
 
-    private func findClick(at point: CGPoint, action: GreenButtonAction) -> PendingClick? {
+    /// The cached green button under `point`, only if the window in front
+    /// there is exactly the cached window, unmoved, and the point is on the
+    /// button itself. One window server read; no Accessibility.
+    private func cachedTarget(at point: CGPoint) -> ZoomTarget? {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
-        let exceptions = preferences.maximizeExceptions
         guard let candidate = TrafficLightHitTest.candidate(
-                in: windows,
-                at: point,
-                button: .zoom,
-                ownProcessID: getpid(),
-                pidIsEligible: { pid in
-                    !WindowBehaviorBundleList.contains(
-                        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
-                        in: exceptions
-                    )
-                }
-              ),
-              let element = element(at: point),
-              let window = topLevelWindow(from: element),
-              pid(of: window) == candidate.pid,
-              !boolAttribute(window, "AXFullScreen"),
-              let button = greenButton(in: window, containing: point)
-        else { return nil }
+            in: windows, at: point, button: .zoom, ownProcessID: getpid(), rightToLeft: rightToLeft
+        ) else { return nil }
+        guard let target = cache[candidate.windowID],
+              target.isUsable,
+              target.pid == candidate.pid,
+              Self.sameRect(target.windowBounds, candidate.frame),
+              Date().timeIntervalSince(target.filledAt) < cacheLifetime,
+              target.buttonFrame.contains(point),
+              !WindowBehaviorBundleList.contains(target.bundleIdentifier, in: preferences.maximizeExceptions)
+        else {
+            // No trustworthy answer: the click goes to the app, and the
+            // lookup runs so the next one can be handled.
+            scheduleFill(candidate)
+            return nil
+        }
+        return target
+    }
 
-        return PendingClick(
-            candidate: candidate,
-            button: button.element,
-            buttonFrame: button.frame,
-            action: action,
-            allowsNativeFallback: button.allowsNativeFallback
-        )
+    private func holdElapsed(token: Int) {
+        guard pair.holdElapsed(token: token) == .replayPress else { return }
+        // Held down: the user wants the app's own hold (the tiling menu).
+        // Hand the press back where it happened; its release will follow.
+        if let press = heldPress {
+            press.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
+            press.post(tap: .cghidEventTap)
+        }
+        clearPending()
+    }
+
+    private func clearPending() {
+        pendingClick = nil
+        heldPress = nil
+        holdWork?.cancel()
+        holdWork = nil
+    }
+
+    private static func sameRect(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) <= 1 && abs(a.minY - b.minY) <= 1
+            && abs(a.width - b.width) <= 1 && abs(a.height - b.height) <= 1
+    }
+
+    // MARK: - Looking the button up ahead of time
+
+    private func pointerMoved() {
+        let now = Date()
+        guard now.timeIntervalSince(lastMoveCheck) > 0.08,
+              let primaryHeight = NSScreen.screens.first?.frame.height
+        else { return }
+        lastMoveCheck = now
+        let mouse = NSEvent.mouseLocation
+        let point = CGPoint(x: mouse.x, y: primaryHeight - mouse.y)
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        guard let candidate = TrafficLightHitTest.candidate(
+            in: windows, at: point, button: .zoom, ownProcessID: getpid(), rightToLeft: rightToLeft
+        ) else { return }
+        if let cached = cache[candidate.windowID],
+           Self.sameRect(cached.windowBounds, candidate.frame),
+           now.timeIntervalSince(cached.filledAt) < cacheLifetime {
+            return
+        }
+        scheduleFill(candidate)
+    }
+
+    private func scheduleFill(_ candidate: TrafficLightCandidate) {
+        guard fillsInFlight.insert(candidate.windowID).inserted else { return }
+        // Off the tap and off the current event: Accessibility can be slow.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.fillsInFlight.remove(candidate.windowID)
+            self.fill(candidate)
+        }
+    }
+
+    private func fill(_ candidate: TrafficLightCandidate) {
+        guard tap != nil else { return }
+        let bundleIdentifier = NSRunningApplication(processIdentifier: candidate.pid)?.bundleIdentifier
+        func store(button: AXUIElement?, all: [AXUIElement] = [], frame: CGRect, nativeFallback: Bool, usable: Bool) {
+            if cache.count > 64 {
+                let cutoff = Date().addingTimeInterval(-cacheLifetime)
+                cache = cache.filter { $0.value.filledAt > cutoff }
+                if cache.count > 64 { cache.removeAll() }
+            }
+            cache[candidate.windowID] = ZoomTarget(
+                pid: candidate.pid, windowID: candidate.windowID, bundleIdentifier: bundleIdentifier,
+                windowBounds: candidate.frame, buttonFrame: frame, button: button, greenButtons: all,
+                allowsNativeFallback: nativeFallback, isUsable: usable, filledAt: Date()
+            )
+        }
+
+        guard !WindowBehaviorBundleList.contains(bundleIdentifier, in: preferences.maximizeExceptions),
+              let window = axWindow(pid: candidate.pid, windowID: candidate.windowID),
+              !boolAttribute(window, "AXFullScreen"),
+              let button = greenButton(in: window)
+        else {
+            store(button: nil, frame: .zero, nativeFallback: false, usable: false)
+            return
+        }
+        let all = [kAXZoomButtonAttribute as String, kAXFullScreenButtonAttribute as String]
+            .compactMap { elementAttribute(window, $0) }
+        store(button: button.element, all: all, frame: button.frame,
+              nativeFallback: button.allowsNativeFallback, usable: true)
     }
 
     // MARK: - Acting on a click
 
     private func perform(_ click: PendingClick) {
+        guard let button = click.target.button, hitIsOnButton(click.target.greenButtons, at: click.point) else {
+            // The press did not land on the green button after all (the
+            // window changed under it). Both halves were held back, so
+            // dropping the click leaves the app consistent.
+            cache[click.target.windowID] = nil
+            return
+        }
+
         let registry = WindowRegistry.shared
-        guard let window = registry.liveWindows(for: click.candidate.pid)
-                .first(where: { $0.cgWindowID == click.candidate.windowID })
+        guard let window = registry.liveWindows(for: click.target.pid)
+                .first(where: { $0.cgWindowID == click.target.windowID })
         else {
             pressNatively(click)
             return
+        }
+
+        // A green button click on a window behind others brings it forward,
+        // as a click on any part of a window does.
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != click.target.pid {
+            registry.focus(window)
         }
 
         switch click.action {
@@ -202,7 +379,7 @@ final class GreenButtonMaximizeService {
             pressNatively(click)
         case .nativeFullScreen:
             if !registry.setFullscreen(window, fullscreen: true) {
-                AXUIElementPerformAction(click.button, kAXPressAction as CFString)
+                AXUIElementPerformAction(button, kAXPressAction as CFString)
             }
         case .toggleMaximize:
             let snap = WindowSnapService.shared
@@ -214,6 +391,8 @@ final class GreenButtonMaximizeService {
                 pressNatively(click)
             }
         }
+        // The window's frame changed; look the button up again next time.
+        cache[click.target.windowID] = nil
     }
 
     /// Whether the window already sits on the Maximize rectangle. Worked out
@@ -236,49 +415,52 @@ final class GreenButtonMaximizeService {
     }
 
     private func pressNatively(_ click: PendingClick) {
-        guard click.allowsNativeFallback else { return }
-        AXUIElementPerformAction(click.button, kAXPressAction as CFString)
+        guard click.target.allowsNativeFallback, let button = click.target.button else { return }
+        AXUIElementPerformAction(button, kAXPressAction as CFString)
     }
 
-    // MARK: - Accessibility helpers
+    // MARK: - Accessibility helpers (never called from the tap)
 
-    private func element(at point: CGPoint) -> AXUIElement? {
-        var element: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
-              let element
+    /// The element Accessibility finds at `point` must be one of the cached
+    /// green button elements itself or something inside it. A nearby title
+    /// bar does not count.
+    private func hitIsOnButton(_ buttons: [AXUIElement], at point: CGPoint) -> Bool {
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &hit) == .success,
+              var current = hit
+        else { return false }
+        AXUIElementSetMessagingTimeout(current, messagingTimeout)
+        for _ in 0..<4 {
+            if buttons.contains(where: { CFEqual(current, $0) }) { return true }
+            guard let parent = elementAttribute(current, kAXParentAttribute as String) else { return false }
+            current = parent
+        }
+        return false
+    }
+
+    /// The Accessibility window with this window server id. The app element
+    /// is only asked for its window list, never its role, which would switch
+    /// a Chromium app into full accessibility mode.
+    private func axWindow(pid: pid_t, windowID: CGWindowID) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, messagingTimeout)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement]
         else { return nil }
-        AXUIElementSetMessagingTimeout(element, messagingTimeout)
-        return element
-    }
-
-    /// Asking an application element for its role switches a Chromium app
-    /// into full accessibility mode for the rest of its life, so the walk
-    /// stops before it ever reaches one.
-    private func isApplicationElement(_ element: AXUIElement) -> Bool {
-        guard let pid = pid(of: element) else { return false }
-        return CFEqual(element, AXUIElementCreateApplication(pid))
-    }
-
-    private func topLevelWindow(from element: AXUIElement) -> AXUIElement? {
-        guard !isApplicationElement(element) else { return nil }
-        if role(of: element) == kAXWindowRole as String { return element }
-        for attribute in [kAXWindowAttribute as String, kAXTopLevelUIElementAttribute as String] {
-            if let window = elementAttribute(element, attribute), role(of: window) == kAXWindowRole as String {
+        for window in windows {
+            var id: CGWindowID = 0
+            if _AXUIElementGetWindow(window, &id) == .success, id == windowID {
+                AXUIElementSetMessagingTimeout(window, messagingTimeout)
                 return window
             }
-        }
-        var current = element
-        for _ in 0..<8 {
-            guard let parent = elementAttribute(current, kAXParentAttribute as String),
-                  !isApplicationElement(parent)
-            else { return nil }
-            if role(of: parent) == kAXWindowRole as String { return parent }
-            current = parent
         }
         return nil
     }
 
-    private func greenButton(in window: AXUIElement, containing point: CGPoint)
+    private func greenButton(in window: AXUIElement)
         -> (element: AXUIElement, frame: CGRect, allowsNativeFallback: Bool)? {
         for (attribute, allowsNativeFallback) in [
             (kAXZoomButtonAttribute as String, true),
@@ -286,8 +468,7 @@ final class GreenButtonMaximizeService {
         ] {
             guard let button = elementAttribute(window, attribute),
                   boolAttribute(button, kAXEnabledAttribute as String, default: true),
-                  let frame = frame(of: button),
-                  frame.insetBy(dx: -3, dy: -3).contains(point)
+                  let frame = frame(of: button)
             else { continue }
             return (button, frame, allowsNativeFallback)
         }

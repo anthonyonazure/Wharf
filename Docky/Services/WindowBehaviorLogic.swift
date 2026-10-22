@@ -64,6 +64,7 @@ nonisolated enum TrafficLightHitTest {
         at point: CGPoint,
         button: TrafficLightButton,
         ownProcessID: Int32,
+        rightToLeft: Bool = false,
         pidIsEligible: (Int32) -> Bool = { _ in true }
     ) -> TrafficLightCandidate? {
         for window in windows {
@@ -82,7 +83,7 @@ nonisolated enum TrafficLightHitTest {
             else { continue }
 
             guard pidIsEligible(ownerPID),
-                  contains(point, inTrafficLightAreaOf: bounds, button: button)
+                  contains(point, inTrafficLightAreaOf: bounds, button: button, rightToLeft: rightToLeft)
             else { return nil }
             return TrafficLightCandidate(pid: ownerPID, windowID: number, frame: bounds)
         }
@@ -90,10 +91,16 @@ nonisolated enum TrafficLightHitTest {
     }
 
     /// A generous box around where each button sits, measured from the
-    /// window's top left corner in window server (top down) coordinates.
+    /// window's top leading corner in window server (top down) coordinates.
+    /// In a right-to-left layout the buttons sit at the top right, mirrored.
     /// Accessibility makes the exact call afterward.
-    static func contains(_ point: CGPoint, inTrafficLightAreaOf bounds: CGRect, button: TrafficLightButton) -> Bool {
-        let dx = point.x - bounds.minX
+    static func contains(
+        _ point: CGPoint,
+        inTrafficLightAreaOf bounds: CGRect,
+        button: TrafficLightButton,
+        rightToLeft: Bool = false
+    ) -> Bool {
+        let dx = rightToLeft ? bounds.maxX - point.x : point.x - bounds.minX
         let dy = point.y - bounds.minY
         guard dy >= -6, dy <= 46 else { return false }
         switch button {
@@ -145,11 +152,16 @@ nonisolated struct QuitOnCloseFacts: Equatable {
     /// The app showed at least one window since Wharf started watching it.
     /// An app that launched without windows is left alone.
     var hadWindow: Bool
-    /// Standard windows Accessibility still lists, minimized ones included.
-    var accessibilityWindowCount: Int
-    /// Normal level windows the window server still knows for the app, on
-    /// any Space.
-    var serverWindowCount: Int
+    /// Every window Accessibility still lists, of any kind (dialogs and
+    /// floating panels included), minimized ones too. Nil when the read
+    /// failed, which counts as "windows exist".
+    var accessibilityWindowCount: Int?
+    /// Windows below the menu bar levels the window server still knows for
+    /// the app, on any Space. Nil when the read failed.
+    var serverWindowCount: Int?
+    /// A quit request already went out in this windowless stretch. If the
+    /// user cancelled it (in a save prompt, say), asking again would loop.
+    var quitAlreadyRequested = false
 }
 
 nonisolated enum QuitOnCloseLogic {
@@ -162,6 +174,7 @@ nonisolated enum QuitOnCloseLogic {
             && !facts.isTerminated
             && !facts.isHidden
             && facts.hadWindow
+            && !facts.quitAlreadyRequested
             && facts.accessibilityWindowCount == 0
             && facts.serverWindowCount == 0
     }
@@ -170,12 +183,20 @@ nonisolated enum QuitOnCloseLogic {
     /// while it fades out, so one early look would see it and stop.
     static let checkDelays: [TimeInterval] = [0.35, 0.9, 1.8]
 
-    /// Normal level windows of `pid` in a window server list, ignoring tiny
-    /// or transparent ones that are not something a user would call a window.
-    static func serverWindowCount(in windows: [[String: Any]], pid: Int32) -> Int {
-        windows.filter { window in
+    /// Window levels counted as the app's own windows: normal (0), floating
+    /// panels (3), modal panels (8) and utility windows, up to but not
+    /// including the main menu and status item levels (24 and up).
+    static let countedLayers = 0..<20
+
+    /// Windows of `pid` in a window server list, ignoring tiny or
+    /// transparent ones that are not something a user would call a window.
+    /// Nil in, nil out: an unreadable list is never "no windows".
+    static func serverWindowCount(in windows: [[String: Any]]?, pid: Int32) -> Int? {
+        guard let windows else { return nil }
+        return windows.filter { window in
             guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  countedLayers.contains(layer),
                   (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
                   let bounds = TrafficLightHitTest.bounds(from: window),
                   bounds.width >= 50, bounds.height >= 50
@@ -183,6 +204,24 @@ nonisolated enum QuitOnCloseLogic {
             return true
         }.count
     }
+}
+
+/// One quit request per windowless stretch of an app. The record is set when
+/// the request goes out and cleared only once the app shows a standard
+/// window again, or quits.
+nonisolated struct QuitOnCloseEpisodes: Equatable {
+    private(set) var quitSent: Set<Int32> = []
+
+    func hasRequestedQuit(_ pid: Int32) -> Bool { quitSent.contains(pid) }
+
+    mutating func requestedQuit(_ pid: Int32) { quitSent.insert(pid) }
+
+    /// A dialog or panel does not end the stretch; only a standard window does.
+    mutating func sawWindow(of pid: Int32, isStandard: Bool) {
+        if isStandard { quitSent.remove(pid) }
+    }
+
+    mutating func forget(_ pid: Int32) { quitSent.remove(pid) }
 }
 
 // MARK: - Quit and close protection
@@ -266,6 +305,38 @@ nonisolated struct QuitGuardModifiers: Equatable {
 /// Which mode applies to which app. A per-app override wins over the default;
 /// a key the user did not protect is always off.
 nonisolated struct QuitGuardPolicy: Equatable {
+    /// Remote screens and virtual machines hand Command-Q and Command-W on to
+    /// the computer they show. Holding the key back would break that, and a
+    /// confirmed quit would end the local session instead. These pass
+    /// through unless the user sets a mode for one of them. List adapted
+    /// from Vorssaint's QuitProtectionSupport.
+    static let passThroughBundleIdentifiers: [String] = [
+        // Remote screens
+        "com.apple.ScreenSharing",
+        "com.apple.RemoteDesktop",
+        "com.microsoft.rdc.macos", // Windows App and Microsoft Remote Desktop
+        "com.microsoft.rdc.mac",
+        "com.p5sys.jump.mac.viewer",
+        "com.p5sys.jump.mac.viewer.web",
+        "com.citrix.receiver.icaviewer.mac",
+        "com.vmware.horizon",
+        "com.omnissa.horizon.client.mac",
+        "com.edovia.screens.5",
+        "com.realvnc.vncviewer",
+        "com.teamviewer.TeamViewer",
+        "com.philandro.anydesk",
+        "com.carriez.rustdesk",
+        "tv.parsec.www",
+        // Virtual machines
+        "com.parallels.desktop.console",
+        "com.parallels.desktop.appstore",
+        "com.vmware.fusion",
+        "com.utmapp.UTM",
+        "org.virtualbox.app.VirtualBoxVM",
+        "org.virtualbox.app.VirtualBox",
+        "codes.rambo.VirtualBuddy"
+    ]
+
     var defaultMode: QuitGuardMode
     var overrides: [String: QuitGuardMode]
     var protectsQuit: Bool
@@ -281,6 +352,9 @@ nonisolated struct QuitGuardPolicy: Equatable {
             if let match = overrides.first(where: { $0.key.lowercased() == wanted }) {
                 return match.value
             }
+            if WindowBehaviorBundleList.contains(bundleIdentifier, in: Self.passThroughBundleIdentifiers) {
+                return .off
+            }
         }
         return defaultMode
     }
@@ -289,6 +363,12 @@ nonisolated struct QuitGuardPolicy: Equatable {
 /// The press-by-press decisions for Command-Q and Command-W. The service
 /// feeds it key events and timer callbacks and does what it answers; it never
 /// touches an event itself, so every path here is checkable without a tap.
+///
+/// Two separate records: `pending` is the protection waiting for its second
+/// half, and `ownedKeyCodes` are the physical keys whose press was held
+/// back. A held back press owns its key until the key comes up, whatever
+/// happens to `pending` in between, so a cancel, an expiry or Escape can
+/// never let a repeat or a lone release reach the app.
 nonisolated struct QuitGuardStateMachine {
     enum Decision: Equatable {
         /// Let the event through untouched.
@@ -301,8 +381,7 @@ nonisolated struct QuitGuardStateMachine {
         case beginDoublePress(QuitGuardKey)
         /// Swallow and show which modifier to add.
         case showModifierHint(QuitGuardKey, QuitGuardModifier)
-        /// Swallow and carry out the shortcut for the app captured at the
-        /// first press.
+        /// Swallow and carry out the shortcut for the app `target`.
         case confirm(QuitGuardKey, target: Int32)
         /// Swallow (for key events) and hide the HUD.
         case cancel
@@ -310,6 +389,7 @@ nonisolated struct QuitGuardStateMachine {
 
     struct Pending: Equatable {
         let key: QuitGuardKey
+        let keyCode: Int64
         let mode: QuitGuardMode
         let timestamp: UInt64
         let target: Int32
@@ -326,12 +406,15 @@ nonisolated struct QuitGuardStateMachine {
     var extraModifier = QuitGuardModifier.shift
 
     private(set) var pending: Pending?
-    /// A confirmed key whose release (and any repeats before it) must not
-    /// reach the app, or it would arrive without its press.
-    private(set) var swallowing: QuitGuardKey?
+    /// Physical keys whose press was swallowed and whose release has not
+    /// come yet. Their repeats and release are swallowed too.
+    private(set) var ownedKeyCodes: Set<Int64> = []
+    /// The sequence a confirm finished, so the service can match it with
+    /// what it captured at the first press. Nil for a confirm in one press.
+    private(set) var confirmedSequence: Int?
     private var nextSequence = 0
 
-    var hasPressInFlight: Bool { pending != nil || swallowing != nil }
+    var hasPressInFlight: Bool { pending != nil || !ownedKeyCodes.isEmpty }
 
     static func clampedHold(_ value: Double) -> Double {
         guard value.isFinite else { return 800 }
@@ -344,7 +427,8 @@ nonisolated struct QuitGuardStateMachine {
     }
 
     /// `timestamp` is the event's monotonic nanoseconds. `mode` is the policy
-    /// for the frontmost app and `key`, ignored when `key` is nil.
+    /// for the frontmost app and `key`, ignored when `key` is nil. `target`
+    /// is the frontmost app's process id.
     mutating func keyDown(
         key: QuitGuardKey?,
         keyCode: Int64,
@@ -354,25 +438,25 @@ nonisolated struct QuitGuardStateMachine {
         mode: QuitGuardMode,
         target: Int32
     ) -> Decision {
+        if ownedKeyCodes.contains(keyCode) {
+            // Still held from a press that was swallowed.
+            if isRepeat { return .swallow }
+            // A fresh press means the old release was missed; judge it anew.
+            ownedKeyCodes.remove(keyCode)
+        }
         if keyCode == Self.escapeKeyCode, pending != nil {
             pending = nil
+            ownedKeyCodes.insert(keyCode)
             return .cancel
         }
-        guard modifiers.command || hasPressInFlight else { return .pass }
+        guard modifiers.command || pending != nil else { return .pass }
 
-        if let swallowing, key == swallowing {
-            return .swallow
-        }
         if let current = pending, current.key != key {
             // Any other key ends the wait and is then judged on its own. The
             // service hides the HUD whenever nothing is pending.
             pending = nil
         }
-        guard let key, mode != .off else { return .pass }
-        if isRepeat, modifiers.command {
-            // Holding the keys down: the first press already decided.
-            return pending == nil ? .pass : .swallow
-        }
+        guard let key, mode != .off, !isRepeat else { return .pass }
 
         switch mode {
         case .off:
@@ -380,48 +464,48 @@ nonisolated struct QuitGuardStateMachine {
 
         case .hold:
             guard modifiers.isBareCommand else { return .pass }
-            begin(key, mode: .hold, timestamp: timestamp, target: target)
+            begin(key, keyCode: keyCode, mode: .hold, timestamp: timestamp, target: target)
             return .beginHold(key)
 
         case .doublePress:
             guard modifiers.isBareCommand else { return .pass }
-            if let current = pending, current.mode == .doublePress,
+            if let current = pending, current.mode == .doublePress, current.target == target,
                Self.isWithin(first: current.timestamp, second: timestamp, milliseconds: doublePressMilliseconds) {
                 pending = nil
-                swallowing = key
-                return .confirm(key, target: current.target)
+                ownedKeyCodes.insert(keyCode)
+                confirmedSequence = current.sequence
+                return .confirm(key, target: target)
             }
-            begin(key, mode: .doublePress, timestamp: timestamp, target: target)
+            // First press, too slow, or a press in another app: start over
+            // for the app in front now.
+            begin(key, keyCode: keyCode, mode: .doublePress, timestamp: timestamp, target: target)
             return .beginDoublePress(key)
 
         case .extraModifier:
             if modifiers.isCommand(plusOnly: extraModifier) {
                 pending = nil
-                swallowing = key
+                ownedKeyCodes.insert(keyCode)
+                confirmedSequence = nil
                 return .confirm(key, target: target)
             }
             guard modifiers.isBareCommand else { return .pass }
-            begin(key, mode: .extraModifier, timestamp: timestamp, target: target)
+            begin(key, keyCode: keyCode, mode: .extraModifier, timestamp: timestamp, target: target)
             return .showModifierHint(key, extraModifier)
         }
     }
 
-    mutating func keyUp(key: QuitGuardKey?) -> Decision {
-        guard hasPressInFlight, let key else { return .pass }
-        if swallowing == key {
-            swallowing = nil
-            return .swallow
-        }
-        guard let current = pending, current.key == key else { return .pass }
-        switch current.mode {
-        case .hold:
-            // Let go too early: nothing happens.
+    /// Matched by physical key, never by the character it types now: the
+    /// input source can change between press and release.
+    mutating func keyUp(keyCode: Int64) -> Decision {
+        guard ownedKeyCodes.remove(keyCode) != nil else { return .pass }
+        if let current = pending, current.keyCode == keyCode, current.mode == .hold {
+            // Let go too early: nothing happens, and the release is swallowed.
             pending = nil
             return .cancel
-        case .doublePress, .extraModifier, .off:
-            // Still waiting for the second press or the modifier.
-            return .swallow
         }
+        // Released after a confirm, a cancel, or while waiting for the second
+        // press or the modifier: the press was swallowed, so is the release.
+        return .swallow
     }
 
     /// Command released while waiting. The flags event itself always passes.
@@ -433,11 +517,19 @@ nonisolated struct QuitGuardStateMachine {
         return .cancel
     }
 
+    /// Another app came to the front. A wait that belongs to a different app
+    /// ends; held keys stay owned.
+    mutating func frontmostChanged(to pid: Int32) -> Decision {
+        guard let current = pending, current.target != pid else { return .pass }
+        pending = nil
+        return .cancel
+    }
+
     /// The hold timer for `sequence` fired.
     mutating func holdElapsed(sequence: Int) -> Decision {
         guard let current = pending, current.mode == .hold, current.sequence == sequence else { return .pass }
         pending = nil
-        swallowing = current.key
+        confirmedSequence = sequence
         return .confirm(current.key, target: current.target)
     }
 
@@ -449,10 +541,11 @@ nonisolated struct QuitGuardStateMachine {
         return .cancel
     }
 
-    /// Drops everything, for when the tap stops or the app loses focus.
+    /// Drops everything, for when the tap stops or was disabled and events
+    /// may have been missed.
     mutating func reset() {
         pending = nil
-        swallowing = nil
+        ownedKeyCodes.removeAll()
     }
 
     static func isWithin(first: UInt64, second: UInt64, milliseconds: Double) -> Bool {
@@ -460,8 +553,79 @@ nonisolated struct QuitGuardStateMachine {
         return second - first <= UInt64(clampedDoublePress(milliseconds) * 1_000_000)
     }
 
-    private mutating func begin(_ key: QuitGuardKey, mode: QuitGuardMode, timestamp: UInt64, target: Int32) {
+    private mutating func begin(_ key: QuitGuardKey, keyCode: Int64, mode: QuitGuardMode, timestamp: UInt64, target: Int32) {
         nextSequence += 1
-        pending = Pending(key: key, mode: mode, timestamp: timestamp, target: target, sequence: nextSequence)
+        ownedKeyCodes.insert(keyCode)
+        pending = Pending(key: key, keyCode: keyCode, mode: mode, timestamp: timestamp, target: target, sequence: nextSequence)
+    }
+}
+
+// MARK: - Green button click pairs
+
+/// Keeps a green button click's press and release together. The press is
+/// held back while Wharf decides; then either both halves stay with Wharf
+/// (the click becomes a maximize) or, when the button is held, the press is
+/// handed back late so the app's own hold (the tiling menu) still works and
+/// the release follows it. The one combination never allowed is a press
+/// that reached the app with its release swallowed.
+nonisolated struct GreenButtonPairTracker {
+    enum Decision: Equatable {
+        case pass
+        case swallow
+        /// Swallow the release and carry out the click with `token`.
+        case perform(token: Int)
+        /// Post the held back press now; this pair is the app's from here.
+        case replayPress
+    }
+
+    /// Seconds a press may stay down before it counts as a hold.
+    static let holdSeconds = 0.45
+
+    private(set) var heldPress: Int?
+    private var actionValid = false
+    private var nextToken = 0
+
+    /// A press Wharf has a trustworthy answer for. Returns the token the
+    /// release and the hold timer refer to.
+    mutating func pressSwallowed() -> Int {
+        nextToken += 1
+        heldPress = nextToken
+        actionValid = true
+        return nextToken
+    }
+
+    /// Any other press: whatever was held is over.
+    mutating func pressPassed() {
+        heldPress = nil
+        actionValid = false
+    }
+
+    mutating func dragged() -> Decision {
+        heldPress == nil ? .pass : .swallow
+    }
+
+    mutating func released(insideButton: Bool) -> Decision {
+        guard let token = heldPress else { return .pass }
+        heldPress = nil
+        let valid = actionValid
+        actionValid = false
+        // Released away from the button cancels, as it does natively.
+        return valid && insideButton ? .perform(token: token) : .swallow
+    }
+
+    mutating func holdElapsed(token: Int) -> Decision {
+        guard heldPress == token else { return .pass }
+        heldPress = nil
+        actionValid = false
+        return .replayPress
+    }
+
+    /// The tap was disabled or removed, or the permission went away. Events
+    /// may have passed unseen, so the held press is forgotten and the next
+    /// release goes through: a stray release is harmless, a swallowed one
+    /// after a press the app saw is not.
+    mutating func interrupted() {
+        heldPress = nil
+        actionValid = false
     }
 }

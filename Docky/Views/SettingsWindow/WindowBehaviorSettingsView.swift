@@ -8,6 +8,8 @@
 //
 
 import AppKit
+import Carbon
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -15,6 +17,10 @@ struct WindowBehaviorSettingsView: View {
     @Bindable private var preferences = WindowBehaviorPreferences.shared
     @ObservedObject private var permissions = PermissionsService.shared
     @State private var isShowingResetConfirmation = false
+    /// Secure Input stops every event tap from seeing keys; checked while the
+    /// pane is open.
+    @State private var isSecureInputOn = IsSecureEventInputEnabled()
+    private let secureInputTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var anyFeatureOn: Bool {
         preferences.maximizeEnabled || preferences.quitOnCloseEnabled || preferences.quitGuardEnabled
@@ -164,8 +170,24 @@ struct WindowBehaviorSettingsView: View {
                 }
 
                 QuitGuardOverridesEditor(overrides: $preferences.quitGuardOverrides)
+
+                Text("Remote desktop and virtual machine apps (Windows App, VMware Fusion, Parallels, UTM, Citrix, Jump Desktop, VirtualBox and similar) pass both shortcuts on to the computer they show, unless you set a mode for them above.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(!preferences.quitGuardEnabled)
+
+            if preferences.quitGuardEnabled, isSecureInputOn {
+                Text("Secure keyboard entry is on (a password field or a terminal setting), so macOS hides key presses from Wharf and protection is paused until it ends.")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onReceive(secureInputTimer) { _ in
+            let on = IsSecureEventInputEnabled()
+            if on != isSecureInputOn { isSecureInputOn = on }
         }
     }
 }

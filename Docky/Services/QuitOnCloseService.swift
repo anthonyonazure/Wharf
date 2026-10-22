@@ -37,6 +37,11 @@ final class QuitOnCloseService {
     /// after a look that found a window, does nothing.
     private var rounds: [pid_t: Int] = [:]
     private var nextRound = 0
+    /// Apps already asked to quit in their current windowless stretch.
+    private var episodes = QuitOnCloseEpisodes()
+    private var activationObserver: NSObjectProtocol?
+
+    private let messagingTimeout: Float = 0.5
 
     private init() {}
 
@@ -66,8 +71,14 @@ final class QuitOnCloseService {
                 NSWorkspace.shared.notificationCenter.removeObserver(terminateObserver)
             }
             terminateObserver = nil
+            if let activationObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+            }
+            activationObserver = nil
             hadWindow.removeAll()
             hasWindowNow.removeAll()
+            rounds.removeAll()
+            episodes = QuitOnCloseEpisodes()
             return
         }
 
@@ -83,8 +94,24 @@ final class QuitOnCloseService {
                 queue: .main
             ) { [weak self] note in
                 guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-                self?.hadWindow.remove(app.processIdentifier)
-                self?.hasWindowNow.remove(app.processIdentifier)
+                MainActor.assumeIsolated {
+                    self?.hadWindow.remove(app.processIdentifier)
+                    self?.hasWindowNow.remove(app.processIdentifier)
+                    self?.rounds[app.processIdentifier] = nil
+                    self?.episodes.forget(app.processIdentifier)
+                }
+            }
+        }
+        if activationObserver == nil {
+            // An app brought to the front (its Dock icon clicked, a document
+            // opened) is about to show a window: stop any pending look.
+            activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+                MainActor.assumeIsolated { self?.rounds[app.processIdentifier] = nil }
             }
         }
         // A list change may have removed apps that were being watched.
@@ -101,6 +128,14 @@ final class QuitOnCloseService {
                 .map(\.processIdentifier)
         )
         hadWindow.formUnion(current)
+
+        for pid in current {
+            // A window (new or back) ends any pending look for the app.
+            rounds[pid] = nil
+            if episodes.hasRequestedQuit(pid) {
+                episodes.sawWindow(of: pid, isStandard: hasStandardWindow(pid: pid, in: windows))
+            }
+        }
 
         // Apps that just went from some windows to none.
         for pid in hasWindowNow.subtracting(current) where hadWindow.contains(pid) {
@@ -130,8 +165,11 @@ final class QuitOnCloseService {
             return
         }
 
+        // Unfiltered reads on purpose: dialogs, sheets' parents, panels and
+        // windows on other Spaces all count, and a read that fails counts
+        // as "windows exist".
         let serverWindows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID)
-            as? [[String: Any]] ?? []
+            as? [[String: Any]]
         let facts = QuitOnCloseFacts(
             isListed: WindowBehaviorBundleList.contains(app.bundleIdentifier, in: preferences.quitOnCloseApps),
             isRegular: app.activationPolicy == .regular,
@@ -139,8 +177,9 @@ final class QuitOnCloseService {
             isTerminated: app.isTerminated,
             isHidden: app.isHidden,
             hadWindow: true,
-            accessibilityWindowCount: registry.liveWindows(for: pid).count,
-            serverWindowCount: QuitOnCloseLogic.serverWindowCount(in: serverWindows, pid: pid)
+            accessibilityWindowCount: accessibilityWindowCount(pid: pid),
+            serverWindowCount: QuitOnCloseLogic.serverWindowCount(in: serverWindows, pid: pid),
+            quitAlreadyRequested: episodes.hasRequestedQuit(pid)
         )
         guard QuitOnCloseLogic.shouldQuit(facts) else {
             // Something is still there: stop this round. The next close
@@ -150,11 +189,39 @@ final class QuitOnCloseService {
         }
         guard isFinalLook else { return }
 
-        hadWindow.remove(pid)
         hasWindowNow.remove(pid)
         rounds[pid] = nil
+        // One request per windowless stretch: if the user cancels a save
+        // prompt, the app stays until it shows a real window again and that
+        // one closes too.
+        episodes.requestedQuit(pid)
         // A normal quit request: unsaved-changes prompts still appear.
         app.terminate()
+    }
+
+    /// Every window the app reports to Accessibility, of any role. Nil when
+    /// the read fails or times out; only a successful read counts.
+    private func accessibilityWindowCount(pid: pid_t) -> Int? {
+        let element = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(element, messagingTimeout)
+        var count: CFIndex = 0
+        guard AXUIElementGetAttributeValueCount(element, kAXWindowsAttribute as CFString, &count) == .success else {
+            return nil
+        }
+        return count
+    }
+
+    /// Whether any of the app's windows is a standard window. A subrole that
+    /// cannot be read does not count, so a doubtful window never re-arms.
+    private func hasStandardWindow(pid: pid_t, in windows: [AppWindow]) -> Bool {
+        windows.contains { window in
+            guard window.processIdentifier == pid else { return false }
+            AXUIElementSetMessagingTimeout(window.element, messagingTimeout)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(window.element, kAXSubroleAttribute as CFString, &value) == .success
+            else { return false }
+            return (value as? String) == kAXStandardWindowSubrole as String
+        }
     }
 
     private func isListed(pid: pid_t) -> Bool {

@@ -30,6 +30,7 @@ final class BehaviorExtrasPreferences {
         /// Set before Wharf restarts the Dock, cleared once it is back.
         static let spacesOrderDockRestartPending = "wharf.spacesOrder.dockRestartPending"
         static let winTapAction = "wharf.windowsKeyboardWinTap.action"
+        static let snipInExcludedApps = "wharf.windowsKeyboardSnip.inExcludedApps"
     }
 
     enum DefaultValues {
@@ -40,6 +41,8 @@ final class BehaviorExtrasPreferences {
         static let focusFollowsMouseExcluded: [String] = []
         static let spacesOrderFixed = false
         static let winTapAction = WinKeyTapAction.off
+        /// Excluded apps (remote desktops, virtual machines) keep Win+Shift+S.
+        static let snipInExcludedApps = false
     }
 
     @ObservationIgnored private let defaults = UserDefaults.standard
@@ -75,6 +78,10 @@ final class BehaviorExtrasPreferences {
 
     var winTapAction: WinKeyTapAction {
         didSet { defaults.set(winTapAction.rawValue, forKey: Keys.winTapAction) }
+    }
+
+    var snipInExcludedApps: Bool {
+        didSet { defaults.set(snipInExcludedApps, forKey: Keys.snipInExcludedApps) }
     }
 
     /// Read and written only by SpacesOrderService; not observed. Setting
@@ -116,6 +123,7 @@ final class BehaviorExtrasPreferences {
         focusFollowsMouseDisplays = DefaultValues.focusFollowsMouseDisplays
         focusFollowsMouseExcludedBundleIDs = DefaultValues.focusFollowsMouseExcluded
         winTapAction = DefaultValues.winTapAction
+        snipInExcludedApps = DefaultValues.snipInExcludedApps
     }
 
     private init() {
@@ -133,5 +141,7 @@ final class BehaviorExtrasPreferences {
             ?? DefaultValues.spacesOrderFixed
         winTapAction = defaults.string(forKey: Keys.winTapAction).flatMap(WinKeyTapAction.init(rawValue:))
             ?? DefaultValues.winTapAction
+        snipInExcludedApps = defaults.object(forKey: Keys.snipInExcludedApps) as? Bool
+            ?? DefaultValues.snipInExcludedApps
     }
 }

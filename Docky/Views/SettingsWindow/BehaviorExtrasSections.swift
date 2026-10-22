@@ -41,10 +41,19 @@ struct WindowsKeyboardExtrasSections: View {
                 bundleIDs: $preferences.windowsKeyboardExcludedBundleIDs,
                 emptyText: "No apps excluded. Control keeps its Windows meaning everywhere."
             )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Take Snips in Excluded Apps Too", isOn: $extras.snipInExcludedApps)
+                    .disabled(!preferences.windowsKeyboardSnipShortcut)
+                Text("Off: in an excluded app, Win+Shift+S goes to the app itself, so a remote desktop or virtual machine can take its own snip. On: Win+Shift+S takes a Mac snip in every app.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
         } header: {
             Text("Excluded Apps")
         } footer: {
-            Text("In these apps Control keeps its Mac meaning, nothing is translated and a Win key tap does nothing. Terminals are on the list by default, so Ctrl+C there still interrupts a running process. Win+Shift+S still takes a snip everywhere.")
+            Text("In these apps the Win key belongs to the app: Control keeps its Mac meaning, nothing is translated, a Win key tap does nothing and Win+Shift+S reaches the app unless the switch above says otherwise. Terminals are on the list by default, so Ctrl+C there still interrupts a running process.")
                 .foregroundStyle(.secondary)
         }
         .disabled(!preferences.windowsKeyboardMode)

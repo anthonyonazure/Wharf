@@ -45,6 +45,7 @@ final class WindowsKeyboardService {
     private var _snipEnabled = false
     private var _excludedBundleIDs: Set<String> = []
     private var _winTapAction: WinKeyTapAction = .off
+    private var _snipInExcludedApps = false
 
     /// Frontmost bundle ID, cached. The exclusion check runs on every
     /// keystroke, and asking NSWorkspace each time would put a cross-process
@@ -84,6 +85,7 @@ final class WindowsKeyboardService {
     private struct Snapshot {
         let winTapAction: WinKeyTapAction
         let snipEnabled: Bool
+        let snipInExcludedApps: Bool
         let frontmostExcluded: Bool
         let resetTapState: Bool
     }
@@ -96,6 +98,7 @@ final class WindowsKeyboardService {
         return Snapshot(
             winTapAction: _winTapAction,
             snipEnabled: _snipEnabled,
+            snipInExcludedApps: _snipInExcludedApps,
             frontmostExcluded: _frontmostBundleID.map { _excludedBundleIDs.contains($0) } ?? false,
             resetTapState: reset
         )
@@ -120,6 +123,10 @@ final class WindowsKeyboardService {
         // Lowercased, like the frontmost bundle ID: bundle IDs ignore case.
         excludedBundleIDs = BundleIDList.matchSet(DockyPreferences.shared.windowsKeyboardExcludedBundleIDs)
         winTapAction = BehaviorExtrasPreferences.shared.winTapAction
+        let snipInExcludedApps = BehaviorExtrasPreferences.shared.snipInExcludedApps
+        stateLock.lock()
+        _snipInExcludedApps = snipInExcludedApps
+        stateLock.unlock()
     }
 
     /// Guards against autorepeat launching a second region capture while the
@@ -233,6 +240,7 @@ final class WindowsKeyboardService {
             // reach the tap without toggling the mode off and on.
             _ = DockyPreferences.shared.windowsKeyboardExcludedBundleIDs
             _ = BehaviorExtrasPreferences.shared.winTapAction
+            _ = BehaviorExtrasPreferences.shared.snipInExcludedApps
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -391,9 +399,12 @@ final class WindowsKeyboardService {
             isSnipInFlight = false
         }
 
-        // Not gated on the exclusion list: that list keeps Control's Mac
-        // meaning in terminals and the like, and the snip uses no Control.
-        if state.snipEnabled,
+        // Excluded apps keep the Win key, so a remote desktop or virtual
+        // machine gets its own Win+Shift+S, unless the user turned on snips
+        // in excluded apps too.
+        if WinTapEvents.snipAllowed(enabled: state.snipEnabled,
+                                    frontmostExcluded: state.frontmostExcluded,
+                                    inExcludedApps: state.snipInExcludedApps),
            keyCode == Int64(kVK_ANSI_S),
            flags.contains(.maskCommand),
            flags.contains(.maskShift),

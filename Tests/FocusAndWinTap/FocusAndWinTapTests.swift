@@ -412,6 +412,13 @@ private func testWinTapEvents() {
         expect(mask & (1 << 14) != 0, "\(action): media keys included")
     }
 
+    // Win+Shift+S respects the exclusion list unless told otherwise.
+    expect(E.snipAllowed(enabled: true, frontmostExcluded: false, inExcludedApps: false), "snip in a normal app")
+    expect(!E.snipAllowed(enabled: true, frontmostExcluded: true, inExcludedApps: false),
+           "excluded app keeps Win+Shift+S by default")
+    expect(E.snipAllowed(enabled: true, frontmostExcluded: true, inExcludedApps: true), "opted in: snip there too")
+    expect(!E.snipAllowed(enabled: false, frontmostExcluded: false, inExcludedApps: true), "snip off: never")
+
     // Timestamps: mach ticks on Apple silicon (125/3), nanoseconds on Intel.
     let now: TimeInterval = 1_000
     let ticks = UInt64((now - 0.25) * 1_000_000_000 * 3 / 125)

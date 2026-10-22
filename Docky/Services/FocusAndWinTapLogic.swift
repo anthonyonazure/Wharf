@@ -470,6 +470,13 @@ nonisolated enum WinTapEvents {
     /// no named case for it.
     static let systemDefinedType: UInt32 = 14
 
+    /// Whether Win+Shift+S takes a snip. Excluded apps (remote desktops,
+    /// virtual machines, terminals) keep the Win key, so the chord reaches
+    /// them untouched unless the user asked for snips there too.
+    static func snipAllowed(enabled: Bool, frontmostExcluded: Bool, inExcludedApps: Bool) -> Bool {
+        enabled && (!frontmostExcluded || inExcludedApps)
+    }
+
     /// Key events always, for the Control translation and the snip. The rest
     /// only while a Win key tap can open something; with the action set to
     /// Nothing, clicks, scrolls and modifier changes never reach the tap.
